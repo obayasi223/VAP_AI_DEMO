@@ -1,0 +1,166 @@
+.page {
+  --bg: #f6f6f4;
+  --card: #ffffff;
+  --text: #1f2328;
+  --muted: #646a73;
+  --line: #dcdedf;
+  --warn: #9a5b00;
+  --warn-bg: #fff4dc;
+  --bad: #b3261e;
+  --good: #1a7f4b;
+  --fake: #ffffff;
+  --fake-bg: #b3261e;
+  min-height: 100vh;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 system-ui, 'Noto Sans JP', sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .page {
+    --bg: #17191c;
+    --card: #212428;
+    --text: #e7e9ec;
+    --muted: #a0a6ae;
+    --line: #363a40;
+    --warn: #f0b95a;
+    --warn-bg: #3a2c12;
+    --bad: #ff8a80;
+    --good: #5fd39b;
+  }
+}
+
+.title {
+  margin: 8px 0 12px;
+  font-size: 20px;
+}
+
+.heading {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.card {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.card p {
+  margin: 2px 0;
+}
+
+.fakeBanner {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 16px;
+  border-radius: 6px;
+  background: var(--fake-bg);
+  color: var(--fake);
+  font-weight: 700;
+}
+
+.warnBanner {
+  padding: 10px 16px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.fakeChip {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--fake-bg);
+  color: var(--fake);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th,
+.table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  /* 狭い画面では折り返さず、カードの中で横にスクロールする。 */
+  white-space: nowrap;
+}
+
+.table th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.table .num {
+  text-align: right;
+}
+
+.unmeasured {
+  color: var(--muted);
+}
+
+.note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.total {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.warnText {
+  color: var(--warn);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.list {
+  margin: 0;
+}
+
+.listRow {
+  display: flex;
+  gap: 12px;
+  padding: 2px 0;
+}
+
+.listRow dt {
+  flex: 0 0 88px;
+  color: var(--muted);
+}
+
+.listRow dd {
+  margin: 0;
+}
+
+.health_ok {
+  color: var(--good);
+}
+
+.health_degraded {
+  color: var(--warn);
+}
+
+.health_down {
+  color: var(--bad);
+  font-weight: 700;
+}
+
+.controls {
+  padding: 0 16px 16px;
+  background: var(--bg);
+  color: var(--text);
+}
