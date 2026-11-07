@@ -98,7 +98,7 @@ def main():
         # 値の範囲も実物で確認する
         vals = [x["p_now"] for x in rows]
         if is_2ch:
-            assert max(abs(sum(v) - 1) for v in vals) < 1e-5
+            assert max(abs(sum(v) - 1) for v in vals) < 1e-3  # 実測の誤差は x-variants に記録
         variants.append(
             {
                 "request": {k: v for k, v in cfg.items() if k != "mono"},
@@ -153,7 +153,7 @@ def main():
     defs["vap_2ch"] = obj(
         "probability_pair",
         "2ch モデル。p_now[i], p_future[i], vad[i] の i=0 は x1(audio_ch1)、i=1 は x2(audio_ch2)。"
-        "p_now, p_future は話者間で正規化され和が 1（docs/maai_validation.md の実測）。",
+        "p_now, p_future は話者間で正規化され和がほぼ 1（誤差は x-variants の実測値。厳密な一致を前提にしない）。",
     )
     defs["vap_1ch"] = obj(
         "probability",

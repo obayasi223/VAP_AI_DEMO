@@ -1,0 +1,19 @@
+{
+ "seconds": 350,
+ "width": 1280,
+ "height": 720,
+ "software_rendering": true,
+ "n": 5195,
+ "fps": 14.840813350846497,
+ "frame_ms_p50": 66.69999999998254,
+ "frame_ms_p95": 116.60000000000582,
+ "frame_ms_max": 733.3,
+ "triangles": 32173,
+ "calls": 72,
+ "bones": 148,
+ "morph_meshes": 10,
+ "model": "/model.vrm",
+ "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+ "system_cpu_busy_fraction": 0.8952167308503569,
+ "page_errors": []
+}

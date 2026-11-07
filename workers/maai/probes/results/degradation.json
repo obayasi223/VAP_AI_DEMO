@@ -1,0 +1,102 @@
+{
+ "config": {
+  "lang": "jp_kyoto",
+  "model_type": "normal-ver2",
+  "frame_rate": 12.5,
+  "mc_requested": true,
+  "variant": "vap_mc"
+ },
+ "material": "jpn_mix_16k.wav 先頭 90 秒（公式 sample）",
+ "gap": {
+  "start_s": 40.0,
+  "dur_s": 2.0
+ },
+ "cases": {
+  "ch1_zero_fill_2s": {
+   "p_now_abs_diff_during": 0.0959,
+   "p_now_abs_diff_0_10s_after": 0.0131,
+   "vad_ch1_during": 0.0,
+   "vad_ch1_baseline_during": 0.2805,
+   "vad_ch2_during": 0.2673,
+   "vad_ch2_baseline_during": 0.2683,
+   "recovery_s": 0.72,
+   "any_nan": false
+  },
+  "ch2_zero_fill_2s": {
+   "p_now_abs_diff_during": 0.1681,
+   "p_now_abs_diff_0_10s_after": 0.0094,
+   "vad_ch1_during": 0.2766,
+   "vad_ch1_baseline_during": 0.2805,
+   "vad_ch2_during": 0.0073,
+   "vad_ch2_baseline_during": 0.2683,
+   "recovery_s": 0.08,
+   "any_nan": false
+  },
+  "both_zero_fill_2s": {
+   "p_now_abs_diff_during": 0.4545,
+   "p_now_abs_diff_0_10s_after": 0.0212,
+   "vad_ch1_during": 0.0,
+   "vad_ch1_baseline_during": 0.2805,
+   "vad_ch2_during": 0.0073,
+   "vad_ch2_baseline_during": 0.2683,
+   "recovery_s": 0.4,
+   "any_nan": false
+  },
+  "random_20ms_zero_1pct_each_ch": {
+   "p_now_abs_diff_mean": 0.0082,
+   "p_now_abs_diff_p95": 0.0392,
+   "vad_abs_diff_mean": 0.0022
+  },
+  "random_20ms_zero_5pct_each_ch": {
+   "p_now_abs_diff_mean": 0.0157,
+   "p_now_abs_diff_p95": 0.0603,
+   "vad_abs_diff_mean": 0.0063
+  },
+  "both_dropped_2s_no_process": {
+   "n_results_baseline": 1124,
+   "n_results_dropped": 1099,
+   "common_frame_numbers_after_gap": 600,
+   "frame_phase_preserved": true,
+   "p_now_abs_diff_0_10s_after": 0.0428,
+   "recovery_s": 1.04,
+   "note": "frame=1280 サンプル。process を呼ばない間、モデルの文脈は実時間より短くなる"
+  },
+  "ch2_only_dropped_20ms_misaligned": {
+   "p_now_abs_diff_after": 0.018,
+   "p_now_abs_diff_p95_after": 0.0752
+  },
+  "ch2_only_dropped_100ms_misaligned": {
+   "p_now_abs_diff_after": 0.0314,
+   "p_now_abs_diff_p95_after": 0.146
+  },
+  "ch2_only_dropped_500ms_misaligned": {
+   "p_now_abs_diff_after": 0.0954,
+   "p_now_abs_diff_p95_after": 0.4562
+  }
+ },
+ "silent_ch2_representation": {
+  "exact_zero": {
+   "vad_ch2_mean": 0.00433,
+   "p_now_ch2_mean": 0.4347,
+   "p_future_ch2_mean": 0.4497
+  },
+  "white_noise_-90dBFS": {
+   "vad_ch2_mean": 0.00376,
+   "p_now_ch2_mean": 0.4451,
+   "p_future_ch2_mean": 0.462,
+   "p_now_abs_diff_vs_zero": 0.015
+  },
+  "white_noise_-70dBFS": {
+   "vad_ch2_mean": 0.00529,
+   "p_now_ch2_mean": 0.4958,
+   "p_future_ch2_mean": 0.5194,
+   "p_now_abs_diff_vs_zero": 0.0624
+  },
+  "white_noise_-60dBFS": {
+   "vad_ch2_mean": 0.01528,
+   "p_now_ch2_mean": 0.5229,
+   "p_future_ch2_mean": 0.5381,
+   "p_now_abs_diff_vs_zero": 0.0886
+  }
+ }
+}

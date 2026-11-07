@@ -1,0 +1,766 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "docs/maai_output_schema.json",
+ "title": "MaAI mode=vap の結果 dict（実物から固定）",
+ "description": "scripts: workers/maai/probes/probe_schema.py が生成。検証: workers/maai/probes/test_output_schema.py。x1,x2 は describe_result() で ndarray を記述へ変換した後の形。",
+ "x-maai": {
+  "version": "0.2.25",
+  "captured_on": "2026-11-08",
+  "material": "jpn_mix_16k.wav（公式 sample）先頭 12 秒",
+  "get_result": "Maai.result_dict_queue.get()。process() 直接呼び出しでも同じキューへ入る",
+  "jp_kyoto_without_ch2": {
+   "request": {
+    "lang": "jp_kyoto",
+    "audio_ch2": "omitted",
+    "model_type": "normal-ver2",
+    "frame_rate": 12.5
+   },
+   "loaded_variant": "vap_mc",
+   "is_mono": false,
+   "p_now_type": [
+    "float",
+    "float"
+   ],
+   "note": "1ch モデルは存在せず 2ch モデルへフォールバックする。p は [ch1, ch2] の組のまま"
+  }
+ },
+ "x-variants": [
+  {
+   "request": {
+    "lang": "jp_kyoto",
+    "mc": true,
+    "model_type": "normal-ver2",
+    "frame_rate": 12.5
+   },
+   "audio_ch2": "MaaiInput.Chunk (2ch)",
+   "loaded_variant": "vap_mc",
+   "is_mono": false,
+   "single_tower": false,
+   "encoder_type": "mimi",
+   "samples_per_frame": 1280,
+   "first_result_end_sample": 2560,
+   "schema_ref": "#/$defs/vap_2ch",
+   "observed_signature": {
+    "p_future": [
+     "float",
+     "float"
+    ],
+    "p_now": [
+     "float",
+     "float"
+    ],
+    "t": "float",
+    "vad": [
+     "float",
+     "float"
+    ],
+    "x1": "ndarray[float32,1280]",
+    "x2": "ndarray[float32,1280]"
+   },
+   "first_frames_p_now_sum_max_abs_err": 2.6017427444458008e-05
+  },
+  {
+   "request": {
+    "lang": "jp_kyoto",
+    "mc": false,
+    "model_type": "normal-ver2",
+    "frame_rate": 12.5
+   },
+   "audio_ch2": "MaaiInput.Chunk (2ch)",
+   "loaded_variant": "vap",
+   "is_mono": false,
+   "single_tower": false,
+   "encoder_type": "mimi",
+   "samples_per_frame": 1280,
+   "first_result_end_sample": 2560,
+   "schema_ref": "#/$defs/vap_2ch",
+   "observed_signature": {
+    "p_future": [
+     "float",
+     "float"
+    ],
+    "p_now": [
+     "float",
+     "float"
+    ],
+    "t": "float",
+    "vad": [
+     "float",
+     "float"
+    ],
+    "x1": "ndarray[float32,1280]",
+    "x2": "ndarray[float32,1280]"
+   },
+   "first_frames_p_now_sum_max_abs_err": 3.039836883544922e-05
+  },
+  {
+   "request": {
+    "lang": "jp",
+    "mc": true,
+    "model_type": "normal-ver2",
+    "frame_rate": 12.5
+   },
+   "audio_ch2": "MaaiInput.Chunk (2ch)",
+   "loaded_variant": "vap_mc",
+   "is_mono": false,
+   "single_tower": false,
+   "encoder_type": "mimi",
+   "samples_per_frame": 1280,
+   "first_result_end_sample": 2560,
+   "schema_ref": "#/$defs/vap_2ch",
+   "observed_signature": {
+    "p_future": [
+     "float",
+     "float"
+    ],
+    "p_now": [
+     "float",
+     "float"
+    ],
+    "t": "float",
+    "vad": [
+     "float",
+     "float"
+    ],
+    "x1": "ndarray[float32,1280]",
+    "x2": "ndarray[float32,1280]"
+   },
+   "first_frames_p_now_sum_max_abs_err": 3.5703182220458984e-05
+  },
+  {
+   "request": {
+    "lang": "jp",
+    "mc": false,
+    "model_type": "normal-ver2",
+    "frame_rate": 12.5
+   },
+   "audio_ch2": "MaaiInput.Chunk (2ch)",
+   "loaded_variant": "vap",
+   "is_mono": false,
+   "single_tower": false,
+   "encoder_type": "mimi",
+   "samples_per_frame": 1280,
+   "first_result_end_sample": 2560,
+   "schema_ref": "#/$defs/vap_2ch",
+   "observed_signature": {
+    "p_future": [
+     "float",
+     "float"
+    ],
+    "p_now": [
+     "float",
+     "float"
+    ],
+    "t": "float",
+    "vad": [
+     "float",
+     "float"
+    ],
+    "x1": "ndarray[float32,1280]",
+    "x2": "ndarray[float32,1280]"
+   },
+   "first_frames_p_now_sum_max_abs_err": 2.6494264602661133e-05
+  },
+  {
+   "request": {
+    "lang": "jp_kyoto",
+    "mc": true,
+    "model_type": "normal",
+    "frame_rate": 10
+   },
+   "audio_ch2": "MaaiInput.Chunk (2ch)",
+   "loaded_variant": "vap_mc",
+   "is_mono": false,
+   "single_tower": false,
+   "encoder_type": "cpc",
+   "samples_per_frame": 1600,
+   "first_result_end_sample": 1600,
+   "schema_ref": "#/$defs/vap_2ch",
+   "observed_signature": {
+    "p_future": [
+     "float",
+     "float"
+    ],
+    "p_now": [
+     "float",
+     "float"
+    ],
+    "t": "float",
+    "vad": [
+     "float",
+     "float"
+    ],
+    "x1": "ndarray[float32,1600]",
+    "x2": "ndarray[float32,1600]"
+   },
+   "first_frames_p_now_sum_max_abs_err": 4.1097402572631836e-05
+  },
+  {
+   "request": {
+    "lang": "jp_kyoto",
+    "mc": false,
+    "model_type": "normal",
+    "frame_rate": 10
+   },
+   "audio_ch2": "MaaiInput.Chunk (2ch)",
+   "loaded_variant": "vap",
+   "is_mono": false,
+   "single_tower": false,
+   "encoder_type": "cpc",
+   "samples_per_frame": 1600,
+   "first_result_end_sample": 1600,
+   "schema_ref": "#/$defs/vap_2ch",
+   "observed_signature": {
+    "p_future": [
+     "float",
+     "float"
+    ],
+    "p_now": [
+     "float",
+     "float"
+    ],
+    "t": "float",
+    "vad": [
+     "float",
+     "float"
+    ],
+    "x1": "ndarray[float32,1600]",
+    "x2": "ndarray[float32,1600]"
+   },
+   "first_frames_p_now_sum_max_abs_err": 2.4884939193725586e-05
+  },
+  {
+   "request": {
+    "lang": "jp",
+    "mc": true,
+    "model_type": "normal",
+    "frame_rate": 10
+   },
+   "audio_ch2": "MaaiInput.Chunk (2ch)",
+   "loaded_variant": "vap_mc",
+   "is_mono": false,
+   "single_tower": false,
+   "encoder_type": "cpc",
+   "samples_per_frame": 1600,
+   "first_result_end_sample": 1600,
+   "schema_ref": "#/$defs/vap_2ch",
+   "observed_signature": {
+    "p_future": [
+     "float",
+     "float"
+    ],
+    "p_now": [
+     "float",
+     "float"
+    ],
+    "t": "float",
+    "vad": [
+     "float",
+     "float"
+    ],
+    "x1": "ndarray[float32,1600]",
+    "x2": "ndarray[float32,1600]"
+   },
+   "first_frames_p_now_sum_max_abs_err": 4.225969314575195e-05
+  },
+  {
+   "request": {
+    "lang": "jp",
+    "mc": false,
+    "model_type": "normal",
+    "frame_rate": 10
+   },
+   "audio_ch2": "MaaiInput.Chunk (2ch)",
+   "loaded_variant": "vap",
+   "is_mono": false,
+   "single_tower": false,
+   "encoder_type": "cpc",
+   "samples_per_frame": 1600,
+   "first_result_end_sample": 1600,
+   "schema_ref": "#/$defs/vap_2ch",
+   "observed_signature": {
+    "p_future": [
+     "float",
+     "float"
+    ],
+    "p_now": [
+     "float",
+     "float"
+    ],
+    "t": "float",
+    "vad": [
+     "float",
+     "float"
+    ],
+    "x1": "ndarray[float32,1600]",
+    "x2": "ndarray[float32,1600]"
+   },
+   "first_frames_p_now_sum_max_abs_err": 3.74913215637207e-05
+  },
+  {
+   "request": {
+    "lang": "jp",
+    "mc": true,
+    "model_type": "normal-ver2",
+    "frame_rate": 12.5
+   },
+   "audio_ch2": "omitted",
+   "loaded_variant": "vap_mc_mono",
+   "is_mono": true,
+   "single_tower": true,
+   "encoder_type": "mimi",
+   "samples_per_frame": 1280,
+   "first_result_end_sample": 2560,
+   "schema_ref": "#/$defs/vap_1ch",
+   "observed_signature": {
+    "p_future": "float",
+    "p_now": "float",
+    "t": "float",
+    "vad": "float",
+    "x1": "ndarray[float32,1280]",
+    "x2": "ndarray[float32,1280]"
+   },
+   "first_frames_p_now_sum_max_abs_err": null
+  },
+  {
+   "request": {
+    "lang": "jp",
+    "mc": false,
+    "model_type": "normal-ver2",
+    "frame_rate": 12.5
+   },
+   "audio_ch2": "omitted",
+   "loaded_variant": "vap_mono",
+   "is_mono": true,
+   "single_tower": true,
+   "encoder_type": "mimi",
+   "samples_per_frame": 1280,
+   "first_result_end_sample": 2560,
+   "schema_ref": "#/$defs/vap_1ch",
+   "observed_signature": {
+    "p_future": "float",
+    "p_now": "float",
+    "t": "float",
+    "vad": "float",
+    "x1": "ndarray[float32,1280]",
+    "x2": "ndarray[float32,1280]"
+   },
+   "first_frames_p_now_sum_max_abs_err": null
+  },
+  {
+   "request": {
+    "lang": "jp",
+    "mc": false,
+    "model_type": "normal",
+    "frame_rate": 10
+   },
+   "audio_ch2": "omitted",
+   "loaded_variant": "vap_mono",
+   "is_mono": true,
+   "single_tower": true,
+   "encoder_type": "cpc",
+   "samples_per_frame": 1600,
+   "first_result_end_sample": 1600,
+   "schema_ref": "#/$defs/vap_1ch",
+   "observed_signature": {
+    "p_future": "float",
+    "p_now": "float",
+    "t": "float",
+    "vad": "float",
+    "x1": "ndarray[float32,1600]",
+    "x2": "ndarray[float32,1600]"
+   },
+   "first_frames_p_now_sum_max_abs_err": null
+  },
+  {
+   "request": {
+    "lang": "jp_kyoto",
+    "mc": true,
+    "return_p_bins": true,
+    "model_type": "normal-ver2",
+    "frame_rate": 12.5
+   },
+   "audio_ch2": "MaaiInput.Chunk (2ch)",
+   "loaded_variant": "vap_mc",
+   "is_mono": false,
+   "single_tower": false,
+   "encoder_type": "mimi",
+   "samples_per_frame": 1280,
+   "first_result_end_sample": 2560,
+   "schema_ref": "#/$defs/vap_2ch_bins",
+   "observed_signature": {
+    "p_bins": [
+     [
+      "float",
+      "float",
+      "float",
+      "float"
+     ],
+     [
+      "float",
+      "float",
+      "float",
+      "float"
+     ]
+    ],
+    "p_bins_future": [
+     "float",
+     "float"
+    ],
+    "p_bins_now": [
+     "float",
+     "float"
+    ],
+    "p_future": [
+     "float",
+     "float"
+    ],
+    "p_now": [
+     "float",
+     "float"
+    ],
+    "t": "float",
+    "vad": [
+     "float",
+     "float"
+    ],
+    "x1": "ndarray[float32,1280]",
+    "x2": "ndarray[float32,1280]"
+   },
+   "first_frames_p_now_sum_max_abs_err": 2.6017427444458008e-05
+  },
+  {
+   "request": {
+    "lang": "jp",
+    "mc": true,
+    "return_p_bins": true,
+    "model_type": "normal-ver2",
+    "frame_rate": 12.5
+   },
+   "audio_ch2": "omitted",
+   "loaded_variant": "vap_mc_mono",
+   "is_mono": true,
+   "single_tower": true,
+   "encoder_type": "mimi",
+   "samples_per_frame": 1280,
+   "first_result_end_sample": 2560,
+   "schema_ref": "#/$defs/vap_1ch_bins",
+   "observed_signature": {
+    "p_bins": [
+     "float",
+     "float",
+     "float",
+     "float"
+    ],
+    "p_bins_future": "float",
+    "p_bins_now": "float",
+    "p_future": "float",
+    "p_now": "float",
+    "t": "float",
+    "vad": "float",
+    "x1": "ndarray[float32,1280]",
+    "x2": "ndarray[float32,1280]"
+   },
+   "first_frames_p_now_sum_max_abs_err": null
+  }
+ ],
+ "oneOf": [
+  {
+   "$ref": "#/$defs/vap_2ch"
+  },
+  {
+   "$ref": "#/$defs/vap_1ch"
+  },
+  {
+   "$ref": "#/$defs/vap_2ch_bins"
+  },
+  {
+   "$ref": "#/$defs/vap_1ch_bins"
+  }
+ ],
+ "$defs": {
+  "probability": {
+   "type": "number",
+   "minimum": 0.0,
+   "maximum": 1.0
+  },
+  "probability_pair": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/probability"
+   },
+   "minItems": 2,
+   "maxItems": 2
+  },
+  "audio_echo": {
+   "description": "このフレームで process に渡した音声そのもの（先頭の 320 サンプルの文脈は含まない）。実物は numpy.ndarray。describe_result() で dtype と shape に変換して検証する。",
+   "type": "object",
+   "properties": {
+    "ndarray": {
+     "const": true
+    },
+    "dtype": {
+     "const": "float32"
+    },
+    "shape": {
+     "type": "array",
+     "items": {
+      "type": "integer"
+     },
+     "minItems": 1,
+     "maxItems": 1
+    }
+   },
+   "required": [
+    "ndarray",
+    "dtype",
+    "shape"
+   ],
+   "additionalProperties": false
+  },
+  "vap_2ch": {
+   "type": "object",
+   "required": [
+    "t",
+    "x1",
+    "x2",
+    "p_now",
+    "p_future",
+    "vad"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "t": {
+     "type": "number",
+     "description": "time.time() の壁時計（秒）。サンプル番号ではない"
+    },
+    "x1": {
+     "$ref": "#/$defs/audio_echo"
+    },
+    "x2": {
+     "$ref": "#/$defs/audio_echo"
+    },
+    "p_now": {
+     "$ref": "#/$defs/probability_pair"
+    },
+    "p_future": {
+     "$ref": "#/$defs/probability_pair"
+    },
+    "vad": {
+     "$ref": "#/$defs/probability_pair"
+    }
+   },
+   "description": "2ch モデル。p_now[i], p_future[i], vad[i] の i=0 は x1(audio_ch1)、i=1 は x2(audio_ch2)。p_now, p_future は話者間で正規化され和がほぼ 1（誤差は x-variants の実測値。厳密な一致を前提にしない）。"
+  },
+  "vap_1ch": {
+   "type": "object",
+   "required": [
+    "t",
+    "x1",
+    "x2",
+    "p_now",
+    "p_future",
+    "vad"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "t": {
+     "type": "number",
+     "description": "time.time() の壁時計（秒）。サンプル番号ではない"
+    },
+    "x1": {
+     "$ref": "#/$defs/audio_echo"
+    },
+    "x2": {
+     "$ref": "#/$defs/audio_echo"
+    },
+    "p_now": {
+     "$ref": "#/$defs/probability"
+    },
+    "p_future": {
+     "$ref": "#/$defs/probability"
+    },
+    "vad": {
+     "$ref": "#/$defs/probability"
+    }
+   },
+   "description": "1ch モデル。スカラーで入力話者のみ。正規化されない。2ch と同じしきい値を流用しないこと。"
+  },
+  "vap_2ch_bins": {
+   "type": "object",
+   "required": [
+    "t",
+    "x1",
+    "x2",
+    "p_now",
+    "p_future",
+    "vad",
+    "p_bins",
+    "p_bins_now",
+    "p_bins_future"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "t": {
+     "type": "number",
+     "description": "time.time() の壁時計（秒）。サンプル番号ではない"
+    },
+    "x1": {
+     "$ref": "#/$defs/audio_echo"
+    },
+    "x2": {
+     "$ref": "#/$defs/audio_echo"
+    },
+    "p_now": {
+     "$ref": "#/$defs/probability_pair"
+    },
+    "p_future": {
+     "$ref": "#/$defs/probability_pair"
+    },
+    "vad": {
+     "$ref": "#/$defs/probability_pair"
+    },
+    "p_bins": {
+     "type": "array",
+     "minItems": 2,
+     "maxItems": 2,
+     "prefixItems": [
+      {
+       "type": "array",
+       "minItems": 4,
+       "maxItems": 4,
+       "prefixItems": [
+        {
+         "$ref": "#/$defs/probability"
+        },
+        {
+         "$ref": "#/$defs/probability"
+        },
+        {
+         "$ref": "#/$defs/probability"
+        },
+        {
+         "$ref": "#/$defs/probability"
+        }
+       ],
+       "items": false
+      },
+      {
+       "type": "array",
+       "minItems": 4,
+       "maxItems": 4,
+       "prefixItems": [
+        {
+         "$ref": "#/$defs/probability"
+        },
+        {
+         "$ref": "#/$defs/probability"
+        },
+        {
+         "$ref": "#/$defs/probability"
+        },
+        {
+         "$ref": "#/$defs/probability"
+        }
+       ],
+       "items": false
+      }
+     ],
+     "items": false
+    },
+    "p_bins_now": {
+     "type": "array",
+     "minItems": 2,
+     "maxItems": 2,
+     "prefixItems": [
+      {
+       "$ref": "#/$defs/probability"
+      },
+      {
+       "$ref": "#/$defs/probability"
+      }
+     ],
+     "items": false
+    },
+    "p_bins_future": {
+     "type": "array",
+     "minItems": 2,
+     "maxItems": 2,
+     "prefixItems": [
+      {
+       "$ref": "#/$defs/probability"
+      },
+      {
+       "$ref": "#/$defs/probability"
+      }
+     ],
+     "items": false
+    }
+   },
+   "description": "2ch、return_p_bins=True。ビンは話者間で正規化されない。"
+  },
+  "vap_1ch_bins": {
+   "type": "object",
+   "required": [
+    "t",
+    "x1",
+    "x2",
+    "p_now",
+    "p_future",
+    "vad",
+    "p_bins",
+    "p_bins_now",
+    "p_bins_future"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "t": {
+     "type": "number",
+     "description": "time.time() の壁時計（秒）。サンプル番号ではない"
+    },
+    "x1": {
+     "$ref": "#/$defs/audio_echo"
+    },
+    "x2": {
+     "$ref": "#/$defs/audio_echo"
+    },
+    "p_now": {
+     "$ref": "#/$defs/probability"
+    },
+    "p_future": {
+     "$ref": "#/$defs/probability"
+    },
+    "vad": {
+     "$ref": "#/$defs/probability"
+    },
+    "p_bins": {
+     "type": "array",
+     "minItems": 4,
+     "maxItems": 4,
+     "prefixItems": [
+      {
+       "$ref": "#/$defs/probability"
+      },
+      {
+       "$ref": "#/$defs/probability"
+      },
+      {
+       "$ref": "#/$defs/probability"
+      },
+      {
+       "$ref": "#/$defs/probability"
+      }
+     ],
+     "items": false
+    },
+    "p_bins_now": {
+     "$ref": "#/$defs/probability"
+    },
+    "p_bins_future": {
+     "$ref": "#/$defs/probability"
+    }
+   },
+   "description": "1ch、return_p_bins=True。"
+  }
+ }
+}

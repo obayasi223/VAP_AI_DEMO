@@ -7,7 +7,7 @@
   "vap": {
     "channel_layout": "2ch",
     "p_ai_index": 1,
-    "direction_status": "provisional",
+    "direction_status": "measured",
     "speaking_threshold": 0.5
   },
   "turn": {

@@ -1,0 +1,55 @@
+{
+ "tag": "with_browser_pinned_4cores",
+ "config": {
+  "lang": "jp_kyoto",
+  "model_type": "normal-ver2",
+  "frame_rate": 12.5,
+  "mc_requested": true,
+  "variant": "vap_mc"
+ },
+ "threads": {
+  "torch": 4,
+  "onnx_intra": 4
+ },
+ "material": "jpn_mix_16k + eng_mix_16k を連結（公式 sample）。実時間で投入",
+ "audio_fed_s": 330.0,
+ "wall_s": 381.2,
+ "expected_results": 4124,
+ "n_results": 4124,
+ "frame_budget_ms": 80.0,
+ "rtf_p50": 1.203,
+ "rtf_p95": 1.939,
+ "rtf_p99": 3.034,
+ "rtf_max": 10.549,
+ "rtf_p95_first_half": 2.166,
+ "rtf_p95_second_half": 1.683,
+ "frames_over_budget": 2679,
+ "backlog_ms_p50": 64114.02,
+ "backlog_ms_p95": 92276.03,
+ "backlog_ms_p99": 94425.23,
+ "backlog_ms_max": 95070.15,
+ "backlog_ms_last_10s_max": 56943.55,
+ "chunks_late_gt_1_frame": 16480,
+ "result_latency_ms_p50": 64168.3,
+ "result_latency_ms_p95": 92330.0,
+ "result_latency_ms_max": 95090.1,
+ "nan_results": 0,
+ "p_now_sum_max_abs_err": 4.571676254272461e-05,
+ "cpu_core_usage": 4.12,
+ "system_busy_cores_all_processes": 9.7,
+ "rss_mb_per_minute": [
+  693.8,
+  725.8,
+  726.2,
+  726.3,
+  729.3,
+  729.7,
+  729.8
+ ],
+ "peak_rss_mb": 697,
+ "loadavg_end": [
+  "15.13",
+  "18.07",
+  "15.38"
+ ]
+}
