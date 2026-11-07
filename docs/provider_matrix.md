@@ -1,7 +1,7 @@
 # プロバイダ検証マトリクス（レーン R4）
 
-- 確認日: **2026-11-08**（全項目共通）。実 API は呼び出していない（キーなし）。公式資料と SDK のソースのみで確認した。
-- 表記: **【確認】** 公式資料または SDK ソースに記載あり／**【記載なし】** 探した範囲の資料に記載がない／**【要実測】** 実呼び出しでしか確定しない（`tools/provider_probe/` で測る）。
+- 確認日: **2026-11-08**（全項目共通）。§0〜§9 は公式資料と SDK のソースの確認で、**実呼び出しの結果は §10 に分けて書く**。§9 までの【要実測】のうち §10 で分かったものは、該当の行に「→ §10.x」と書く。資料と実測が違うときは実測を採る。
+- 表記: **【確認】** 公式資料または SDK ソースに記載あり／**【記載なし】** 探した範囲の資料に記載がない／**【要実測】** 実呼び出しでしか確定しない（`tools/provider_probe/` で測る）／**【実測】** 実呼び出しの結果（§10）。
 - 【確認】は「資料にそう書いてある」という意味で、実際の動作の保証ではない。
 - 推定や計算は「**推定**」と明記する。遅延の値は公称値で、この環境の測定値ではない。
 
@@ -55,10 +55,10 @@
 | 3 | **`@google-cloud/speech` 8.x と `@google/genai` 3.x は Node 22 以上が必要。** 計画の環境は Node 20 | GS、AS【確認】 | §1.2、`engines`。推奨は Node 24（この環境の nvm に v24.21.0 あり）。Node 20 のままなら `@google-cloud/speech@7.5.0`（最後の Node 18 以上対応）に固定し、Gemini は REST で呼ぶ |
 | 4 | **SDK の `client.streamingRecognize()` は v2 に使えない。** helper が v1 の形（`recognizer` なし、`audioContent`）で書き込む | GS `helpers.js`【確認】 | レーン C。`client._streamingRecognize()` を直接使い、先頭で `{recognizer, streamingConfig}`、以後 `{audio}` を送る。公式の Node 版 v2 サンプルは見当たらない |
 | 5 | **20ms ごとの送信は 3,000 要求/分の上限にちょうど達する**（50 要求/秒）。切替で2本重ねると倍になる | G2 脚注【確認】。ただし同じ表に 1,000,000 ともあり資料内で矛盾 | §3.2 の 20ms は内部の単位として維持し、Node → Google は **40ms に束ねる**。公式の推奨は 100ms（G7）で、差は実測する |
-| 6 | **日本国内に ja-JP のリージョンがない。** `chirp_3` と `long` は `us`／`eu`／`global`、`chirp_2` は `asia-southeast1` ほか | G3【確認】 | `t_transcript` に往復遅延が乗る。§3.6 の区間で実測して報告 |
+| 6 | **（訂正）資料の表には日本国内の ja-JP の行がないが、`long` は `asia-northeast1`（東京）で動く。** 資料の表は `chirp_3` と `long` が `us`／`eu`／`global`、`chirp_2` が `asia-southeast1` ほか | G3【確認】。動作は【実測】§10.3 | 「国内リージョンなし」の当初の主張は誤り。既定を `long` + `asia-northeast1` とする |
 | 7 | **Gemini の `generateContent` は「legacy」扱いになり、新規には Interactions API が推奨。Interactions は既定で要求を保存する**（有料 55 日、無料 1 日） | A7、A8【確認】 | レーン D。Interactions を使うなら **`store: false` を必須**にする（人の発話の書き起こしを送るため） |
 | 8 | **無料ティアの入出力はプロダクト改善と人のレビューの対象**（日本はこの例外地域に入らない） | A10【確認】 | §9 の用意。参加者の発話を送るなら**有料ティアのキー**を必須にする |
-| 9 | **ElevenLabs の `alignment` は語単位ではなく文字単位の配列で、時刻はチャンク相対** | E1、E2 スキーマ【確認】。ガイド E4 の「word-level」とは表現が異なる | §1.1 の「語単位」を訂正。§4.3 の語境界は累積時刻と `Intl.Segmenter` などで自前で作る |
+| 9 | **ElevenLabs の `alignment` は語単位ではなく文字単位の配列。** 資料の時刻はチャンク相対だが、実測では flush をまたぐと文脈の累積（§10.1） | E1、E2 スキーマ【確認】。ガイド E4 の「word-level」とは表現が異なる | §1.1 の「語単位」を訂正。§4.3 の語境界は累積時刻と `Intl.Segmenter` などで自前で作る。基準の違いは C が吸収して chunk 相対で渡す |
 | 10 | **`multi-stream-input` があり、1接続で 5 文脈まで先行生成できる。無通信の上限も 180 秒まで延ばせる** | E2、E3【確認】 | §4.3 の「生成後に閉じて開き直す」を「**セッションで1接続を維持し、文脈を `audio_playback_id`＋世代に対応させる**」へ変更（§5 参照）。接続の遅延がなくなる |
 | 11 | **既定の `chunk_length_schedule` は先頭 120 文字。** 日本語の短文では `flush` か `auto_mode` なしだと音声が始まらない | E1、E5【確認】 | レーン D。`auto_mode=true` を既定にし、文末で `flush` |
 | 12 | **Gemini の中断はクライアント側のみで課金は止まらない。** `temperature`、`top_p`、`top_k` は無視され、将来は 400 になる | AS、A9【確認】 | §4.5 の「途中で中断しない」方針と整合。`ResponsePrefetch` の取消は費用を節約しない。温度を指定しない |
@@ -74,7 +74,7 @@
 | `chirp_3` の他のリージョン | リリースノートに `asia-south1` などの preview があるが、ja-JP の表にはない | 【確認】 | G10、G3 |
 | `long`、`short`、`telephony`、`telephony_short` | ja-JP は `global`、`us`、`eu` | 【確認】 | G3 |
 | `chirp_2` | ja-JP は `us-central1`、`europe-west4`、`asia-southeast1`。状態の表記は「Private GA」、streaming の言語は「Limited」の一覧に ja-JP あり | 【確認】 | G3、G9 |
-| `asia-northeast1` の ja-JP | 表に行がない | 【確認】 | G3 |
+| `asia-northeast1` の ja-JP | 表に行がない。**`long` は実際に動く → §10.3** | 【確認】＋【実測】 | G3 |
 | 最新の対応状況 | Locations API で取得できると案内。`node stt_locations.mjs` | 【要実測】 | G1、GS |
 | Node のクライアント | `new v2.SpeechClient({apiEndpoint})`。`_streamingRecognize()` を直接使用（§1 の #4） | 【確認】ソース。実動作は【要実測】 | GS |
 | 要求の順序 | 最初は `recognizer`＋`streaming_config` のみ、以後 `audio` のみ。`recognizers/_` で暗黙の Recognizer | 【確認】 | GS |
@@ -133,11 +133,11 @@
 
 | 項目 | 内容 | 状態 | 出典 |
 |---|---|---|---|
-| `stream-input` の `output_format` | WS のスキーマは型の記載なし（"Any type"）。HTTP 版は `pcm_8000/16000/22050/24000/32000/44100/48000` を列挙。`pcm_44100` は有料の上位プラン | 【確認】。**WS で `pcm_16000`、`pcm_24000` が通るか**は【要実測】 | E1、E8 |
+| `stream-input` の `output_format` | WS のスキーマは型の記載なし（"Any type"）。HTTP 版は `pcm_8000/16000/22050/24000/32000/44100/48000` を列挙。`pcm_44100` は有料の上位プラン | 【確認】。**WS で `pcm_16000`、`pcm_24000` が通るか → §10.1** | E1、E8 |
 | PCM の形式 | S16LE | 【確認】 | SDK `OutputFormat` |
 | 高音質の形式と遅延 | 高音質の形式は遅延が増えることがある | 【確認】 | E5 |
 | `alignment`／`normalizedAlignment` | `{chars: string[], charStartTimesMs: int[], charDurationsMs: int[]}`。文字単位。**時刻は返されたチャンク内の相対値**。音声チャンクと同じメッセージ。`sync_alignment` はクエリ（既定 false） | 【確認】 | E1、E2 |
-| 日本語の単位 | `chars` に漢字と仮名がどう入るか、`normalizedAlignment` で読みに展開されるか、語境界の精度はいずれも記載なし | 【記載なし】【要実測】 | E1 |
+| 日本語の単位 | `chars` に漢字と仮名がどう入るか、`normalizedAlignment` で読みに展開されるか、語境界の精度はいずれも記載なし。**単位と展開 → §10.1**。語境界の精度は未測定 | 【記載なし】＋【実測】 | E1 |
 | `eleven_flash_v2_5` の日本語 | 対応（`ja`）。40,000 文字まで。**Flash 系の中で多言語対応はこれ** | 【確認】 | E7 |
 | 代替モデル（同じ WS） | `eleven_multilingual_v2`（`ja` 対応、高品質で遅く料金は2倍）。`eleven_turbo_v2_5` は非推奨（Flash へ移行） | 【確認】 | E7 |
 | 代替モデル（別プロトコル） | `eleven_v4_turbo`（約 100ms、90 以上の言語）と `eleven_v3_conversational` は Text to Dialogue WS のみ。項目が snake_case で、開いた接続ごとにセッションを消費。音声開始に約 40 文字と 8 語のバッファ | 【確認】 | E7、E9 |
@@ -149,7 +149,7 @@
 | 最初の音声までの遅延（公称） | Flash v2.5 は約 100ms（中央値、サーバー側のみ、WS、使用済みの声）。ネットワークは含まない。料金ページは約 75ms と記載 | 【確認】（資料間で差あり） | E6、E7、E10 |
 | 地域別の公称 TTFB | 北東アジア 150〜200ms、東南アジア 100〜150ms（Flash＋WS）。配信地域は米国、オランダ、シンガポール。`x-region` ヘッダで確認可 | 【確認】。実値は【要実測】 | E5 |
 | `multi-stream-input` | あり。`context_id` で複数の文脈。**1接続 5 文脈まで**。割り込み時は `close_context` して新しい文脈を作るのが推奨。1ユーザーセッション1接続を推奨 | 【確認】 | E2、E3 |
-| 文脈の取消 | `{context_id, close_context: true}`。flush 済みなら flush は続く。**送信中の音声がすぐ止まるかは記載なし** | 【確認】＋【要実測】 | E2 |
+| 文脈の取消 | `{context_id, close_context: true}`。flush 済みなら flush は続く。**送信中の音声がすぐ止まるかは記載なし → 止まらない、§10.1** | 【確認】＋【実測】 | E2 |
 | 取消した分の課金 | 記載なし | 【記載なし】【要実測】（`tts_probe --mode billing`） | |
 | 課金の単位 | 文字単位。Flash／Turbo は $0.04／1千文字、Multilingual v2 は $0.08。プラン同梱: Free 2 万字、Starter（$6）15 万字、Creator（$22）55 万字 | 【確認】 | E10 |
 | 無通信の切断 | 既定 20 秒。`inactivity_timeout` で最大 180 秒 | 【確認】 | E1、E2、E3 |
@@ -262,15 +262,15 @@
 - 接続が切れたら再接続し、保持中の PCM は Node 側のものを使う。未完了の文脈は作り直す。
 - 接続の切断や上限に当たった場合のみ、計画の「`stream-input` を要求ごとに開く」方式へ落とせるよう、D のインターフェースで隠す。
 
-## 7. 推奨の設定（実測前の暫定）
+## 7. 推奨の設定（STT と TTS の代替は §10 の実測で更新）
 
 | 部品 | 第1候補 | 代替 |
 |---|---|---|
 | Node | 24 | 20 + `@google-cloud/speech@7.5.0` + Gemini は REST |
-| STT | `chirp_3`、`us`、`ja-JP`、LINEAR16 16kHz、`interim_results=true`、`enable_voice_activity_events=true`、40ms 送信。**interim が返ることが条件** | `long`（`us`）→ `chirp_2`（`asia-southeast1`）→ `gpt-live-transcribe` |
+| STT | **`long`、`asia-northeast1`（実測 §10.3）**、`ja-JP`、LINEAR16 16kHz、`interim_results=true`、`enable_voice_activity_events=true`、40ms 送信。当初の第1候補 `chirp_3` は 8 秒で interim が1回のみで外した | `long`（`us`）→ `chirp_2`（`asia-southeast1`）→ `gpt-live-transcribe` |
 | `endpointing_sensitivity` | STANDARD のまま（SHORT は人の間で切れる恐れ。G1 の注意） | 実測で比較 |
 | LLM | `gemini-3.5-flash-lite`、Interactions、`store: false`、`thinking_level: minimal`、有料ティア | `gemini-3.8-flash` + `low`（質が足りないとき。§4.5a のスパイクで判断） |
-| TTS | `eleven_flash_v2_5`、`multi-stream-input`、`auto_mode=true`、`pcm_24000`（16kHz へは §3.2 の変換を通す）、`sync_alignment=true` | `pcm_16000`（遅延に差があれば）／`eleven_multilingual_v2`（日本語の品質が足りなければ。ただし遅い） |
+| TTS | `eleven_flash_v2_5`、`multi-stream-input`、`auto_mode=true`、`pcm_24000`（16kHz へは §3.2 の変換を通す）、`sync_alignment=true` | `pcm_16000`（遅延に差があれば）／`eleven_multilingual_v2`（日本語の品質が足りなければ。ただし遅い）／**Gemini TTS（キーがないとき。§10.2、語時刻は推定）** |
 
 ## 8. 費用の見込み（5 分の対話 1 回。**推定**）
 
@@ -312,3 +312,52 @@
 | 18 | 取消した文脈の課金 | `tts_probe --mode billing` | 費用の見込み、先行生成の頻度 |
 | 19 | 切断の時刻、keep-alive の効果 | `tts_probe --mode idle` | §6.6 |
 | 20 | `chirp_3` の請求 SKU | 請求画面 | 費用の見込み |
+
+## 10. 実測の結果（2026-11-08）
+
+ここは実呼び出しの結果で、§0〜§9 の資料の確認とは分ける。**回数が少なく、日本の1回線、短文での値**で、分布の主張ではない。
+
+**出所:** STT と Gemini LLM は `tools/provider_probe/out/` の JSONL と要約（git の対象外）。ElevenLabs と Gemini TTS は**レーン C の報告と `apps/orchestrator/src/providers/tts/` の実装の注記**で、`live_*_check.ts` の出力は標準出力のみで `out/` にファイルが残っていない（数値を後から照合できない）。
+
+### 10.1 ElevenLabs（`multi-stream-input`）
+
+| 項目 | 実測 | 資料との関係 | 出所 |
+|---|---|---|---|
+| 最初の音声 | 176〜286ms（4回） | 公称の地域別 TTFB は §3 | レーン C |
+| 配信地域 | `asia-southeast1` | 資料はシンガポールを含むと記載 | レーン C |
+| PCM 形式 | `pcm_16000`、`pcm_24000` は可。`pcm_44100` は Pro 以上で拒否（接続後に `output_format_not_allowed`） | 資料は WS の型の記載なし | レーン C |
+| `isFinal` | flush では来ず、`close_context` の後に来る（80〜100ms） | 資料に記載なし | レーン C |
+| `close_context` 後の音声 | flush 済みの分は届く（3.7 秒ぶんが 420ms 以内、`isFinal` は 607ms 後）。取消は受信側で棄てる | 資料は「すぐ止まるか記載なし」 | レーン C |
+| `alignment` の時刻 | flush をまたぐ chunk で文脈の累積（2番目の chunk の先頭が 1161ms、それまでの PCM は 1153ms） | **資料（チャンク相対）と違う** | レーン C |
+| `alignment` の単位 | 入力の1文字ごとで、末尾に空白が付く | 資料に記載なし | レーン C |
+| `normalizedAlignment` | ローマ字に展開される。発話済みの計算に使わない | §6.5 の懸念のとおり | レーン C |
+| 6本目の文脈 | 接続ごと閉じられる（`max_active_conversations`） | 資料は上限 5 のみ | レーン C |
+| エラー | 多くは接続が開いた後のメッセージ `{message, error, code: 1008}` で、続いて閉じる。不正なキーも HTTP では拒否されない。HTTP 403 が権限とは限らない（`invalid_output_format` も 403） | 資料に記載なし | レーン C |
+
+**未確認:** クォータ超過の実際のコード、取消分の課金（今のキーに `user_read` がなく、`/v1/user/subscription` を読めない）、keep-alive の長時間の効果、日本語の読みの質（人が聞く）。
+
+### 10.2 Gemini TTS（代替）
+
+| 項目 | 実測 | 出所 |
+|---|---|---|
+| モデル | `gemini-3.8-flash-tts`、`gemini-3.8-flash-lite-tts` | レーン C |
+| 経路 | Interactions API の stream。`step.delta` の `delta.type=audio` に base64 | レーン C |
+| 形式 | `audio/l16`、24kHz | レーン C |
+| 最初の音声 | 0.87〜1.23 秒 | レーン C |
+| alignment | なし。語時刻は文字数と音声の長さからの推定で、`playback.alignment` に `source: 'estimated_time_proportional'` を付ける。発話済みの精度は `time_proportional` | レーン C |
+
+**未確認:** 無料枠の制限の実際のエラー、中断した分の課金、話し方の質。
+
+### 10.3 Google Speech-to-Text v2（`long` + `asia-northeast1`）
+
+| 項目 | 実測 | 出所 |
+|---|---|---|
+| interim（8 秒の `ja.wav`、1回） | interim 46 件、`stability` は 0.9 と 0.01 の2値、音声に対する遅れ p50 280ms／p95 340ms | `stt-asia-northeast1-long-*.summary.json` |
+| ストリームの上限 | 302.2 秒で `ABORTED`（`Max duration of 5 minutes reached for stream.`） | `stt-long-limit-long-*.summary.json` |
+| 課金の項目 | 応答の `metadata.totalBilledDuration`（累積） | 同上、`stt-c-handover-*.jsonl` の `billed` |
+| 切替（無音、63 秒で実施） | A の最後の final から B の最初の出力まで**空白 1170ms（話者の無音を含む）** | `stt-c-handover-2026-11-07T19-14-11-584Z.jsonl` |
+| 切替（期限 285 秒） | **空白 236ms** | 同上 |
+| 継ぎ目の文字 | 切替2回とも欠落なし。期限の切替は重なり 256 文字を `suffix_match` で除去 | 同上 |
+
+空白は結果の受信時刻の差で計算した。各1回の値。切替と別に、Google が打つ final の直後に文字が欠ける（計6文字）。`docs/known_gaps.md` を参照。
+

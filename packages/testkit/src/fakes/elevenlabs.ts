@@ -2,12 +2,18 @@
  * ElevenLabs の WS の偽物。stream-input と multi-stream-input の両方を実際の WS で話す。
  * 音声はトーンで、音声合成はしない。
  *
- * docs/provider_matrix.md §3 の資料どおりにしたもの: alignment は文字単位でチャンク相対、sync_alignment は既定 false、
+ * docs/provider_matrix.md §3 の資料どおりにしたもの: alignment は文字単位、sync_alignment は既定 false、
  * 1接続 5 文脈、close_context、無通信は既定 20 秒で inactivity_timeout により最大 180 秒、
  * eleven_v3／v4 は不可、stream-input の空文字列は閉じる、multi の空文字列は keep-alive。
  *
- * 【要実測】close code、6本目の扱い（ここでは接続を閉じる）、close_context 後の音声（ここでは止める）、
- * 認証の方法、flush なしで生成が始まる条件。ここを本番の動作の根拠にしない。
+ * multi-stream-input の実測に合わせたもの（provider_matrix §10.1）:
+ *  - flush では isFinal を返さない。isFinal は close_context の後に、flush 済みの音声を送り切ってから返す。
+ *  - close_context の後も flush 済みの音声は届く。flush していない文字は棄てる。
+ *  - alignment の時刻は文脈の累積。stream-input は実測していないので資料どおりのチャンク相対のまま。
+ *  - isFinal までは文脈の枠に数える（実物で空くかは未確認なので、厳しい側に倒す）。
+ *
+ * 【要実測】close code、認証の方法、flush なしで生成が始まる条件。ここを本番の動作の根拠にしない。
+ * 音声の到着の速さ、エラーのメッセージ（実物は接続後の {message, error, code}）は再現していない。
  */
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
@@ -29,6 +35,8 @@ export interface FakeElevenLabsOptions {
   /** 音声チャンクをこの数だけ送ったら接続を切る（障害の注入）。 */
   disconnect_after_chunks?: number;
   max_contexts?: number;
+  /** isFinal を送らない（障害の注入）。受信側の待ちの上限を試すため。 */
+  never_send_final?: boolean;
 }
 
 const REJECTED_MODELS = new Set(['eleven_v3', 'eleven_v4']);
@@ -113,6 +121,10 @@ export class FakeElevenLabsServer {
 class FakeSession {
   private readonly buffers = new Map<string, string>();
   private readonly closedContexts = new Set<string>();
+  /** isFinal までの文脈。枠の上限はこれで数える。 */
+  private readonly openContexts = new Set<string>();
+  /** 文脈ごとの送信済みの音声の長さ。alignment の累積の基準。 */
+  private readonly contextMs = new Map<string, number>();
   private queue: Promise<void> = Promise.resolve();
   private sentChunks = 0;
   private authed = false;
@@ -174,27 +186,27 @@ class FakeSession {
       this.socket.close(CLOSE_POLICY, 'missing context_id');
       return;
     }
+    if (this.closedContexts.has(id)) return;
     if (message.close_context) {
       this.closedContexts.add(id);
+      // flush していない文字は棄てる。flush 済みの音声は queue に残っていて届き続ける。
       this.buffers.delete(id);
       this.server.closedContexts.push(id);
+      this.finish(id, id, false);
       return;
     }
-    if (this.closedContexts.has(id)) return;
-    if (!this.buffers.has(id)) {
+    if (!this.openContexts.has(id)) {
       const limit = this.options.max_contexts ?? 5;
-      if (this.buffers.size >= limit) {
+      if (this.openContexts.size >= limit) {
         this.socket.close(CLOSE_POLICY, `too many contexts (max ${limit})`);
         return;
       }
+      this.openContexts.add(id);
       this.buffers.set(id, '');
     }
     // 空文字列は keep-alive。
     this.append(id, message.text ?? '');
-    if (message.flush || this.info.auto_mode) {
-      this.generate(id, id);
-      if (message.flush) this.finish(id, id, false);
-    }
+    if (message.flush || this.info.auto_mode) this.generate(id, id);
   }
 
   private append(context: string, text: string): void {
@@ -212,7 +224,11 @@ class FakeSession {
   private finish(context: string, contextId: string | null, close: boolean): void {
     this.queue = this.queue.then(() => {
       if (this.socket.readyState !== this.socket.OPEN) return;
-      if (this.closedContexts.has(context)) return;
+      this.openContexts.delete(context);
+      if (this.options.never_send_final) {
+        if (close) this.socket.close(1000, 'done');
+        return;
+      }
       const last: ElevenLabsAudioMessage = {
         audio: null,
         isFinal: true,
@@ -232,17 +248,18 @@ class FakeSession {
       const delay = this.options.chunk_delay_ms ?? 0;
       if (delay > 0) await new Promise((r) => setTimeout(r, delay));
       if (this.socket.readyState !== this.socket.OPEN) return;
-      if (this.closedContexts.has(context)) return;
       const chars = all.slice(i, i + size);
       const pcm = toneSamples(Math.round(((chars.length * msPerChar) / 1000) * this.rate), this.rate);
+      // multi は文脈の累積（実測）、stream-input はチャンク相対（資料）。
+      const baseMs = contextId === null ? 0 : (this.contextMs.get(context) ?? 0);
+      this.contextMs.set(context, baseMs + chars.length * msPerChar);
       const message: ElevenLabsAudioMessage = {
         audio: Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength).toString('base64'),
         isFinal: null,
         alignment: this.info.sync_alignment
           ? {
               chars,
-              // チャンク内の相対時刻。
-              charStartTimesMs: chars.map((_, n) => n * msPerChar),
+              charStartTimesMs: chars.map((_, n) => baseMs + n * msPerChar),
               charDurationsMs: chars.map(() => msPerChar),
             }
           : null,

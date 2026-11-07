@@ -38,6 +38,25 @@ const stt = {
   model_version: 'chirp_3',
 };
 
+const handover = {
+  ...envelope,
+  event: 'stt.handover',
+  provider: 'google_stt_v2',
+  model_version: 'long@asia-northeast1',
+  from_stream: 'gstt_1',
+  to_stream: 'gstt_2',
+  cause: 'silence',
+  h_frame: 1015680,
+  a_age_ms: 63480,
+  overlap_ms: 3440,
+  drain_ms: present(242),
+  a_final_synthesized: false,
+  first_b_emit_ms: present(1404),
+  stripped_chars: present(0),
+  strip_method: present('none'),
+  b_first_lag_ms: absent('stream_ended_before_b_output'),
+};
+
 const llmBase = {
   ...envelope,
   request_id: 'r_1',
@@ -248,6 +267,7 @@ export const VALID_FIXTURES: Record<SchemaName, { name: string; value: unknown }
         stability: absent('final_has_none'),
       },
     },
+    { name: 'stt.handover', value: handover },
     { name: 'llm.request', value: { ...llmBase, event: 'llm.request', input: { text: 'x' } } },
     {
       name: 'llm.response',
@@ -551,6 +571,17 @@ export const VALID_FIXTURES: Record<SchemaName, { name: string; value: unknown }
     },
     { name: 'clock.ping', value: { type: 'clock.ping', seq: 1, client_t_ms: 100 } },
     {
+      name: 'clock.report',
+      value: {
+        type: 'clock.report',
+        offset_ms: -812.5,
+        rtt_ms: 4,
+        uncertainty_ms: 2,
+        samples: 8,
+        client_t_ms: 900,
+      },
+    },
+    {
       name: 'playback.started',
       value: {
         type: 'playback.started',
@@ -834,6 +865,28 @@ export const INVALID_FIXTURES: Record<string, { schema: SchemaName; value: unkno
       channels: 'ch1',
     },
   },
+  'clock.report with a negative RTT': {
+    schema: 'browser_rpc.browser_to_node',
+    value: { type: 'clock.report', offset_ms: 0, rtt_ms: -1, uncertainty_ms: 0, samples: 1, client_t_ms: 0 },
+  },
+  'clock.report without samples': {
+    schema: 'browser_rpc.browser_to_node',
+    value: { type: 'clock.report', offset_ms: 0, rtt_ms: 1, uncertainty_ms: 0.5, samples: 0, client_t_ms: 0 },
+  },
+  'playback.alignment with an unknown source': {
+    schema: 'browser_rpc.node_to_browser',
+    value: {
+      type: 'playback.alignment',
+      audio_playback_id: 11,
+      generation: 3,
+      items: [],
+      source: 'guessed',
+    },
+  },
+  'stt.handover with an unknown cause': {
+    schema: 'events',
+    value: { ...handover, cause: 'whim' },
+  },
   'hri2025 value cannot change': {
     schema: 'policy.hri2025',
     value: {
@@ -860,6 +913,108 @@ export const INVALID_FIXTURES: Record<string, { schema: SchemaName; value: unkno
     },
   },
 };
+
+/**
+ * 後方互換のために省略可能にした項目の例（common.ts の規則の例外）。
+ * VALID_FIXTURES は最上位の項目が全部必須という試験を通るので、こちらへ分ける。
+ * optional_keys を消しても、入れたままでも合格する。
+ */
+export const OPTIONAL_FIXTURES: {
+  schema: SchemaName;
+  name: string;
+  value: unknown;
+  optional_keys: string[];
+}[] = [
+  {
+    schema: 'browser_rpc.browser_to_node',
+    name: 'audio.report/counters',
+    value: {
+      type: 'audio.report',
+      client_t_ms: 700,
+      audio_frame: 72000,
+      frames_lost: 0,
+      underrun_count: 0,
+      underrun_total_ms: 0,
+      stale_pcm_frames_dropped: 2,
+      latency,
+      track_settings: trackSettings,
+      system_ch_source: 'written',
+      audio_context_state: 'running',
+      visibility: 'visible',
+      reconnects: 1,
+      orphan_pcm_frames: 2,
+      pcm_seq_gaps: 3,
+      render_lag_ms: 1.5,
+    },
+    optional_keys: ['reconnects', 'orphan_pcm_frames', 'pcm_seq_gaps', 'render_lag_ms'],
+  },
+  {
+    schema: 'browser_rpc.node_to_browser',
+    name: 'playback.alignment/estimated',
+    value: {
+      type: 'playback.alignment',
+      audio_playback_id: 11,
+      generation: 3,
+      items: [{ text: 'はい', start_ms: 0, end_ms: 350, granularity: 'word' }],
+      source: 'estimated_time_proportional',
+    },
+    optional_keys: ['source'],
+  },
+  {
+    schema: 'events',
+    name: 'audio.health/browser/counters',
+    value: {
+      ...envelope,
+      event: 'audio.health',
+      reporter: 'browser',
+      audio_frame: 48000,
+      frames_lost: 0,
+      underrun_count: 1,
+      underrun_total_ms: 20,
+      stale_pcm_frames_dropped: 0,
+      latency,
+      track_settings: trackSettings,
+      system_ch_source: 'written',
+      audio_context_state: 'running',
+      visibility: 'visible',
+      reconnects: 1,
+      orphan_pcm_frames: 2,
+      pcm_seq_gaps: 3,
+      render_lag_ms: 1.5,
+    },
+    optional_keys: ['reconnects', 'orphan_pcm_frames', 'pcm_seq_gaps', 'render_lag_ms'],
+  },
+  {
+    schema: 'events',
+    name: 'llm.response/first_text_at',
+    value: {
+      ...llmBase,
+      event: 'llm.response',
+      output: modelOutput({ text: 'x', finish_reason: 'STOP' }),
+      received_at: 1400,
+      first_text_at: 1100,
+    },
+    optional_keys: ['first_text_at'],
+  },
+  {
+    schema: 'events',
+    name: 'prefetch.started/trigger',
+    value: { ...prefetch, event: 'prefetch.started', trigger: 'asr_timeout' },
+    optional_keys: ['trigger'],
+  },
+  {
+    schema: 'events',
+    name: 'prefetch.cancelled/discarded',
+    value: {
+      ...prefetch,
+      event: 'prefetch.cancelled',
+      cancel_reason: 'superseded',
+      discarded_chunks: 4,
+      discarded_samples: 19200,
+    },
+    optional_keys: ['discarded_chunks', 'discarded_samples'],
+  },
+];
 
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');

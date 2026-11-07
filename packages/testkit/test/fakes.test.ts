@@ -427,24 +427,75 @@ describe('FakeElevenLabsServer', () => {
       const { socket, messages } = await multi(port);
       socket.send(JSON.stringify({ context_id: 'p1_g0', text: 'あ', xi_api_key: 'fake', flush: true }));
       socket.send(JSON.stringify({ context_id: 'p2_g0', text: 'い', flush: true }));
+      socket.send(JSON.stringify({ context_id: 'p1_g0', close_context: true }));
+      socket.send(JSON.stringify({ context_id: 'p2_g0', close_context: true }));
       await until(() => messages.filter((m) => m.isFinal).length === 2);
       expect(messages.filter((m) => m.audio).map((m) => m.contextId)).toEqual(['p1_g0', 'p2_g0']);
       expect(messages.find((m) => m.contextId === 'p2_g0' && m.audio)?.alignment?.chars).toEqual(['い']);
       expect(server.connections[0]).toMatchObject({ kind: 'multi-stream-input', auto_mode: true, inactivity_timeout_sec: 180 });
     });
 
-    it('stops audio for a closed context and leaves the connection open', async () => {
-      const { server, port } = await setup({ chars_per_chunk: 1, chunk_delay_ms: 10 });
+    it('keeps sending flushed audio after close_context, then isFinal, and leaves the connection open', async () => {
+      const { server, port } = await setup({ chars_per_chunk: 1, chunk_delay_ms: 2 });
       const { socket, messages, isClosed } = await multi(port);
       socket.send(JSON.stringify({ context_id: 'p1_g0', text: 'あいうえおかきくけこ', xi_api_key: 'fake', flush: true }));
       await until(() => messages.length >= 1);
       socket.send(JSON.stringify({ context_id: 'p1_g0', close_context: true }));
-      await until(() => server.closedContexts.length === 1);
-      const atClose = messages.length;
-      await new Promise((r) => setTimeout(r, 50));
-      expect(messages.length).toBeLessThanOrEqual(atClose + 1);
-      expect(messages.length).toBeLessThan(10);
+      await until(() => messages.some((m) => m.isFinal));
+      expect(server.closedContexts).toEqual(['p1_g0']);
+      expect(messages.filter((m) => m.audio)).toHaveLength(10);
+      expect(messages.at(-1)).toMatchObject({ audio: null, isFinal: true, contextId: 'p1_g0' });
       expect(isClosed()).toBe(false);
+    });
+
+    it('does not send isFinal on flush', async () => {
+      const { port } = await setup({ ms_per_char: 10, chars_per_chunk: 8 });
+      const { socket, messages } = await multi(port);
+      socket.send(JSON.stringify({ context_id: 'p1_g0', text: 'あ', xi_api_key: 'fake', flush: true }));
+      await until(() => messages.length === 1);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(messages.some((m) => m.isFinal)).toBe(false);
+    });
+
+    it('drops text that was not flushed when the context closes', async () => {
+      const { port } = await setup({ ms_per_char: 10 });
+      const socket = await connect(port, 'output_format=pcm_16000&sync_alignment=true', 'multi-stream-input');
+      socket.socket.send(JSON.stringify({ context_id: 'p1_g0', text: 'あ', xi_api_key: 'fake' }));
+      socket.socket.send(JSON.stringify({ context_id: 'p1_g0', close_context: true }));
+      await until(() => socket.messages.some((m) => m.isFinal));
+      expect(socket.messages.filter((m) => m.audio)).toHaveLength(0);
+    });
+
+    it('reports alignment times cumulative within the context, across flushes', async () => {
+      const { port } = await setup({ ms_per_char: 10, chars_per_chunk: 2 });
+      const { socket, messages } = await multi(port);
+      socket.send(JSON.stringify({ context_id: 'p1_g0', text: 'あいう', xi_api_key: 'fake', flush: true }));
+      socket.send(JSON.stringify({ context_id: 'p2_g0', text: 'か', flush: true }));
+      socket.send(JSON.stringify({ context_id: 'p1_g0', text: 'え', flush: true }));
+      await until(() => messages.filter((m) => m.audio).length === 4);
+      const startsOf = (id: string) =>
+        messages.filter((m) => m.contextId === id).map((m) => m.alignment?.charStartTimesMs);
+      expect(startsOf('p1_g0')).toEqual([[0, 10], [20], [30]]);
+      // 文脈が違えば基準も別。
+      expect(startsOf('p2_g0')).toEqual([[0]]);
+    });
+
+    it('counts a closed context against the limit until isFinal, and can withhold isFinal', async () => {
+      const { port } = await setup({ never_send_final: true });
+      const { socket, messages, closed, isClosed } = await multi(port);
+      for (let i = 0; i < 5; i++) {
+        socket.send(JSON.stringify({ context_id: `c${i}`, text: ' ', xi_api_key: 'fake' }));
+      }
+      socket.send(JSON.stringify({ context_id: 'c0', close_context: true }));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(messages.some((m) => m.isFinal)).toBe(false);
+      // 枠は queue を送り切った時点で返す。
+      socket.send(JSON.stringify({ context_id: 'c5', text: ' ' }));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(isClosed()).toBe(false);
+      socket.send(JSON.stringify({ context_id: 'c6', text: ' ' }));
+      await until(isClosed);
+      expect(closed.reason).toContain('too many contexts');
     });
 
     it('treats an empty text as a keep-alive', async () => {

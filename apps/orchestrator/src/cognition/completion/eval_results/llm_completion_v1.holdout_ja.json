@@ -1,0 +1,345 @@
+{
+ "estimator": "llm_completion_v1",
+ "model": "gemini-3.5-flash-lite",
+ "thinking_level": "minimal",
+ "set": "holdout_ja",
+ "summary": {
+  "threshold": 0.3,
+  "n": 60,
+  "null_count": 0,
+  "categories": {
+   "continues": {
+    "n": 15,
+    "median": 0.2,
+    "fire_rate": 0.2
+   },
+   "complete_with_continuation": {
+    "n": 15,
+    "median": 0.9,
+    "fire_rate": 1
+   },
+   "question_end": {
+    "n": 15,
+    "median": 0.95,
+    "fire_rate": 1
+   },
+   "statement_end": {
+    "n": 15,
+    "median": 0.95,
+    "fire_rate": 1
+   }
+  },
+  "auc_question_vs_continues": 0.9933333333333333,
+  "auc_statement_vs_continues": 0.9955555555555555,
+  "auc_cwc_vs_continues": 0.9822222222222222,
+  "auc_question_vs_cwc": 0.7066666666666667
+ },
+ "latency_ms": {
+  "n": 60,
+  "p50": 704.5913199999995,
+  "p95": 866.458023000001,
+  "max": 998.4737439999953
+ },
+ "rows": [
+  {
+   "id": "h_continues_1",
+   "category": "continues",
+   "p": 0.2
+  },
+  {
+   "id": "h_continues_2",
+   "category": "continues",
+   "p": 0.2
+  },
+  {
+   "id": "h_continues_3",
+   "category": "continues",
+   "p": 0.1
+  },
+  {
+   "id": "h_continues_4",
+   "category": "continues",
+   "p": 0.35
+  },
+  {
+   "id": "h_continues_5",
+   "category": "continues",
+   "p": 0.3
+  },
+  {
+   "id": "h_continues_6",
+   "category": "continues",
+   "p": 0.05
+  },
+  {
+   "id": "h_continues_7",
+   "category": "continues",
+   "p": 0.3
+  },
+  {
+   "id": "h_continues_8",
+   "category": "continues",
+   "p": 0.15
+  },
+  {
+   "id": "h_continues_9",
+   "category": "continues",
+   "p": 0.35
+  },
+  {
+   "id": "h_continues_10",
+   "category": "continues",
+   "p": 0.1
+  },
+  {
+   "id": "h_continues_11",
+   "category": "continues",
+   "p": 0.2
+  },
+  {
+   "id": "h_continues_12",
+   "category": "continues",
+   "p": 0.15
+  },
+  {
+   "id": "h_continues_13",
+   "category": "continues",
+   "p": 0.1
+  },
+  {
+   "id": "h_continues_14",
+   "category": "continues",
+   "p": 0.2
+  },
+  {
+   "id": "h_continues_15",
+   "category": "continues",
+   "p": 0.85
+  },
+  {
+   "id": "h_complete_with_continuation_1",
+   "category": "complete_with_continuation",
+   "p": 0.85
+  },
+  {
+   "id": "h_complete_with_continuation_2",
+   "category": "complete_with_continuation",
+   "p": 0.85
+  },
+  {
+   "id": "h_complete_with_continuation_3",
+   "category": "complete_with_continuation",
+   "p": 0.95
+  },
+  {
+   "id": "h_complete_with_continuation_4",
+   "category": "complete_with_continuation",
+   "p": 0.95
+  },
+  {
+   "id": "h_complete_with_continuation_5",
+   "category": "complete_with_continuation",
+   "p": 0.85
+  },
+  {
+   "id": "h_complete_with_continuation_6",
+   "category": "complete_with_continuation",
+   "p": 0.8
+  },
+  {
+   "id": "h_complete_with_continuation_7",
+   "category": "complete_with_continuation",
+   "p": 0.9
+  },
+  {
+   "id": "h_complete_with_continuation_8",
+   "category": "complete_with_continuation",
+   "p": 0.9
+  },
+  {
+   "id": "h_complete_with_continuation_9",
+   "category": "complete_with_continuation",
+   "p": 0.95
+  },
+  {
+   "id": "h_complete_with_continuation_10",
+   "category": "complete_with_continuation",
+   "p": 0.9
+  },
+  {
+   "id": "h_complete_with_continuation_11",
+   "category": "complete_with_continuation",
+   "p": 0.5
+  },
+  {
+   "id": "h_complete_with_continuation_12",
+   "category": "complete_with_continuation",
+   "p": 0.95
+  },
+  {
+   "id": "h_complete_with_continuation_13",
+   "category": "complete_with_continuation",
+   "p": 0.9
+  },
+  {
+   "id": "h_complete_with_continuation_14",
+   "category": "complete_with_continuation",
+   "p": 0.9
+  },
+  {
+   "id": "h_complete_with_continuation_15",
+   "category": "complete_with_continuation",
+   "p": 0.85
+  },
+  {
+   "id": "h_question_end_1",
+   "category": "question_end",
+   "p": 0.85
+  },
+  {
+   "id": "h_question_end_2",
+   "category": "question_end",
+   "p": 0.9
+  },
+  {
+   "id": "h_question_end_3",
+   "category": "question_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_question_end_4",
+   "category": "question_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_question_end_5",
+   "category": "question_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_question_end_6",
+   "category": "question_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_question_end_7",
+   "category": "question_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_question_end_8",
+   "category": "question_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_question_end_9",
+   "category": "question_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_question_end_10",
+   "category": "question_end",
+   "p": 0.9
+  },
+  {
+   "id": "h_question_end_11",
+   "category": "question_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_question_end_12",
+   "category": "question_end",
+   "p": 0.85
+  },
+  {
+   "id": "h_question_end_13",
+   "category": "question_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_question_end_14",
+   "category": "question_end",
+   "p": 0.85
+  },
+  {
+   "id": "h_question_end_15",
+   "category": "question_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_1",
+   "category": "statement_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_2",
+   "category": "statement_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_3",
+   "category": "statement_end",
+   "p": 0.9
+  },
+  {
+   "id": "h_statement_end_4",
+   "category": "statement_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_5",
+   "category": "statement_end",
+   "p": 0.85
+  },
+  {
+   "id": "h_statement_end_6",
+   "category": "statement_end",
+   "p": 0.9
+  },
+  {
+   "id": "h_statement_end_7",
+   "category": "statement_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_8",
+   "category": "statement_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_9",
+   "category": "statement_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_10",
+   "category": "statement_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_11",
+   "category": "statement_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_12",
+   "category": "statement_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_13",
+   "category": "statement_end",
+   "p": 0.85
+  },
+  {
+   "id": "h_statement_end_14",
+   "category": "statement_end",
+   "p": 0.95
+  },
+  {
+   "id": "h_statement_end_15",
+   "category": "statement_end",
+   "p": 0.95
+  }
+ ]
+}

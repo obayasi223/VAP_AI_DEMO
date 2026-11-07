@@ -27,7 +27,20 @@ Node 24 の理由は `docs/provider_matrix.md` §1 の #3（`@google-cloud/speec
 | @types/ws | 8.18.2 | 型 |
 | @types/react, @types/react-dom | 19.3.0 | 型 |
 
-後続のレーンが入れるもの（`three`、`@pixiv/three-vrm`、`@google-cloud/speech`、`@google/genai` など）は未記入。
+## npm（後続のレーンが入れた分）
+
+版とライセンスは `node_modules` の `package.json` で確認した（2026-11-08）。
+
+| パッケージ | 版 | ライセンス | 用途 |
+|---|---|---|---|
+| three | 0.187.0 | MIT | apps/web のアバター（H） |
+| @pixiv/three-vrm | 3.5.5 | MIT | apps/web のアバター（H） |
+| @types/three | 0.187.0 | MIT | 型 |
+| @google-cloud/speech | 8.2.1 | Apache-2.0 | apps/orchestrator の STT（C） |
+| playwright | 1.65.0 | Apache-2.0 | apps/web の実ブラウザ試験（A） |
+| esbuild | 0.28.2 | MIT | apps/web の Worklet と Worker の束ね（A） |
+
+**VRM モデルのライセンス:** 埋め込みメタは CC0。VRoid 公式ページでの確認は未了（`THIRD_PARTY_NOTICES.md`）。上の表はライブラリのライセンスで、モデルの確認の代わりにならない。
 
 ## Python（MaAI ワーカー）
 
@@ -58,4 +71,4 @@ R2 の結果で記入する。commit とファイルのハッシュは未記入�
 
 ## 外部 API
 
-R4 の `docs/provider_matrix.md` を参照。実呼び出しは未検証。
+`docs/provider_matrix.md` を参照。実呼び出しの結果は同 §10。

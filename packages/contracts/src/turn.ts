@@ -187,6 +187,10 @@ export type TurnStateCore = z.infer<typeof TurnStateCore>;
 
 // ---- 出力 ------------------------------------------------------------------
 
+/** 準備を起動した条件。prepare の判断と prefetch.started で共有する。 */
+export const PrepareTrigger = z.enum(['completion_threshold', 'asr_timeout', 'final_transcript']);
+export type PrepareTrigger = z.infer<typeof PrepareTrigger>;
+
 export const TurnDecision = z.discriminatedUnion('kind', [
   /** 応答の先行生成を始める（古い準備があれば D が取り消す）。 */
   z.strictObject({
@@ -194,7 +198,7 @@ export const TurnDecision = z.discriminatedUnion('kind', [
     segment_id: SegmentId,
     transcript_revision: TranscriptRevision,
     text: z.string(),
-    trigger: z.enum(['completion_threshold', 'asr_timeout', 'final_transcript']),
+    trigger: PrepareTrigger,
     similarity: Maybe(Probability),
   }),
   /** 未再生の準備だけが対象。再生中の音声は interrupt_speech で止める（hri2025_mapping の U-2）。 */

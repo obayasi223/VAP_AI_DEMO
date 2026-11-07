@@ -1,0 +1,257 @@
+[
+  {
+    "meta": {
+      "asr_origin": "handwritten",
+      "not_real_asr": true,
+      "preliminary": true,
+      "note": "手書きの逐次 ASR による予備調査。§4.5a の関門の通過ではない。",
+      "scenario": "V2",
+      "take": null,
+      "model": "gemini-3.5-flash-lite",
+      "thinking": "minimal",
+      "provider": "gemini_thin_spike",
+      "prompt_version": "initiative-ja-v2",
+      "persona": "exhibition_colleague",
+      "trigger": {
+        "min_new_stable_chars": 40,
+        "min_new_chars_at_boundary": null
+      },
+      "limits": {
+        "max_new_stable_chars_since_input": 60,
+        "max_result_age_ms": 8000,
+        "min_stability": 0.8,
+        "stable_prefix_revisions": 3,
+        "stable_prefix_min_age_ms": 300,
+        "candidate_expiry_ms": null,
+        "candidate_expires_on_segment_change": null,
+        "signal_cooldown_ms": null,
+        "max_active_candidates": 1,
+        "max_requests_per_session": 200
+      },
+      "speech_end_ms": 36096.248412,
+      "llm_requests": 5,
+      "finished_at": "2026-11-07T19:11:44.241Z"
+    },
+    "summary": {
+      "llm_requests": 5,
+      "llm_errors": 0,
+      "latency_ms": [
+        1293.0871579999985,
+        1513.7976259999996,
+        1453.663446999999,
+        1465.357724000005,
+        1217.6938010000013
+      ],
+      "counts": {
+        "NONE": 1,
+        "NEW": 1,
+        "KEEP": 3
+      },
+      "model_new": 1,
+      "gate_rejected_new": 0,
+      "new_during_speech": 1,
+      "new_after_speech": 0,
+      "withdrawn_by_model": 0,
+      "withdrawn_by_code": 0,
+      "active_at_end": 1,
+      "first_new_ms": 19294.643452,
+      "hold": [
+        {
+          "candidate_id": "c_0001",
+          "new_at_ms": 19294.643452,
+          "next_decision": "KEEP",
+          "next_at_ms": 23882.02843,
+          "added_delay_ms": 4587.384977999998,
+          "cue_avoided": false
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "asr_origin": "handwritten",
+      "not_real_asr": true,
+      "preliminary": true,
+      "note": "手書きの逐次 ASR による予備調査。§4.5a の関門の通過ではない。",
+      "scenario": "V2",
+      "take": null,
+      "model": "gemini-3.8-flash",
+      "thinking": "low",
+      "provider": "gemini_thin_spike",
+      "prompt_version": "initiative-ja-v2",
+      "persona": "exhibition_colleague",
+      "trigger": {
+        "min_new_stable_chars": 40,
+        "min_new_chars_at_boundary": null
+      },
+      "limits": {
+        "max_new_stable_chars_since_input": 60,
+        "max_result_age_ms": 8000,
+        "min_stability": 0.8,
+        "stable_prefix_revisions": 3,
+        "stable_prefix_min_age_ms": 300,
+        "candidate_expiry_ms": null,
+        "candidate_expires_on_segment_change": null,
+        "signal_cooldown_ms": null,
+        "max_active_candidates": 1,
+        "max_requests_per_session": 200
+      },
+      "speech_end_ms": 36093.511649,
+      "llm_requests": 5,
+      "finished_at": "2026-11-07T19:11:47.645Z"
+    },
+    "summary": {
+      "llm_requests": 5,
+      "llm_errors": 0,
+      "latency_ms": [
+        3585.3356490000006,
+        3690.9001599999974,
+        4661.4212240000015,
+        3905.361554000003,
+        4339.729562
+      ],
+      "counts": {
+        "NONE": 5
+      },
+      "model_new": 0,
+      "gate_rejected_new": 0,
+      "new_during_speech": 0,
+      "new_after_speech": 0,
+      "withdrawn_by_model": 0,
+      "withdrawn_by_code": 0,
+      "active_at_end": 0,
+      "first_new_ms": null,
+      "hold": []
+    }
+  },
+  {
+    "meta": {
+      "asr_origin": "handwritten",
+      "not_real_asr": true,
+      "preliminary": true,
+      "note": "手書きの逐次 ASR による予備調査。§4.5a の関門の通過ではない。",
+      "scenario": "V4",
+      "take": null,
+      "model": "gemini-3.5-flash-lite",
+      "thinking": "minimal",
+      "provider": "gemini_thin_spike",
+      "prompt_version": "initiative-ja-v2",
+      "persona": "exhibition_colleague",
+      "trigger": {
+        "min_new_stable_chars": 40,
+        "min_new_chars_at_boundary": null
+      },
+      "limits": {
+        "max_new_stable_chars_since_input": 60,
+        "max_result_age_ms": 8000,
+        "min_stability": 0.8,
+        "stable_prefix_revisions": 3,
+        "stable_prefix_min_age_ms": 300,
+        "candidate_expiry_ms": null,
+        "candidate_expires_on_segment_change": null,
+        "signal_cooldown_ms": null,
+        "max_active_candidates": 1,
+        "max_requests_per_session": 200
+      },
+      "speech_end_ms": 40220.584215999996,
+      "llm_requests": 7,
+      "finished_at": "2026-11-07T19:11:48.622Z"
+    },
+    "summary": {
+      "llm_requests": 7,
+      "llm_errors": 0,
+      "latency_ms": [
+        1389.3283720000009,
+        1298.665235999999,
+        1512.1308790000003,
+        1159.4844790000025,
+        1495.246264999998,
+        1326.2189060000019,
+        1464.8224390000032
+      ],
+      "counts": {
+        "NONE": 7
+      },
+      "model_new": 0,
+      "gate_rejected_new": 0,
+      "new_during_speech": 0,
+      "new_after_speech": 0,
+      "withdrawn_by_model": 0,
+      "withdrawn_by_code": 0,
+      "active_at_end": 0,
+      "first_new_ms": null,
+      "hold": []
+    }
+  },
+  {
+    "meta": {
+      "asr_origin": "handwritten",
+      "not_real_asr": true,
+      "preliminary": true,
+      "note": "手書きの逐次 ASR による予備調査。§4.5a の関門の通過ではない。",
+      "scenario": "V4",
+      "take": null,
+      "model": "gemini-3.8-flash",
+      "thinking": "low",
+      "provider": "gemini_thin_spike",
+      "prompt_version": "initiative-ja-v2",
+      "persona": "exhibition_colleague",
+      "trigger": {
+        "min_new_stable_chars": 40,
+        "min_new_chars_at_boundary": null
+      },
+      "limits": {
+        "max_new_stable_chars_since_input": 60,
+        "max_result_age_ms": 8000,
+        "min_stability": 0.8,
+        "stable_prefix_revisions": 3,
+        "stable_prefix_min_age_ms": 300,
+        "candidate_expiry_ms": null,
+        "candidate_expires_on_segment_change": null,
+        "signal_cooldown_ms": null,
+        "max_active_candidates": 1,
+        "max_requests_per_session": 200
+      },
+      "speech_end_ms": 40217.767308999995,
+      "llm_requests": 7,
+      "finished_at": "2026-11-07T19:11:52.621Z"
+    },
+    "summary": {
+      "llm_requests": 7,
+      "llm_errors": 0,
+      "latency_ms": [
+        4506.880560000001,
+        4711.696412000003,
+        4368.246060999998,
+        3441.722858000001,
+        3066.7755499999985,
+        3523.2123210000063,
+        3965.022352
+      ],
+      "counts": {
+        "NONE": 4,
+        "NEW": 1,
+        "KEEP": 1,
+        "WITHDRAW": 1
+      },
+      "model_new": 1,
+      "gate_rejected_new": 0,
+      "new_during_speech": 1,
+      "new_after_speech": 0,
+      "withdrawn_by_model": 1,
+      "withdrawn_by_code": 0,
+      "active_at_end": 0,
+      "first_new_ms": 20572.415195,
+      "hold": [
+        {
+          "candidate_id": "c_0001",
+          "new_at_ms": 20572.415195,
+          "next_decision": "KEEP",
+          "next_at_ms": 24941.616091,
+          "added_delay_ms": 4369.2008959999985,
+          "cue_avoided": false
+        }
+      ]
+    }
+  }
+]

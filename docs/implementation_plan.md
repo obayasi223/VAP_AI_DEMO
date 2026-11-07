@@ -3,7 +3,7 @@
 - 正本の仕様: `Claude_Code_HRI2025_MaAI_Initiative_Breath_Spec_v2.md`（以下「仕様」）＋`Claude_Code_v2_追補_発話希望判断.md`（以下「追補」）。旧仕様は参考扱い。
 - 作成日: 2026-11-08。**この文書は計画であり、実装はまだ行っていない。**
 - 状態の表記: 【実測】この環境で動かして確認／【原文】一次資料を読んで確認／【未確認】まだ確認していない／【暫定】実測で見直す初期値。
-- 版: 第7版（第6版に Google STT と Gemini の実測を反映。第5版以降の再点検は未実施）。詳細は `docs/provider_matrix.md` と `tools/provider_probe/out/`。
+- 版: 第8版（第6版に Google STT と Gemini の実測を反映。第8版で Gemini TTS の代替をレーン C に追加。第5版以降の再点検は未実施）。詳細は `docs/provider_matrix.md` と `tools/provider_probe/out/`。
 - 進め方: 利用者の指示（2026-11-08）により、確認が不要な作業は並列で先行し、§9 の項目だけ確認を待つ。
 
 ---
@@ -126,7 +126,7 @@ Ryzen 7 7735U（16論理コア）、WSL2、メモリ 9GB、NVIDIA GPU なし、s
 
 全レーンは F の `emit()` と時刻源のインターフェースを通してイベントを出す。`emit` の本体は Node にあり、**Browser と Python は契約のメッセージで Node へ転送**する（受ける配線は J）。書き出しの実装は I1 が持つので、波1aでは F の仮実装を使う。
 
-**Browser↔Node の制御メッセージ（F の契約）:** 下りは gaze、signal、alignment（語時刻）。上りは描画時刻（rAF）、health。
+**Browser↔Node の制御メッセージ（F の契約）:** 下りは gaze、signal、alignment（語時刻）。上りは描画時刻（rAF）、health、時計差の推定（`clock.report`。`browser_rtt` の `clock.sync` の元）。
 
 **2種類の区間 ID:** `segment_id` は AI の発話開始で増えるターン単位の世代で、§4.1 の `ASR.reset` に使う。`asr_segment_id` は final 単位または `audio_frame` 範囲の ASR 区間で、`evidence_segment_ids` と撤回の後続区間 ID はこちらを指す（人が長く話しても根拠と解消を区別できる）。
 
@@ -139,6 +139,7 @@ Ryzen 7 7735U（16論理コア）、WSL2、メモリ 9GB、NVIDIA GPU なし、s
 | イベント | 追加の必須項目 | 発行 |
 |---|---|---|
 | `stt.interim/final` | `text`, `segment_id`, `asr_segment_id`, `transcript_revision`, `stability`, `audio_frame_end`, `provider`, `model_version` | C |
+| `stt.handover` | `provider`, `model_version`, `from_stream`, `to_stream`, `cause`, `h_frame`, `a_age_ms`, `overlap_ms`, `drain_ms`, `a_final_synthesized`, `first_b_emit_ms`, `stripped_chars`, `strip_method`, `b_first_lag_ms` | C |
 | `llm.request/response` | 用途（`prefetch/initiative/completion`）、入力、出力、`transcript_revision`, `sent_at`, `received_at`, `model_version`（リプレイの注入元） | D、G |
 | `vap.state` | §3.3 の項目 | B |
 | `prefetch.started/cancelled/ready` | `segment_id`, `transcript_revision`, `audio_playback_id`, `similarity`, `similarity_method`, `model_version` | D |
@@ -331,7 +332,7 @@ S の実モデル試験は C（Google プロバイダ）、Gemini プロバイ�
 | **R4 プロバイダ検証** | Google／ElevenLabs／Gemini の機能、制限、料金、モデル ID。実呼び出しはキー受領後 | 検証スクリプト |
 | **A ブラウザ音声** | §3.2 全部 | フェイクマイク往復、変換の周波数特性、ずれと欠損の測定 |
 | **B MaAI ワーカー** | §3.3、WAV リプレイ、未稼働の明示 | 2ch 投入、チャネルずれ、遅延時の同時破棄、停止通知 |
-| **C STT／TTS** | Google v2（ストリーム切替時の revision 順序の規則つき）、ElevenLabs、`segment_id`。開発用のローカル STT は、本番 STT が実測で動いたので**作らない**（E2E は Scripted プロバイダを使う） | 偽サーバーで切断・遅延・再接続、切替時の順序 |
+| **C STT／TTS** | Google v2（ストリーム切替時の revision 順序の規則つき）、ElevenLabs、`segment_id`。開発用のローカル STT は、本番 STT が実測で動いたので**作らない**（E2E は Scripted プロバイダを使う）。Gemini TTS を `TtsConnection` の代替として足す（第8版。ElevenLabs のキーが無くても実音声で試すため。既定は ElevenLabs の認証情報があれば ElevenLabs、無ければ Gemini。字単位の alignment が無ければ口の同期は推定値で、推定と明記する。利用可否は【未確認】） | 偽サーバーで切断・遅延・再接続、切替時の順序。Gemini TTS は実 API で利用可否と初音までの時間を確認 |
 | **D 応答と音声** | Gemini、ResponsePrefetch、SpeechGenerator、類似度、推定器 | 取消の連鎖、世代違いの棄却、`is_ready` |
 | **E 制御** | E1: TurnManager、準備の判断、視線、鮮度切れ、招待の語句検出／E2a: 候補の状態と採番／E2: 合図のゲートと遷移、吸気中の発話保留、波3の暫定の出口／E3: 発話開始の交渉、`DEFERRED` の出口、候補と応答の選択、条件切替と WoZ の入力、`priority` の規則 | **Appendix A の分岐ごとの表形式試験**、状態遷移の全経路 |
 | **G 発話希望** | §4.5 | 古い応答、`evidence_span` 不在、`NONE` の多さ、実行方式 |
@@ -347,6 +348,7 @@ S の実モデル試験は C（Google プロバイダ）、Gemini プロバイ�
 波1a Phase 1  : A B C D                               （4本）＋ S（並行、軽量）
 波1b Phase 1  : E1 I1 H1 → J（配線）                    → 関門G1 ★5分対話
    着手条件   : S の LLM 層の反例が実モデルを通過（§4.5a）
+   現状       : 手書き ASR の予備実行のみ（C1〜C4、C6 が想定どおり、各 n=1、C5 は未実行）。実音声と実 ASR と研究者の評価は未実施で、この条件は未通過。11-08 夜の自動実行では利用者の収録を待てないため暫定的に実装を進める。G2 の判定はこれで緩めない
 波2 Phase 2   : G（S から移管） I2 E2a → J（接続）       → 関門G2
 波3 Phase 3   : H2 E2 → J（接続）                       → 関門G3
 波4 Phase 4   : E3 I3 → J（WoZ、注入）                  → 関門G4

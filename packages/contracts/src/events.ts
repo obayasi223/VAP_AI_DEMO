@@ -46,7 +46,7 @@ import {
   Verified,
   WallClock,
 } from './common';
-import { GazeDecisionPayload, TurnAllowedPayload } from './turn';
+import { GazeDecisionPayload, PrepareTrigger, TurnAllowedPayload } from './turn';
 import { Vap1chState, Vap2chState } from './vap';
 
 export const EVENT_SCHEMA_VERSION = 1 as const;
@@ -118,6 +118,36 @@ const SttShape = {
 export const SttInterimEvent = eventSchema('stt.interim', SttShape);
 export const SttFinalEvent = eventSchema('stt.final', SttShape);
 
+/**
+ * ストリーム切替の1回の記録（計画 §8）。provider.status は健全性だけを伝え、測定値はここに残す。
+ * 切替の完了（B の最初の出力）か、次の切替か、セッションの終わりのうち早い時に出る。
+ */
+export const SttHandoverEvent = eventSchema('stt.handover', {
+  provider: NonEmptyString,
+  model_version: ModelVersion,
+  from_stream: NonEmptyString,
+  to_stream: NonEmptyString,
+  /** silence と deadline は計画どおりの切替、active_failed は A の異常終了での繰り上げ。 */
+  cause: z.enum(['silence', 'deadline', 'active_failed']),
+  /** 切替点。これより前を A、後を B から採る。 */
+  h_frame: AudioFrameIndex,
+  /** A の経過時間。 */
+  a_age_ms: NonNegativeMs,
+  /** B へ音声を送っていた長さ。 */
+  overlap_ms: NonNegativeMs,
+  /** half-close から A が閉じるまで。 */
+  drain_ms: Maybe(NonNegativeMs),
+  /** A の final が来ず、最後の interim を final に昇格したら true。 */
+  a_final_synthesized: z.boolean(),
+  /** half-close から B の最初の出力まで。出力の止まった時間で、話者の無音を含みうる。 */
+  first_b_emit_ms: Maybe(NonNegativeMs),
+  /** B の先頭から取り除いた重複の文字数。 */
+  stripped_chars: Maybe(NonNegativeInt),
+  strip_method: Maybe(NonEmptyString),
+  /** B の offset と B へ送った音声量の差。offset の基準の確認用。 */
+  b_first_lag_ms: Maybe(z.number()),
+});
+
 // ---- LLM -------------------------------------------------------------------
 
 /** リプレイの注入元。response は request_id で request の入力へ結ぶ。 */
@@ -138,6 +168,11 @@ export const LlmResponseEvent = eventSchema('llm.response', {
   sent_at: MonotonicMs,
   received_at: MonotonicMs,
   model_version: ModelVersion,
+  /**
+   * 思考を除く最初の本文の断片を受けた時刻。出力までの遅延の元（received_at は最後の受信）。
+   * 本文が1文字も届かなかったときと、古いログには項目がない。
+   */
+  first_text_at: MonotonicMs.optional(),
 });
 
 // ---- VAP -------------------------------------------------------------------
@@ -158,10 +193,18 @@ const PrefetchShape = {
   similarity_method: NonEmptyString,
   model_version: ModelVersion,
 };
-export const PrefetchStartedEvent = eventSchema('prefetch.started', PrefetchShape);
+export const PrefetchStartedEvent = eventSchema('prefetch.started', {
+  ...PrefetchShape,
+  /** TurnDecision.prepare の trigger をそのまま残す。 */
+  trigger: PrepareTrigger.optional(),
+});
 export const PrefetchCancelledEvent = eventSchema('prefetch.cancelled', {
   ...PrefetchShape,
   cancel_reason: NonEmptyString,
+  /** 取消の時点で保持していて棄てた TTS の chunk 数。取消の後に届いて棄てた分は数えない（発行の後に届くため）。 */
+  discarded_chunks: NonNegativeInt.optional(),
+  /** 棄てた chunk の合計サンプル数。単位は TTS の PCM のレート。 */
+  discarded_samples: NonNegativeInt.optional(),
 });
 export const PrefetchReadyEvent = eventSchema('prefetch.ready', PrefetchShape);
 
@@ -387,6 +430,11 @@ export const AudioHealthEvent = z.discriminatedUnion('reporter', [
     system_ch_source: SystemChannelSource,
     audio_context_state: AudioContextStateName,
     visibility: VisibilityName,
+    // 定義は browser_rpc.ts の AudioReport。
+    reconnects: NonNegativeInt.optional(),
+    orphan_pcm_frames: NonNegativeInt.optional(),
+    pcm_seq_gaps: NonNegativeInt.optional(),
+    render_lag_ms: z.number().optional(),
   }),
   eventSchema('audio.health', {
     reporter: z.literal('worker'),
@@ -442,6 +490,7 @@ export const ClockSyncEvent = eventSchema('clock.sync', {
 export const ResearchEvent = z.discriminatedUnion('event', [
   SttInterimEvent,
   SttFinalEvent,
+  SttHandoverEvent,
   LlmRequestEvent,
   LlmResponseEvent,
   VapStateEvent,
@@ -473,6 +522,7 @@ export type ResearchEventName = ResearchEvent['event'];
 export const EVENT_NAMES = [
   'stt.interim',
   'stt.final',
+  'stt.handover',
   'llm.request',
   'llm.response',
   'vap.state',

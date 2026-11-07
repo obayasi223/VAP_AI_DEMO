@@ -1,0 +1,18 @@
+{
+  "asr_origin": "handwritten",
+  "not_real_asr": true,
+  "note": "台本から機械的に作った逐次 ASR。実音声でも実 ASR でもない。§4.5a の関門の素材にならない。",
+  "scenario": "H2",
+  "generator": {
+    "chars_per_second": 6,
+    "sentence_pause_ms": 350,
+    "paragraph_pause_ms": 1100,
+    "lag_ms": 300,
+    "revision_interval_ms": 240,
+    "flash_interval_ms": 1800,
+    "start_delay_ms": 500
+  },
+  "inject": null,
+  "events": 137,
+  "duration_ms": 37501.6666666667
+}

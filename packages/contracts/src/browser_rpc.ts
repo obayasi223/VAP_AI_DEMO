@@ -35,6 +35,11 @@ export const TrackSettings = z.strictObject({
   sampleRate: Maybe(z.number().positive()),
   channelCount: Maybe(z.number().int().positive()),
   deviceId: Maybe(z.string()),
+  /**
+   * マイク側の遅延（MediaTrackSettings.latency）。単位は秒で、ブラウザが返したまま。
+   * 古い送信側は項目ごと持たない。ブラウザが返さないときは null と理由。
+   */
+  latency: Maybe(z.number().min(0)).optional(),
 });
 export type TrackSettings = z.infer<typeof TrackSettings>;
 
@@ -83,6 +88,25 @@ export const ClockPing = z.strictObject({
 });
 export type ClockPing = z.infer<typeof ClockPing>;
 
+/**
+ * ブラウザが持つ時計差の推定（clock.ping／pong の結果）。browser_rtt の clock.sync の元。
+ * Node は clock.pong を送るだけで往復の時刻を知らないので、推定値はブラウザから受ける。
+ *
+ * 式は clock.ts の ClockSample と同じ: サーバー時刻 = クライアント時刻 + offset_ms。
+ */
+export const ClockReport = z.strictObject({
+  type: z.literal('clock.report'),
+  offset_ms: z.number(),
+  rtt_ms: NonNegativeMs,
+  /** 往復が対称と仮定したときの最大誤差。RTT の半分。 */
+  uncertainty_ms: NonNegativeMs,
+  /** 推定に使った窓の標本数。 */
+  samples: z.number().int().min(1),
+  /** この報告を送ったクライアント時刻。 */
+  client_t_ms: NonNegativeMs,
+});
+export type ClockReport = z.infer<typeof ClockReport>;
+
 /** 最初の PCM を出力へ書き込んだ。§3.6 の t_speech_start の元。 */
 export const PlaybackStarted = z.strictObject({
   type: z.literal('playback.started'),
@@ -111,6 +135,13 @@ export const PlaybackPosition = z.strictObject({
 });
 export type PlaybackPosition = z.infer<typeof PlaybackPosition>;
 
+/**
+ * reason の定義:
+ *  - completed: end_of_stream まで書き込んだ。
+ *  - stopped: playback.stop で止めた。
+ *  - discarded_before_start: 1サンプルも書き込む前に棄てた。
+ *  - error: 異常で途切れた。WS の切断で途切れた再生もこれ（stopped にしない）。
+ */
 export const PlaybackEnded = z.strictObject({
   type: z.literal('playback.ended'),
   audio_playback_id: AudioPlaybackId,
@@ -133,15 +164,25 @@ export const AudioReport = z.strictObject({
   type: z.literal('audio.report'),
   client_t_ms: NonNegativeMs,
   audio_frame: AudioFrameIndex,
+  /** 失った上り音声の枠の数。単位は 20ms 枠（client.hello の frame_samples）で、サンプル数ではない。累積。 */
   frames_lost: NonNegativeInt,
   underrun_count: NonNegativeInt,
   underrun_total_ms: NonNegativeMs,
+  /** 古い世代で棄てた PCM 枠の数。累積。PCM 枠のみで、playback.begin と playback.stop は含まない。 */
   stale_pcm_frames_dropped: NonNegativeInt,
   latency: AudioLatency,
   track_settings: TrackSettings,
   system_ch_source: SystemChannelSource,
   audio_context_state: AudioContextStateName,
   visibility: VisibilityName,
+  /** WS を張り直した回数。累積。 */
+  reconnects: NonNegativeInt.optional(),
+  /** 対応する playback.begin がなく棄てた PCM 枠の数。累積。stale_pcm_frames_dropped とは別に数える。 */
+  orphan_pcm_frames: NonNegativeInt.optional(),
+  /** 同じ再生の中で seq が飛んだ回数。累積。枠の数ではない。 */
+  pcm_seq_gaps: NonNegativeInt.optional(),
+  /** 実時間に対するレンダーの遅れ。増え続けるならコールバックが抜けている。 */
+  render_lag_ms: z.number().optional(),
 });
 export type AudioReport = z.infer<typeof AudioReport>;
 
@@ -172,6 +213,7 @@ export type GazeReport = z.infer<typeof GazeReport>;
 export const BrowserToNode = z.discriminatedUnion('type', [
   ClientHello,
   ClockPing,
+  ClockReport,
   PlaybackStarted,
   PlaybackPosition,
   PlaybackEnded,
@@ -265,12 +307,20 @@ export const AlignmentItem = z.strictObject({
 });
 export type AlignmentItem = z.infer<typeof AlignmentItem>;
 
+/**
+ * 語時刻の由来。estimated_time_proportional は文字数と音声の長さからの推定で、実測の時刻ではない。
+ * 項目がないときはプロバイダが返した時刻（provider_char と同じ）。
+ */
+export const PlaybackAlignmentSource = z.enum(['provider_char', 'estimated_time_proportional']);
+export type PlaybackAlignmentSource = z.infer<typeof PlaybackAlignmentSource>;
+
 /** 口形と発話済みの計算に使う語時刻。TTS から届くたびに差分で送る。 */
 export const PlaybackAlignment = z.strictObject({
   type: z.literal('playback.alignment'),
   audio_playback_id: AudioPlaybackId,
   generation: Generation,
   items: z.array(AlignmentItem),
+  source: PlaybackAlignmentSource.optional(),
 });
 export type PlaybackAlignment = z.infer<typeof PlaybackAlignment>;
 

@@ -2,7 +2,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BINARY_FIXTURES, INVALID_FIXTURES, VALID_FIXTURES } from '../src/fixtures';
+import { BINARY_FIXTURES, INVALID_FIXTURES, OPTIONAL_FIXTURES, VALID_FIXTURES } from '../src/fixtures';
 import { SCHEMAS, toJsonSchema, type SchemaName } from '../src/schema_registry';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -18,6 +18,7 @@ for (const name of Object.keys(SCHEMAS) as SchemaName[]) {
 writeJson(join(root, 'fixtures', 'contract_fixtures.json'), {
   note: 'Generated from src/fixtures.ts. Synthetic values for schema checks, not measurements.',
   valid: VALID_FIXTURES,
+  optional: OPTIONAL_FIXTURES,
   invalid: INVALID_FIXTURES,
   binary: BINARY_FIXTURES,
 });

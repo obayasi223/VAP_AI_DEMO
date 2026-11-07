@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "types": ["node"], "allowJs": true, "checkJs": false, "allowImportingTsExtensions": true },
+  "include": ["./**/*.ts", "../../apps/orchestrator/src/cognition/initiative/**/*.ts"]
+}

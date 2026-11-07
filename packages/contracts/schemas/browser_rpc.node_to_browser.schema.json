@@ -242,6 +242,13 @@
             ],
             "additionalProperties": false
           }
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "provider_char",
+            "estimated_time_proportional"
+          ]
         }
       },
       "required": [

@@ -8,6 +8,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@google-cloud/speech": "8.2.1",
     "@llm-vap/contracts": "0.1.0",
     "ws": "8.22.1"
   },

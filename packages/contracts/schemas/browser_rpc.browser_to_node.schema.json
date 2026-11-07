@@ -259,6 +259,40 @@
                   "additionalProperties": false
                 }
               ]
+            },
+            "latency": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
             }
           },
           "required": [
@@ -455,6 +489,44 @@
       "required": [
         "type",
         "seq",
+        "client_t_ms"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "clock.report"
+        },
+        "offset_ms": {
+          "type": "number"
+        },
+        "rtt_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "uncertainty_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "client_t_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "offset_ms",
+        "rtt_ms",
+        "uncertainty_ms",
+        "samples",
         "client_t_ms"
       ],
       "additionalProperties": false
@@ -1100,6 +1172,40 @@
                   "additionalProperties": false
                 }
               ]
+            },
+            "latency": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
             }
           },
           "required": [
@@ -1134,6 +1240,24 @@
             "visible",
             "hidden"
           ]
+        },
+        "reconnects": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "orphan_pcm_frames": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "pcm_seq_gaps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "render_lag_ms": {
+          "type": "number"
         }
       },
       "required": [

@@ -19,7 +19,7 @@ import {
   type EventOf,
   type SchemaName,
 } from '../src/index';
-import { BINARY_FIXTURES, INVALID_FIXTURES, VALID_FIXTURES } from '../src/fixtures';
+import { BINARY_FIXTURES, INVALID_FIXTURES, OPTIONAL_FIXTURES, VALID_FIXTURES } from '../src/fixtures';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkg = join(here, '..');
@@ -39,7 +39,7 @@ describe('valid fixtures', () => {
 });
 
 describe('required fields', () => {
-  // 省略可能な項目は作らない規則なので、最上位の項目はどれを消しても不合格になる。
+  // 省略可能な項目は OPTIONAL_FIXTURES へ分けるので、ここの最上位の項目はどれを消しても不合格になる。
   const removals = validCases.flatMap((c) =>
     Object.keys(c.value as object).map((key) => ({ ...c, key })),
   );
@@ -51,6 +51,22 @@ describe('required fields', () => {
 
   it('checks a meaningful number of removals', () => {
     expect(removals.length).toBeGreaterThan(400);
+  });
+});
+
+describe('optional fields added for backward compatibility', () => {
+  it.each(OPTIONAL_FIXTURES)('$schema / $name passes with them', ({ schema, value }) => {
+    const parsed = SCHEMAS[schema].parse(value);
+    expect(SCHEMAS[schema].parse(JSON.parse(JSON.stringify(parsed)))).toEqual(value);
+  });
+
+  it.each(OPTIONAL_FIXTURES)('$schema / $name passes without them', ({ schema, value, optional_keys }) => {
+    const copy = { ...(value as Record<string, unknown>) };
+    for (const key of optional_keys) {
+      expect(copy, key).toHaveProperty(key);
+      delete copy[key];
+    }
+    expect(SCHEMAS[schema].safeParse(copy).success).toBe(true);
   });
 });
 
@@ -72,6 +88,7 @@ describe('plan §3.5 table', () => {
   const table: Record<string, string[]> = {
     'stt.interim': ['text', 'stable_text', 'unstable_text', 'parts', 'segment_id', 'asr_segment_id', 'transcript_revision', 'stability', 'stability_source', 'audio_frame_end', 'provider', 'model_version'],
     'stt.final': ['text', 'stable_text', 'unstable_text', 'parts', 'segment_id', 'asr_segment_id', 'transcript_revision', 'stability', 'stability_source', 'audio_frame_end', 'provider', 'model_version'],
+    'stt.handover': ['provider', 'from_stream', 'to_stream', 'cause', 'h_frame', 'a_age_ms', 'overlap_ms', 'drain_ms', 'a_final_synthesized', 'first_b_emit_ms'],
     'llm.request': ['purpose', 'input', 'transcript_revision', 'sent_at', 'model_version'],
     'llm.response': ['purpose', 'output', 'transcript_revision', 'sent_at', 'received_at', 'model_version'],
     'vap.state/2ch': ['t', 'audio_frame', 'p_now', 'p_future', 'user_speaking', 'system_speaking', 'model_variant', 'channel_layout', 'raw'],
@@ -148,6 +165,7 @@ describe('generated artifacts are current', () => {
   it('fixtures/contract_fixtures.json', () => {
     const onDisk = readJson(join(pkg, 'fixtures', 'contract_fixtures.json')) as Record<string, unknown>;
     expect(onDisk.valid).toEqual(JSON.parse(JSON.stringify(VALID_FIXTURES)));
+    expect(onDisk.optional).toEqual(JSON.parse(JSON.stringify(OPTIONAL_FIXTURES)));
     expect(onDisk.invalid).toEqual(JSON.parse(JSON.stringify(INVALID_FIXTURES)));
     expect(onDisk.binary).toEqual(JSON.parse(JSON.stringify(BINARY_FIXTURES)));
   });

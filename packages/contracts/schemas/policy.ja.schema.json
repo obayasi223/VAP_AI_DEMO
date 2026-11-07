@@ -467,6 +467,33 @@
               "type": "null"
             }
           ]
+        },
+        "trigger": {
+          "type": "object",
+          "properties": {
+            "min_new_stable_chars": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "min_new_chars_at_boundary": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "min_new_stable_chars",
+            "min_new_chars_at_boundary"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

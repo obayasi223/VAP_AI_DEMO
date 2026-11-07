@@ -7,6 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./binary": "./src/binary.ts",
+    "./browser_rpc": "./src/browser_rpc.ts",
+    "./common": "./src/common.ts",
     "./clock": "./src/clock.ts",
     "./schemas/*": "./schemas/*"
   },

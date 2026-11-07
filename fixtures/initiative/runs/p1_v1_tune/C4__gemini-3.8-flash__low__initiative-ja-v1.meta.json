@@ -1,0 +1,32 @@
+{
+  "asr_origin": "handwritten",
+  "not_real_asr": true,
+  "preliminary": true,
+  "note": "手書きの逐次 ASR による予備調査。§4.5a の関門の通過ではない。",
+  "scenario": "C4",
+  "take": null,
+  "model": "gemini-3.8-flash",
+  "thinking": "low",
+  "provider": "gemini_thin_spike",
+  "prompt_version": "initiative-ja-v1",
+  "persona": "exhibition_colleague",
+  "trigger": {
+    "min_new_stable_chars": 40,
+    "min_new_chars_at_boundary": null
+  },
+  "limits": {
+    "max_new_stable_chars_since_input": 60,
+    "max_result_age_ms": 6000,
+    "min_stability": 0.8,
+    "stable_prefix_revisions": 3,
+    "stable_prefix_min_age_ms": 300,
+    "candidate_expiry_ms": null,
+    "candidate_expires_on_segment_change": null,
+    "signal_cooldown_ms": null,
+    "max_active_candidates": 1,
+    "max_requests_per_session": 200
+  },
+  "speech_end_ms": 36676.936856,
+  "llm_requests": 6,
+  "finished_at": "2026-11-07T19:05:51.011Z"
+}

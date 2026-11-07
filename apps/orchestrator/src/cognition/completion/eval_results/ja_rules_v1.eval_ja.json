@@ -1,0 +1,368 @@
+{
+ "estimator": "ja_rules_v1",
+ "set": "eval_ja",
+ "summary": {
+  "threshold": 0.3,
+  "n": 55,
+  "null_count": 0,
+  "categories": {
+   "continues": {
+    "n": 15,
+    "median": 0.1,
+    "fire_rate": 0
+   },
+   "complete_with_continuation": {
+    "n": 15,
+    "median": 0.35,
+    "fire_rate": 1
+   },
+   "question_end": {
+    "n": 15,
+    "median": 0.9,
+    "fire_rate": 1
+   },
+   "statement_end": {
+    "n": 10,
+    "median": 0.85,
+    "fire_rate": 1
+   }
+  },
+  "auc_question_vs_continues": 1,
+  "auc_statement_vs_continues": 1,
+  "auc_cwc_vs_continues": 1,
+  "auc_question_vs_cwc": 0.9377777777777778
+ },
+ "us_per_call": 3.14,
+ "rows": [
+  {
+   "id": "con_01",
+   "category": "continues",
+   "p": 0.15,
+   "cue": "connective_kedo"
+  },
+  {
+   "id": "con_02",
+   "category": "continues",
+   "p": 0.05,
+   "cue": "connective"
+  },
+  {
+   "id": "con_03",
+   "category": "continues",
+   "p": 0.05,
+   "cue": "connective"
+  },
+  {
+   "id": "con_04",
+   "category": "continues",
+   "p": 0.05,
+   "cue": "connective"
+  },
+  {
+   "id": "con_05",
+   "category": "continues",
+   "p": 0.1,
+   "cue": "te_form"
+  },
+  {
+   "id": "con_06",
+   "category": "continues",
+   "p": 0.1,
+   "cue": "particle"
+  },
+  {
+   "id": "con_07",
+   "category": "continues",
+   "p": 0.1,
+   "cue": "te_form"
+  },
+  {
+   "id": "con_08",
+   "category": "continues",
+   "p": 0.1,
+   "cue": "particle"
+  },
+  {
+   "id": "con_09",
+   "category": "continues",
+   "p": 0.1,
+   "cue": "particle"
+  },
+  {
+   "id": "con_10",
+   "category": "continues",
+   "p": 0.15,
+   "cue": "connective_kedo"
+  },
+  {
+   "id": "con_11",
+   "category": "continues",
+   "p": 0.05,
+   "cue": "discourse_adverb"
+  },
+  {
+   "id": "con_12",
+   "category": "continues",
+   "p": 0.1,
+   "cue": "particle"
+  },
+  {
+   "id": "con_13",
+   "category": "continues",
+   "p": 0.05,
+   "cue": "connective"
+  },
+  {
+   "id": "con_14",
+   "category": "continues",
+   "p": 0.05,
+   "cue": "discourse_adverb"
+  },
+  {
+   "id": "con_15",
+   "category": "continues",
+   "p": 0.15,
+   "cue": "connective_kedo"
+  },
+  {
+   "id": "cwc_01",
+   "category": "complete_with_continuation",
+   "p": 0.35,
+   "cue": "announcement"
+  },
+  {
+   "id": "cwc_02",
+   "category": "complete_with_continuation",
+   "p": 0.35,
+   "cue": "enumeration"
+  },
+  {
+   "id": "cwc_03",
+   "category": "complete_with_continuation",
+   "p": 0.35,
+   "cue": "story_preface"
+  },
+  {
+   "id": "cwc_04",
+   "category": "complete_with_continuation",
+   "p": 0.35,
+   "cue": "story_preface"
+  },
+  {
+   "id": "cwc_05",
+   "category": "complete_with_continuation",
+   "p": 0.75,
+   "cue": "polite_predicate+answers_question"
+  },
+  {
+   "id": "cwc_06",
+   "category": "complete_with_continuation",
+   "p": 0.35,
+   "cue": "enumeration"
+  },
+  {
+   "id": "cwc_07",
+   "category": "complete_with_continuation",
+   "p": 0.35,
+   "cue": "announcement"
+  },
+  {
+   "id": "cwc_08",
+   "category": "complete_with_continuation",
+   "p": 0.35,
+   "cue": "enumeration"
+  },
+  {
+   "id": "cwc_09",
+   "category": "complete_with_continuation",
+   "p": 0.35,
+   "cue": "announcement"
+  },
+  {
+   "id": "cwc_10",
+   "category": "complete_with_continuation",
+   "p": 0.35,
+   "cue": "announcement"
+  },
+  {
+   "id": "cwc_11",
+   "category": "complete_with_continuation",
+   "p": 0.75,
+   "cue": "polite_predicate+answers_question"
+  },
+  {
+   "id": "cwc_12",
+   "category": "complete_with_continuation",
+   "p": 0.65,
+   "cue": "polite_predicate"
+  },
+  {
+   "id": "cwc_13",
+   "category": "complete_with_continuation",
+   "p": 0.65,
+   "cue": "polite_predicate"
+  },
+  {
+   "id": "cwc_14",
+   "category": "complete_with_continuation",
+   "p": 0.75,
+   "cue": "final_particle"
+  },
+  {
+   "id": "cwc_15",
+   "category": "complete_with_continuation",
+   "p": 0.75,
+   "cue": "polite_predicate+answers_question"
+  },
+  {
+   "id": "qst_01",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_02",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_03",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_04",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_05",
+   "category": "question_end",
+   "p": 0.7,
+   "cue": "plain_predicate+wh"
+  },
+  {
+   "id": "qst_06",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_07",
+   "category": "question_end",
+   "p": 0.5,
+   "cue": "plain_predicate"
+  },
+  {
+   "id": "qst_08",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_09",
+   "category": "question_end",
+   "p": 0.7,
+   "cue": "plain_question_no"
+  },
+  {
+   "id": "qst_10",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_11",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_12",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_13",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_14",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "qst_15",
+   "category": "question_end",
+   "p": 0.9,
+   "cue": "question"
+  },
+  {
+   "id": "stm_01",
+   "category": "statement_end",
+   "p": 0.9,
+   "cue": "closing"
+  },
+  {
+   "id": "stm_02",
+   "category": "statement_end",
+   "p": 0.85,
+   "cue": "acknowledge"
+  },
+  {
+   "id": "stm_03",
+   "category": "statement_end",
+   "p": 0.65,
+   "cue": "polite_predicate"
+  },
+  {
+   "id": "stm_04",
+   "category": "statement_end",
+   "p": 0.9,
+   "cue": "closing"
+  },
+  {
+   "id": "stm_05",
+   "category": "statement_end",
+   "p": 0.9,
+   "cue": "closing"
+  },
+  {
+   "id": "stm_06",
+   "category": "statement_end",
+   "p": 0.75,
+   "cue": "polite_predicate+answers_question"
+  },
+  {
+   "id": "stm_07",
+   "category": "statement_end",
+   "p": 0.75,
+   "cue": "polite_predicate+answers_question"
+  },
+  {
+   "id": "stm_08",
+   "category": "statement_end",
+   "p": 0.9,
+   "cue": "closing"
+  },
+  {
+   "id": "stm_09",
+   "category": "statement_end",
+   "p": 0.85,
+   "cue": "acknowledge"
+  },
+  {
+   "id": "stm_10",
+   "category": "statement_end",
+   "p": 0.65,
+   "cue": "polite_predicate"
+  }
+ ]
+}

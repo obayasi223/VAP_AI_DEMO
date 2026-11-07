@@ -10,7 +10,12 @@
 import { z } from 'zod';
 import { ChannelLayout, NonEmptyString, NonNegativeMs, Probability } from './common';
 
-/** Appendix A の定数の形。hri2025 では値もリテラルで固定する。 */
+/**
+ * Appendix A の定数の形。hri2025 では値もリテラルで固定する。
+ *
+ * ja では TURNGPT_PREPARE_THRESHOLD と SIMILARITY_PREPARE_THRESHOLD を読まない。正本は completion.thresholds と
+ * similarity.threshold で、prepareThresholds() から読む（理由は docs/known_gaps.md）。項目は後方互換のために残す。
+ */
 const TurnConstantsShape = {
   TURNGPT_PREPARE_THRESHOLD: Probability,
   ASR_PREPARE_TIMEOUT_MS: NonNegativeMs,
@@ -92,6 +97,18 @@ export type PolicyHri2025 = z.infer<typeof PolicyHri2025>;
 /** null は未校正。使う側は null を見たら黙って別の値へ置き換えず、未校正として扱う。 */
 const Uncalibrated = (schema: z.ZodType<number>) => schema.nullable();
 
+/**
+ * InitiativeMonitor の起動の条件（計画 §4.5）。正規化後の新規の安定文字数で数える。
+ * 値は【未検証の暫定値】で、実測の根拠はまだない。
+ */
+export const InitiativeTrigger = z.strictObject({
+  /** 新規の安定文字数がこれ以上で起動。 */
+  min_new_stable_chars: z.number().int().min(1),
+  /** 文の区切りまたは final があるとき、これ以上で起動。null で文の区切りを見ない（final は常に見る）。 */
+  min_new_chars_at_boundary: z.number().int().min(1).nullable(),
+});
+export type InitiativeTrigger = z.infer<typeof InitiativeTrigger>;
+
 export const PolicyJa = z.strictObject({
   $schema: z.string().optional(),
   policy_id: z.literal('ja'),
@@ -150,6 +167,7 @@ export const PolicyJa = z.strictObject({
     signal_cooldown_ms: Uncalibrated(NonNegativeMs),
     max_active_candidates: z.number().int().min(1),
     max_requests_per_session: Uncalibrated(z.number().int().min(1)),
+    trigger: InitiativeTrigger.optional(),
   }),
   speech: z.strictObject({
     /** is_ready の定義。最初の PCM がこの長さバッファされた状態（計画 §4.3）。 */
@@ -168,4 +186,31 @@ export function turnConstants(policy: Policy): TurnConstants {
 
 export function turnInterpretation(policy: Policy): TurnInterpretation {
   return policy.policy_id === 'hri2025' ? policy.interpretation : policy.turn.interpretation;
+}
+
+/** 準備の2つの閾値。null は未校正または推定器なしで、黙って別の値へ置き換えない。 */
+export interface PrepareThresholds {
+  completion_prepare_threshold: number | null;
+  similarity_prepare_threshold: number | null;
+}
+
+/**
+ * 準備の閾値の唯一の読み口。TurnManager は turnConstants() の同名の項目を読まない。
+ *  - hri2025: Appendix A の constants（原著の値を再現するため）。
+ *  - ja: 使う推定器の completion.thresholds と similarity.threshold。推定器と類似度の手法が原著と違い、
+ *    尺度が合わないので、turn.constants の値は使わない（計画 §4.1、§4.4）。
+ */
+export function prepareThresholds(policy: Policy): PrepareThresholds {
+  if (policy.policy_id === 'hri2025') {
+    return {
+      completion_prepare_threshold: policy.constants.TURNGPT_PREPARE_THRESHOLD,
+      similarity_prepare_threshold: policy.constants.SIMILARITY_PREPARE_THRESHOLD,
+    };
+  }
+  const { estimator, thresholds } = policy.completion;
+  return {
+    completion_prepare_threshold:
+      estimator === null ? null : (thresholds[estimator]?.prepare_threshold ?? null),
+    similarity_prepare_threshold: policy.similarity.threshold,
+  };
 }

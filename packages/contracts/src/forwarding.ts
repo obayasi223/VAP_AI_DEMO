@@ -4,7 +4,7 @@
  *
  * EVENT_ROUTES はイベントごとの発行場所の一覧。別プロセスの時刻は補正して EmitOptions.at で渡す。
  */
-import type { AudioReport, SignalReport, SignalParameters } from './browser_rpc';
+import type { AudioReport, ClockReport, SignalReport, SignalParameters } from './browser_rpc';
 import type { EmitOptions, EventDraft } from './emit';
 import type { ResearchEventName, TimeBasis } from './events';
 import type { MaaiVapStateMessage, MaaiWorkerStatus } from './maai_rpc';
@@ -18,6 +18,7 @@ export type EventRoute =
 export const EVENT_ROUTES = {
   'stt.interim': { origin: 'node' },
   'stt.final': { origin: 'node' },
+  'stt.handover': { origin: 'node' },
   'llm.request': { origin: 'node' },
   'llm.response': { origin: 'node' },
   'vap.state': { origin: 'worker', via: ['VAP_STATE'] },
@@ -67,6 +68,22 @@ export function draftFromAudioReport(report: AudioReport): EventDraft {
     system_ch_source: report.system_ch_source,
     audio_context_state: report.audio_context_state,
     visibility: report.visibility,
+    // 古い送信側は項目を持たない。undefined を載せない（スキーマは strict で、ログの JSON にも残さない）。
+    ...(report.reconnects === undefined ? {} : { reconnects: report.reconnects }),
+    ...(report.orphan_pcm_frames === undefined ? {} : { orphan_pcm_frames: report.orphan_pcm_frames }),
+    ...(report.pcm_seq_gaps === undefined ? {} : { pcm_seq_gaps: report.pcm_seq_gaps }),
+    ...(report.render_lag_ms === undefined ? {} : { render_lag_ms: report.render_lag_ms }),
+  };
+}
+
+/** clock.report を browser_rtt の clock.sync へ。 */
+export function draftFromClockReport(report: ClockReport): EventDraft {
+  return {
+    event: 'clock.sync',
+    source: 'browser_rtt',
+    offset_ms: report.offset_ms,
+    error_ms: report.uncertainty_ms,
+    rtt_ms: present(report.rtt_ms),
   };
 }
 

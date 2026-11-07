@@ -4,6 +4,7 @@
  *
  * 時刻（sent_at など）は orchestrator の t_monotonic_ms。実装は TimeSource を受け取って記録する。
  */
+import type { PlaybackEnded, PlaybackPosition, PlaybackStarted } from './browser_rpc';
 import type {
   JsonValue,
   LlmPurpose,
@@ -96,13 +97,24 @@ export interface TtsConnectionConfig {
 }
 
 /**
- * 文字単位の時刻。時刻はチャンク内の相対値（provider_matrix §1 の #9）。
+ * 文字単位の時刻。TtsChunk で渡す時刻はチャンク内の相対値。
+ * 実物（ElevenLabs）は flush をまたぐ chunk で文脈の累積の時刻で届くので（実測、provider_matrix §10.1）、
+ * プロバイダの実装（C）が chunk 相対へ直して渡す。資料の「チャンク相対」とは違う。
  * 3つの配列は同じ長さ。累積と語境界（Intl.Segmenter）は呼び出し側で作る（D）。
  */
 export interface TtsCharAlignment {
   chars: string[];
   char_start_ms: number[];
   char_duration_ms: number[];
+}
+
+/**
+ * 文字数と音声の長さからの推定の時刻（プロバイダが alignment を返さない場合）。実測ではない。
+ * TtsChunk.alignment へ入れないのは、alignment_char の精度として記録させないため。
+ * 時刻の基準は TtsCharAlignment と同じ chunk 相対。
+ */
+export interface TtsEstimatedAlignment extends TtsCharAlignment {
+  source: 'estimated_time_proportional';
 }
 
 export interface TtsChunk {
@@ -116,6 +128,8 @@ export interface TtsChunk {
   /** 実装が受け取った単位のまま。取れなければ null と理由。 */
   alignment: Maybe<TtsCharAlignment>;
   is_last: boolean;
+  /** alignment が null のときの推定。口形には使えるが、発話済みの精度は time_proportional のまま。 */
+  estimated_alignment?: TtsEstimatedAlignment;
 }
 
 /** 1つの発話音声。audio_playback_id と世代に対応する。 */
@@ -135,16 +149,64 @@ export interface TtsContext {
   cancel(reason: string): void;
 }
 
+export type TtsAlignmentSource =
+  /** プロバイダが返した文字単位の時刻。TtsChunk.alignment に入る。 */
+  | 'provider_char'
+  /** 文字数と音声の長さからの推定。TtsChunk.estimated_alignment に入る。 */
+  | 'estimated_time_proportional'
+  | 'unknown';
+
+/** プロバイダの能力の差。項目の根拠は実装の capabilities.ts（C）。 */
+export interface TtsCapabilities {
+  alignment_source: TtsAlignmentSource;
+  /** sendText の文字を送った順に生成へ足せるか。false なら flush か endInput の単位で1要求にまとめる。 */
+  incremental_input: boolean;
+  /** cancel のとき、プロバイダへ未送信のテキストを確実に捨てられるか。 */
+  cancel_discards_unsent_text: boolean;
+  /** cancel で生成中の音声を止める手段。 */
+  cancel_generation: 'context_close' | 'request_abort' | 'unknown';
+  /** cancel で生成中の音声が届かなくなるか。false なら届き続けるので、接続の層で棄てる。 */
+  cancel_stops_in_flight_audio: boolean;
+  /** 再生の途中で止めた発話を、同じ接続で続きから生成し直せるか。 */
+  resumes_after_stop: boolean;
+  /** 実 API で確かめた範囲。偽サーバーのみなら false。 */
+  verified_with_real_api: boolean;
+}
+
+/** 切断や要求の失敗で失った文脈。 */
+export interface TtsContextLoss {
+  context_id: string;
+  audio_playback_id: number;
+  generation: number;
+  reason: string;
+}
+
+/** プロバイダの失敗の種類。kind の値はプロバイダごとに違う（ElevenLabsFailureKind など）。 */
+export interface TtsFailure {
+  readonly kind: string;
+  readonly message: string;
+  /** 張り直しても直らない。 */
+  readonly fatal: boolean;
+  readonly http_status: number | null;
+  readonly provider_code: string | null;
+}
+
 /**
  * 1接続で複数の文脈を扱う（ElevenLabs multi-stream-input に対応、上限は 5）。
  * 接続を要求ごとに開く実装も、この形の裏に隠す。chunk はどの文脈のものも同じ購読に届く。
  */
 export interface TtsConnection {
   readonly max_contexts: number;
+  /** 持たない実装は能力が不明として扱う。 */
+  readonly capabilities?: TtsCapabilities;
   /** 上限を超えると例外。context_id は audio_playback_id と世代から作る。 */
   openContext(target: { audio_playback_id: number; generation: number }): TtsContext;
   onChunk(listener: (chunk: TtsChunk) => void): Unsubscribe;
   onStatus(listener: (status: ProviderStatusUpdate) => void): Unsubscribe;
+  /** 文脈を失った通知。続いて is_last の空の chunk が届く。 */
+  onContextLost?(listener: (lost: TtsContextLoss) => void): Unsubscribe;
+  /** 失敗ごとの通知。種類で分岐するためのもので、健全性は onStatus を見る。 */
+  onFailure?(listener: (failure: TtsFailure) => void): Unsubscribe;
   close(): Promise<void>;
 }
 
@@ -187,6 +249,8 @@ export interface LlmResult {
   model_version: string;
   sent_at: number;
   received_at: number;
+  /** 思考を除く最初の本文の断片を受けた時刻。本文がなければ項目がない。 */
+  first_text_at?: number;
   finish_reason: Maybe<string>;
   usage: LlmUsage;
 }
@@ -209,9 +273,21 @@ export interface TurnCompletionEstimate {
   estimator: string;
 }
 
+/** LLM を呼ぶ推定器が使う文脈。呼ばない推定器は無視してよい。 */
+export interface TurnCompletionEstimateContext {
+  /** 入力の revision。llm.request へ残す。省略すると 0。 */
+  transcript_revision?: number;
+  /** 入力が古くなったときに呼び出し側が中断する。 */
+  signal?: AbortSignal;
+}
+
 export interface TurnCompletionEstimator {
   readonly name: string;
-  estimate(history: readonly HistoryEntryRef[], partial: string): Promise<TurnCompletionEstimate>;
+  estimate(
+    history: readonly HistoryEntryRef[],
+    partial: string,
+    context?: TurnCompletionEstimateContext,
+  ): Promise<TurnCompletionEstimate>;
 }
 
 /** providers.ts が history.ts に依存しないための最小の形。HistoryEntry はこれを満たす。 */
@@ -237,6 +313,28 @@ export interface PreparedSpeech {
   generation: number;
 }
 
+export type SpeechInterruptSource = 'vap' | 'fallback' | 'woz';
+
+/** 割り込みの停止の指定。TurnDecision の interrupt_speech から渡す。 */
+export interface SpeechStopOptions {
+  stop_point: 'word_boundary' | 'immediate';
+  /** 語境界を待つ上限（policy の stop_boundary_max_ms）。 */
+  max_wait_ms: number;
+  decision_source: SpeechInterruptSource;
+  fade_ms?: number;
+}
+
+export type SpeechStartRefusal =
+  | 'unknown_playback'
+  | 'not_ready'
+  | 'another_playback_active'
+  | 'candidate_mismatch'
+  | 'expected_candidate_required';
+
+export type SpeechStartResult =
+  | { ok: true; generation: number }
+  | { ok: false; reason: SpeechStartRefusal };
+
 export interface SpeechGenerator {
   prepare(request: PrepareRequest): PreparedSpeech;
   cancel(audio_playback_id: number, reason: string): void;
@@ -250,5 +348,21 @@ export interface SpeechGenerator {
     audio_playback_id: number,
     expected?: { candidate_id: string; candidate_version: number },
   ): boolean;
-  stop(audio_playback_id: number, reason: string): void;
+  /** options なしは割り込み以外の停止で、即時に止める。 */
+  stop(audio_playback_id: number, reason: string, options?: SpeechStopOptions): void;
+  /** start の理由つき版。 */
+  startChecked?(
+    audio_playback_id: number,
+    expected?: { candidate_id: string; candidate_version: number },
+  ): SpeechStartResult;
+  /**
+   * 候補の REVISE／WITHDRAW に対応する未再生の PCM を破棄する（計画 §4.3、§4.6）。
+   * keep_version を渡すと、その版だけ残す。
+   * @returns 破棄した音声の数。
+   */
+  discardCandidate?(candidate_id: string, reason: string, keep_version?: number): number;
+  /** ブラウザの報告。t_ms は client_t_ms を orchestrator の時刻へ補正した値。 */
+  handlePlaybackStarted?(message: PlaybackStarted, t_ms: number): void;
+  handlePlaybackPosition?(message: PlaybackPosition, t_ms: number): void;
+  handlePlaybackEnded?(message: PlaybackEnded, t_ms: number): void;
 }

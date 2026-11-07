@@ -27,6 +27,7 @@ REMOVALS = [
     for key in value
 ]
 INVALID = [(name, c["schema"], c["value"]) for name, c in FIXTURES["invalid"].items()]
+OPTIONAL = [(f["schema"], f["name"], f["value"], f["optional_keys"]) for f in FIXTURES["optional"]]
 
 
 def test_all_schemas_are_generated():
@@ -46,6 +47,14 @@ def test_missing_required_field_is_detected(schema, name, key, value):
     copy = dict(value)
     del copy[key]
     assert not is_valid(schema, copy)
+
+
+@pytest.mark.parametrize(
+    "schema,name,value,keys", OPTIONAL, ids=[f"{s}/{n}" for s, n, _, _ in OPTIONAL]
+)
+def test_backward_compatible_optional_fields(schema, name, value, keys):
+    validate(schema, value)
+    validate(schema, {k: v for k, v in value.items() if k not in keys})
 
 
 @pytest.mark.parametrize("schema,name,value", VALID, ids=[f"{s}/{n}" for s, n, _ in VALID])

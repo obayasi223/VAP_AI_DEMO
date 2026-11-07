@@ -1,0 +1,364 @@
+/**
+ * VRM の読み込み、描画、1つの更新ループ。three に触るのはこのファイルだけ。
+ * 判断はしない: 視線は setGaze で外から受け、音量は setMouthLevel／pushPcm で受ける（配線は J）。
+ *
+ * 1フレームの順序: 層の合成 → ボーンへ適用 → 視線 → 表情 → vrm.update → 描画 → 報告。
+ * 吸気や準備姿勢（H2）は addLayer で足す。ループは増やさない。
+ */
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { VRMHumanBoneName, VRMLoaderPlugin, VRMUtils, type VRM } from '@pixiv/three-vrm';
+import type { GazeReport, GazeTarget } from '@llm-vap/contracts';
+import { BlinkLayer, BlinkScheduler } from './blink';
+import { GazeController, GazeLayer, GazeReporter } from './gaze';
+import { IdleLayer, RestPoseLayer } from './idle';
+import { MouthLayer, VolumeMouthSource, mouthOpenAmount, type MouthShape, type MouthSource } from './mouth';
+import { boneSignForMeta, LayerStack, type AvatarLayer } from './pose';
+import { RAD2DEG, type Rng } from './util';
+
+export type Framing = 'bust' | 'face';
+
+export interface AvatarOptions {
+  container: HTMLElement;
+  modelUrl: string;
+  framing?: Framing;
+  rng?: Rng;
+  onProgress?: (loadedBytes: number, totalBytes: number) => void;
+  /** browser_rpc の gaze.report の元。送信は呼び出し側（J）。 */
+  onGazeReport?: (report: GazeReport) => void;
+}
+
+/** 読める形で公開する値。avatar.* イベントは契約に無いので、今は取りに来てもらう。 */
+export interface AvatarTelemetry {
+  frame: number;
+  /** 直近のフレームの rAF 時刻。 */
+  rafMs: number;
+  fps: number;
+  mouth: { open: number; shape: MouthShape; appliedAa: number };
+  blink: { weight: number; count: number };
+  gaze: {
+    target: GazeTarget;
+    awayAmount: number;
+    settled: boolean;
+    /** 指令値（lookAt の入力、度）。 */
+    eyeInputYawDeg: number;
+    eyeInputPitchDeg: number;
+    /** シーングラフから読んだ左眼ボーンの回転（度）。 */
+    leftEyeYawDeg: number;
+    leftEyePitchDeg: number;
+    rightEyeYawDeg: number;
+    rightEyePitchDeg: number;
+  };
+  /** シーングラフから読んだ頭部の向き（待機の揺れと視線の合計、度）。 */
+  head: { yawDeg: number; pitchDeg: number; rollDeg: number };
+  idleIntensity: number;
+  layers: string[];
+}
+
+export interface AvatarModelInfo {
+  specVersion: string;
+  meta: Record<string, unknown>;
+  expressions: string[];
+  humanBones: string[];
+  missingHumanBones: string[];
+  lookAt: {
+    applier: string;
+    horizontalInner: [number, number] | null;
+    horizontalOuter: [number, number] | null;
+    verticalDown: [number, number] | null;
+    verticalUp: [number, number] | null;
+  };
+  meshes: { name: string; primitives: number; morphTargets: string[]; vertices: number }[];
+  springBoneJoints: number;
+}
+
+export interface Avatar {
+  readonly mouth: VolumeMouthSource;
+  setMouthLevel(rms: number): void;
+  pushPcm(samples: ArrayLike<number>): void;
+  closeMouth(): void;
+  /** 語境界・時間比例の口形へ差し替える口。null で音量駆動へ戻す。 */
+  setMouthSource(source: MouthSource | null): void;
+  setGaze(target: GazeTarget): void;
+  triggerBlink(): void;
+  setAutoBlink(enabled: boolean): void;
+  setIdleIntensity(intensity: number): void;
+  setFraming(framing: Framing): void;
+  addLayer(layer: AvatarLayer, position?: { before: string }): void;
+  removeLayer(name: string): void;
+  getTelemetry(): AvatarTelemetry;
+  getModelInfo(): AvatarModelInfo;
+  /** ボーンのワールド位置。無ければ null。確認と H2 の調整用。 */
+  getBoneWorldPosition(name: string): { x: number; y: number; z: number } | null;
+  dispose(): void;
+}
+
+/** 層の時間の上限。描画が遅くても瞬きや口の時間を実時間に合わせ、背景タブから戻った時だけ抑える。 */
+const MAX_LAYER_DT_MS = 500;
+/** 髪のばねは大きな dt で暴れるので別に抑える。 */
+const MAX_SPRING_DT_MS = 66;
+
+export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
+  const { container } = options;
+  const rng = options.rng ?? Math.random;
+
+  const gltf = await loadGltf(options);
+  const vrm = gltf.userData.vrm as VRM | undefined;
+  if (!vrm) throw new Error(`VRM として読めなかった: ${options.modelUrl}`);
+  if (!vrm.lookAt || !vrm.expressionManager) throw new Error('VRM に lookAt か表情が無い');
+  const { lookAt, expressionManager, humanoid } = vrm;
+
+  VRMUtils.rotateVRM0(vrm);
+  // 見えない頂点を落とす処理は H2 の胸モーフ生成に影響しうるので入れない。
+  VRMUtils.combineSkeletons(gltf.scene);
+  vrm.scene.traverse((object) => {
+    object.frustumCulled = false;
+  });
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xe8ebef);
+  scene.add(vrm.scene);
+  const key = new THREE.DirectionalLight(0xffffff, 2.2);
+  key.position.set(0.6, 1.6, 1.8);
+  const fill = new THREE.AmbientLight(0xffffff, 0.9);
+  scene.add(key, fill);
+
+  const camera = new THREE.PerspectiveCamera(20, 1, 0.05, 20);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  container.appendChild(renderer.domElement);
+  renderer.domElement.style.display = 'block';
+
+  const resize = () => {
+    const width = Math.max(container.clientWidth, 1);
+    const height = Math.max(container.clientHeight, 1);
+    renderer.setSize(width, height);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+  };
+  resize();
+  const resizeObserver = new ResizeObserver(resize);
+  resizeObserver.observe(container);
+
+  const stack = new LayerStack();
+  const mouth = new VolumeMouthSource();
+  const blinkScheduler = new BlinkScheduler(rng);
+  const gazeController = new GazeController(rng);
+  const idle = new IdleLayer(rng);
+  const gazeLayer = new GazeLayer(gazeController);
+  const blinkLayer = new BlinkLayer(blinkScheduler);
+  const mouthLayer = new MouthLayer(mouth);
+  stack.add(new RestPoseLayer());
+  stack.add(idle);
+  stack.add(gazeLayer);
+  stack.add(blinkLayer);
+  stack.add(mouthLayer);
+
+  const gazeReporter = new GazeReporter((report) => options.onGazeReport?.(report));
+
+  const sign = boneSignForMeta(vrm.meta.metaVersion);
+  const applyPose = (dtMs: number, nowMs: number) => {
+    const frame = stack.step({ dtMs, nowMs });
+    for (const [name, offset] of frame.bones) {
+      humanoid.getNormalizedBoneNode(name as VRMHumanBoneName)?.rotation.set(offset.x * sign.x, offset.y * sign.y, offset.z * sign.z);
+    }
+    // 前のフレームの頭の行列でカメラへの向きを求め、そらす量を足す。1フレーム遅れは問題にならない。
+    lookAt.lookAt(camera.position);
+    const baseYaw = lookAt.yaw;
+    const basePitch = lookAt.pitch;
+    lookAt.yaw = baseYaw * frame.eye.userWeight + frame.eye.yawDeg;
+    lookAt.pitch = basePitch * frame.eye.userWeight + frame.eye.pitchDeg;
+    for (const [name, weight] of frame.expressions) expressionManager.setValue(name, weight);
+    vrm.update(Math.min(dtMs, MAX_SPRING_DT_MS) / 1000);
+  };
+
+  // 最初の姿勢を当ててからカメラを置き、髪の揺れを新しい姿勢で初期化する。
+  applyPose(0, performance.now());
+  vrm.scene.updateMatrixWorld(true);
+  vrm.springBoneManager?.setInitState();
+  vrm.springBoneManager?.reset();
+
+  const eyePosition = new THREE.Vector3();
+  const placeCamera = (framing: Framing) => {
+    lookAt.getLookAtWorldPosition(eyePosition);
+    const distance = framing === 'face' ? 1.1 : 1.9;
+    const lookDownBy = framing === 'face' ? 0.02 : 0.12;
+    camera.position.set(eyePosition.x, eyePosition.y, eyePosition.z + distance);
+    camera.lookAt(eyePosition.x, eyePosition.y - lookDownBy, eyePosition.z);
+    camera.updateMatrixWorld();
+  };
+  placeCamera(options.framing ?? 'bust');
+
+  // シーングラフから読む頭の向き。
+  const headNode = humanoid.getRawBoneNode('head');
+  const restHeadInverse = new THREE.Quaternion();
+  headNode?.getWorldQuaternion(restHeadInverse);
+  restHeadInverse.invert();
+  const headQuat = new THREE.Quaternion();
+  const forward = new THREE.Vector3();
+  const up = new THREE.Vector3();
+  const readHead = () => {
+    if (!headNode) return { yawDeg: 0, pitchDeg: 0, rollDeg: 0 };
+    headNode.getWorldQuaternion(headQuat).multiply(restHeadInverse);
+    forward.set(0, 0, 1).applyQuaternion(headQuat);
+    up.set(0, 1, 0).applyQuaternion(headQuat);
+    return {
+      yawDeg: Math.atan2(forward.x, forward.z) * RAD2DEG,
+      pitchDeg: -Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1)) * RAD2DEG,
+      rollDeg: Math.atan2(-up.x, up.y) * RAD2DEG,
+    };
+  };
+  const leftEye = humanoid.getNormalizedBoneNode('leftEye');
+  const rightEye = humanoid.getNormalizedBoneNode('rightEye');
+  const eyeEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+  const readEye = (node: THREE.Object3D | null) => {
+    if (!node) return { yawDeg: 0, pitchDeg: 0 };
+    eyeEuler.setFromQuaternion(node.quaternion, 'YXZ');
+    // 頭と同じ規約（pitch の正が下）で返す。
+    return { yawDeg: eyeEuler.y * RAD2DEG, pitchDeg: eyeEuler.x * sign.x * RAD2DEG };
+  };
+
+  let rafId = 0;
+  let lastMs: number | null = null;
+  let disposed = false;
+  let frameCount = 0;
+  let lastRafMs = 0;
+  let fps = 0;
+
+  const tick = (nowMs: number) => {
+    if (disposed) return;
+    rafId = requestAnimationFrame(tick);
+    const dtMs = lastMs === null ? 16 : Math.min(nowMs - lastMs, MAX_LAYER_DT_MS);
+    if (lastMs !== null && nowMs > lastMs) {
+      const instant = 1000 / (nowMs - lastMs);
+      fps = fps === 0 ? instant : fps * 0.95 + instant * 0.05;
+    }
+    lastMs = nowMs;
+    applyPose(dtMs, nowMs);
+    renderer.render(scene, camera);
+    gazeReporter.rendered(nowMs);
+    frameCount += 1;
+    lastRafMs = nowMs;
+  };
+  rafId = requestAnimationFrame(tick);
+
+  return {
+    mouth,
+    setMouthLevel: (rms) => mouth.setLevel(rms),
+    pushPcm: (samples) => mouth.pushPcm(samples),
+    closeMouth: () => {
+      mouth.closeNow();
+    },
+    setMouthSource: (source) => {
+      mouthLayer.source = source ?? mouth;
+    },
+    setGaze: (target) => {
+      if (gazeController.setTarget(target)) gazeReporter.commanded(target, !document.hidden);
+    },
+    triggerBlink: () => blinkScheduler.trigger(),
+    setAutoBlink: (enabled) => {
+      blinkScheduler.enabled = enabled;
+    },
+    setIdleIntensity: (intensity) => {
+      idle.intensity = intensity;
+    },
+    setFraming: placeCamera,
+    addLayer: (layer, position) => stack.add(layer, position ?? null),
+    removeLayer: (name) => stack.remove(name),
+    getTelemetry: () => {
+      const left = readEye(leftEye);
+      const right = readEye(rightEye);
+      const g = gazeLayer.state;
+      return {
+        frame: frameCount,
+        rafMs: lastRafMs,
+        fps,
+        mouth: {
+          open: mouthOpenAmount(mouthLayer.shape),
+          shape: { ...mouthLayer.shape },
+          appliedAa: expressionManager.getValue('aa') ?? 0,
+        },
+        blink: { weight: blinkLayer.weight, count: blinkScheduler.count },
+        gaze: {
+          target: g.target,
+          awayAmount: g.awayAmount,
+          settled: g.settled,
+          eyeInputYawDeg: lookAt.yaw,
+          eyeInputPitchDeg: lookAt.pitch,
+          leftEyeYawDeg: left.yawDeg,
+          leftEyePitchDeg: left.pitchDeg,
+          rightEyeYawDeg: right.yawDeg,
+          rightEyePitchDeg: right.pitchDeg,
+        },
+        head: readHead(),
+        idleIntensity: idle.intensity,
+        layers: stack.names(),
+      };
+    },
+    getModelInfo: () => describeModel(vrm),
+    getBoneWorldPosition: (name) => {
+      const node = humanoid.getRawBoneNode(name as VRMHumanBoneName);
+      if (!node) return null;
+      const position = node.getWorldPosition(new THREE.Vector3());
+      return { x: position.x, y: position.y, z: position.z };
+    },
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      cancelAnimationFrame(rafId);
+      resizeObserver.disconnect();
+      VRMUtils.deepDispose(vrm.scene);
+      renderer.dispose();
+      renderer.domElement.remove();
+    },
+  };
+}
+
+async function loadGltf(options: AvatarOptions) {
+  const loader = new GLTFLoader();
+  loader.register((parser) => new VRMLoaderPlugin(parser));
+  return loader.loadAsync(options.modelUrl, (event) => {
+    options.onProgress?.(event.loaded, event.total);
+  });
+}
+
+function describeModel(vrm: VRM): AvatarModelInfo {
+  const humanBones = Object.values(VRMHumanBoneName).filter((name) => vrm.humanoid.getRawBoneNode(name) !== null);
+  const meshes = new Map<string, AvatarModelInfo['meshes'][number]>();
+  vrm.scene.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const dictionary = mesh.morphTargetDictionary ?? {};
+    const name = mesh.parent && (mesh.parent as THREE.Group).type === 'Group' ? mesh.parent.name : mesh.name;
+    const entry = meshes.get(name) ?? { name, primitives: 0, morphTargets: [], vertices: 0 };
+    entry.primitives += 1;
+    entry.vertices += mesh.geometry.getAttribute('position')?.count ?? 0;
+    if (entry.morphTargets.length === 0) entry.morphTargets = Object.keys(dictionary);
+    meshes.set(name, entry);
+  });
+  const applier = vrm.lookAt?.applier as unknown as {
+    constructor: { type?: string; name: string };
+    rangeMapHorizontalInner?: { inputMaxValue: number; outputScale: number };
+    rangeMapHorizontalOuter?: { inputMaxValue: number; outputScale: number };
+    rangeMapVerticalDown?: { inputMaxValue: number; outputScale: number };
+    rangeMapVerticalUp?: { inputMaxValue: number; outputScale: number };
+  };
+  const range = (map?: { inputMaxValue: number; outputScale: number }): [number, number] | null =>
+    map ? [map.inputMaxValue, map.outputScale] : null;
+  return {
+    specVersion: vrm.meta.metaVersion,
+    meta: { ...vrm.meta } as unknown as Record<string, unknown>,
+    expressions: vrm.expressionManager?.expressions.map((e) => e.expressionName) ?? [],
+    humanBones,
+    missingHumanBones: Object.values(VRMHumanBoneName).filter((name) => !humanBones.includes(name)),
+    lookAt: {
+      applier: applier?.constructor.type ?? applier?.constructor.name ?? 'none',
+      horizontalInner: range(applier?.rangeMapHorizontalInner),
+      horizontalOuter: range(applier?.rangeMapHorizontalOuter),
+      verticalDown: range(applier?.rangeMapVerticalDown),
+      verticalUp: range(applier?.rangeMapVerticalUp),
+    },
+    meshes: [...meshes.values()],
+    springBoneJoints: vrm.springBoneManager?.joints.size ?? 0,
+  };
+}
