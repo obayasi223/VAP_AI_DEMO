@@ -4,7 +4,7 @@
  *
  * EVENT_ROUTES はイベントごとの発行場所の一覧。別プロセスの時刻は補正して EmitOptions.at で渡す。
  */
-import type { AudioReport, ClockReport, SignalReport, SignalParameters } from './browser_rpc';
+import type { AudioReport, ClockReport, GazeReport, SignalReport, SignalParameters } from './browser_rpc';
 import type { EmitOptions, EventDraft } from './emit';
 import type { ResearchEventName, TimeBasis } from './events';
 import type { MaaiVapStateMessage, MaaiWorkerStatus } from './maai_rpc';
@@ -42,6 +42,9 @@ export const EVENT_ROUTES = {
   'cost.usage': { origin: 'node' },
   'woz.override': { origin: 'node' },
   'clock.sync': { origin: 'node' },
+  // 中身は client.hello だが、時刻は Node の受信時刻（時計差の推定の前に届く）。
+  'session.client': { origin: 'node' },
+  'gaze.rendered': { origin: 'browser', via: ['gaze.report'] },
 } as const satisfies Record<ResearchEventName, EventRoute>;
 
 /** ローカル時刻を orchestrator の基準へ写す関数と、その由来。J が clock.sync の推定から作る。 */
@@ -137,5 +140,24 @@ export function draftFromWorkerStatus(
     queue_depth: status.queue_depth,
     rtf: status.rtf,
     system_ch_source,
+  };
+}
+
+/** gaze.report を gaze.rendered へ。rendered_at は rAF の時刻を orchestrator の基準へ写した値。 */
+export function draftFromGazeReport(report: GazeReport, mapping: TimeMapping): EventDraft {
+  if (report.visible && report.client_t_ms.value !== null) {
+    return {
+      event: 'gaze.rendered',
+      target: report.target,
+      visible: true,
+      rendered_at: Math.max(0, mapping.toServerMs(report.client_t_ms.value)),
+    };
+  }
+  return {
+    event: 'gaze.rendered',
+    target: report.target,
+    visible: false,
+    rendered_at: null,
+    null_reason: 'null_reason' in report.client_t_ms ? report.client_t_ms.null_reason : 'tab_not_visible',
   };
 }

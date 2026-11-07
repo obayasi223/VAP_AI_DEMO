@@ -1,15 +1,10 @@
 /**
- * orchestrator の入口の置き場（レーン F の雛形）。
- * WS サーバーと配線の本体はレーン J が src/server.ts と src/session/ に作る。
- * ここでは起動しても何も待ち受けず、未実装であることを正直に表示して終わる。
+ * orchestrator の公開入口。起動は src/main.ts（`npm run dev:orchestrator`）。
  */
-import { CONTRACTS_VERSION } from '@llm-vap/contracts';
-import { WebSocketServer } from 'ws';
+export { main } from './main';
+export { OrchestratorServer, SwitchableTimeSource } from './ws/server';
+export { Session } from './session/session';
+export { SessionHistory } from './session/history';
 
-export const ORCHESTRATOR_NOT_WIRED = true as const;
-
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop() ?? '')) {
-  console.log(
-    `[orchestrator] not wired yet (contracts v${CONTRACTS_VERSION}, ws ${typeof WebSocketServer}). レーン J が実装する。`,
-  );
-}
+/** 雛形の印。配線は済んだので false（scaffold.test.ts を更新）。 */
+export const ORCHESTRATOR_NOT_WIRED = false as const;

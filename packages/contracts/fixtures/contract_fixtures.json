@@ -818,6 +818,105 @@
         }
       },
       {
+        "name": "session.client",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "session.client",
+          "protocol_version": 1,
+          "audio_context_sample_rate_hz": 48000,
+          "frame_samples": 320,
+          "user_agent": "Mozilla/5.0 (fixture)",
+          "track_settings": {
+            "echoCancellation": {
+              "value": false
+            },
+            "noiseSuppression": {
+              "value": false
+            },
+            "autoGainControl": {
+              "value": false
+            },
+            "sampleRate": {
+              "value": 48000
+            },
+            "channelCount": {
+              "value": 1
+            },
+            "deviceId": {
+              "value": null,
+              "null_reason": "not_exposed"
+            }
+          },
+          "latency": {
+            "base_latency_ms": {
+              "value": 5
+            },
+            "output_latency_ms": {
+              "value": null,
+              "null_reason": "not_supported_by_browser"
+            },
+            "output_timestamp_context_ms": {
+              "value": 100
+            },
+            "output_timestamp_performance_ms": {
+              "value": 120
+            }
+          },
+          "connection": "new_session"
+        }
+      },
+      {
+        "name": "gaze.rendered/visible",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "gaze.rendered",
+          "target": "away",
+          "visible": true,
+          "rendered_at": 1500
+        }
+      },
+      {
+        "name": "gaze.rendered/hidden",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "gaze.rendered",
+          "target": "user",
+          "visible": false,
+          "rendered_at": null,
+          "null_reason": "page_hidden_no_raf"
+        }
+      },
+      {
         "name": "signal.started/visible",
         "value": {
           "schema_version": 1,

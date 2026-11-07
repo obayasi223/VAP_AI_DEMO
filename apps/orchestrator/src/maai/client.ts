@@ -107,6 +107,7 @@ interface Attempt {
   lastReceivedAt: number;
   fatal: MaaiError | null;
   ended: boolean;
+  heartbeat: boolean;
 }
 
 export class MaaiWorkerClient {
@@ -210,6 +211,36 @@ export class MaaiWorkerClient {
     });
   }
 
+  /**
+   * 動いているワーカーへ新しい CONFIGURE を送る（J が追加）。ブラウザが audio_frame を 0 から振り直す
+   * 新しいセッションの始めに呼ぶ。ワーカーは文脈を捨てて READY を返す。READY か失敗で解決し、reject しない。
+   * 起動中や再起動待ちのときは、次の CONFIGURE が新しい session_id を使う（そのワーカーはまだ音声を受けていない）。
+   */
+  reconfigure(session_id: string): Promise<MaaiAvailability> {
+    if (!this.wanted) throw new Error('MaaiWorkerClient is not started');
+    this.sessionId = session_id;
+    this.refusedSamples = 0;
+    const attempt = this.attempt;
+    const socket = attempt?.socket ?? null;
+    if (attempt === null || socket === null || socket.readyState !== WebSocket.OPEN || attempt.startedReadyAt === null) {
+      return Promise.resolve(this.availability);
+    }
+    this.notifyClockReset();
+    this.readyInfo = null;
+    attempt.startedReadyAt = null;
+    this.update({ state: 'loading', vap_available: false, reason: 'reconfiguring_for_new_session' });
+    return new Promise((resolve) => {
+      this.settleFirst();
+      this.firstOutcome = resolve;
+      socket.send(JSON.stringify(MaaiConfigure.parse({ ...this.options.configure, session_id })));
+      this.addTimer(attempt, this.timeouts.readyMs, () => {
+        if (attempt.startedReadyAt === null) {
+          this.failAttempt(attempt, 'ready_timeout: READY did not arrive after reconfigure', true);
+        }
+      });
+    });
+  }
+
   /** Browser からの AUDIO 枠をそのまま渡す。届けられないときは false。 */
   sendEncodedAudio(frame: Uint8Array, sampleCount: number): boolean {
     const socket = this.attempt?.socket;
@@ -248,6 +279,7 @@ export class MaaiWorkerClient {
       lastReceivedAt: this.options.time.monotonicMs(),
       fatal: null,
       ended: false,
+      heartbeat: false,
     };
     this.attempt = attempt;
 
@@ -398,6 +430,8 @@ export class MaaiWorkerClient {
   }
 
   private startHeartbeat(attempt: Attempt): void {
+    if (attempt.heartbeat) return; // reconfigure の後の READY で重ねない
+    attempt.heartbeat = true;
     const timer = setInterval(() => {
       if (attempt.ended) return;
       const now = this.options.time.monotonicMs();

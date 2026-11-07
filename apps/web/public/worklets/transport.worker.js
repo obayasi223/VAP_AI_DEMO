@@ -20505,7 +20505,11 @@ function sendAudioReport() {
     track_settings: init.trackSettings,
     system_ch_source: "written",
     audio_context_state: contextState,
-    visibility
+    visibility,
+    reconnects: s.reconnects,
+    orphan_pcm_frames: s.orphan_pcm_frames,
+    pcm_seq_gaps: s.pcm_seq_gaps,
+    render_lag_ms: s.render_lag_ms
   });
 }
 function sendPing() {
@@ -20647,8 +20651,19 @@ function onJson(text) {
   const message = parsed.data;
   switch (message.type) {
     case "clock.pong": {
-      const estimate = clock.add(message.client_t_ms, message.server_t_ms, clientNow());
-      if (estimate !== null) toMain({ t: "clock", estimate });
+      const receivedAt = clientNow();
+      const estimate = clock.add(message.client_t_ms, message.server_t_ms, receivedAt);
+      if (estimate !== null) {
+        toMain({ t: "clock", estimate });
+        sendJson({
+          type: "clock.report",
+          offset_ms: estimate.offset_ms,
+          rtt_ms: estimate.rtt_ms,
+          uncertainty_ms: estimate.uncertainty_ms,
+          samples: estimate.samples,
+          client_t_ms: receivedAt
+        });
+      }
       return;
     }
     case "server.hello":

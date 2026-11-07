@@ -74,6 +74,8 @@ export interface SpeechStateChange {
   state: SpeechState;
   reason: string | null;
   request: PrepareRequest;
+  /** cancelled のときだけ。取消の時点で保持していて棄てた TTS の chunk（prefetch.cancelled の discarded_*）。 */
+  discarded?: { chunks: number; samples: number };
 }
 
 /** 発話が終わった報告。J が commitAssistantSpoken へ渡す。発話済みの部分だけを持つ。 */
@@ -511,8 +513,9 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
   cancel(audio_playback_id: number, reason: string): boolean {
     const entry = this.entries.get(audio_playback_id);
     if (!entry || (entry.state !== 'preparing' && entry.state !== 'ready')) return false;
+    const discarded = { chunks: entry.held.length, samples: entry.heldSamples };
     this.teardown(entry, reason);
-    this.setState(entry, 'cancelled', reason);
+    this.setState(entry, 'cancelled', reason, discarded);
     this.entries.delete(entry.id);
     return true;
   }
@@ -645,9 +648,20 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     }
   }
 
-  private setState(entry: Entry, state: SpeechState, reason: string | null): void {
+  private setState(
+    entry: Entry,
+    state: SpeechState,
+    reason: string | null,
+    discarded?: SpeechStateChange['discarded'],
+  ): void {
     entry.state = state;
-    const change: SpeechStateChange = { audio_playback_id: entry.id, state, reason, request: entry.request };
+    const change: SpeechStateChange = {
+      audio_playback_id: entry.id,
+      state,
+      reason,
+      request: entry.request,
+      ...(discarded === undefined ? {} : { discarded }),
+    };
     for (const listener of this.stateListeners) listener(change);
   }
 

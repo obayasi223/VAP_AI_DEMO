@@ -370,6 +370,35 @@ export const VALID_FIXTURES: Record<SchemaName, { name: string; value: unknown }
     },
     { name: 'signal.sent', value: { ...signal, event: 'signal.sent', sent_at: 1210 } },
     {
+      name: 'session.client',
+      value: {
+        ...envelope,
+        event: 'session.client',
+        protocol_version: 1,
+        audio_context_sample_rate_hz: 48000,
+        frame_samples: 320,
+        user_agent: 'Mozilla/5.0 (fixture)',
+        track_settings: trackSettings,
+        latency,
+        connection: 'new_session',
+      },
+    },
+    {
+      name: 'gaze.rendered/visible',
+      value: { ...envelope, event: 'gaze.rendered', target: 'away', visible: true, rendered_at: 1500 },
+    },
+    {
+      name: 'gaze.rendered/hidden',
+      value: {
+        ...envelope,
+        event: 'gaze.rendered',
+        target: 'user',
+        visible: false,
+        rendered_at: null,
+        null_reason: 'page_hidden_no_raf',
+      },
+    },
+    {
       name: 'signal.started/visible',
       value: { ...signal, event: 'signal.started', visible: true, started_at: 1230 },
     },

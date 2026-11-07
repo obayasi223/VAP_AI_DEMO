@@ -182,6 +182,10 @@ function sendAudioReport(): void {
     system_ch_source: 'written',
     audio_context_state: contextState,
     visibility,
+    reconnects: s.reconnects,
+    orphan_pcm_frames: s.orphan_pcm_frames,
+    pcm_seq_gaps: s.pcm_seq_gaps,
+    render_lag_ms: s.render_lag_ms,
   });
 }
 
@@ -339,8 +343,20 @@ function onJson(text: string): void {
   const message = parsed.data;
   switch (message.type) {
     case 'clock.pong': {
-      const estimate = clock.add(message.client_t_ms, message.server_t_ms, clientNow());
-      if (estimate !== null) toMain({ t: 'clock', estimate });
+      const receivedAt = clientNow();
+      const estimate = clock.add(message.client_t_ms, message.server_t_ms, receivedAt);
+      if (estimate !== null) {
+        toMain({ t: 'clock', estimate });
+        // browser_rtt の clock.sync の元（Node は往復の時刻を知らない）。
+        sendJson({
+          type: 'clock.report',
+          offset_ms: estimate.offset_ms,
+          rtt_ms: estimate.rtt_ms,
+          uncertainty_ms: estimate.uncertainty_ms,
+          samples: estimate.samples,
+          client_t_ms: receivedAt,
+        });
+      }
       return; // 主スレッドへは転送しない
     }
     case 'server.hello':

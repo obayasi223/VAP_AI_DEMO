@@ -110,6 +110,7 @@ export function readTrackSettings(track: MediaStreamTrack | null, reason: string
       sampleRate: absent(reason),
       channelCount: absent(reason),
       deviceId: absent(reason),
+      latency: absent(reason),
     };
   }
   const settings = track.getSettings();
@@ -122,6 +123,8 @@ export function readTrackSettings(track: MediaStreamTrack | null, reason: string
     sampleRate: wrap(settings.sampleRate),
     channelCount: wrap(settings.channelCount),
     deviceId: wrap(settings.deviceId),
+    // MediaTrackSettings.latency（秒）。Chrome は返すが型定義にないことがある。
+    latency: wrap((settings as MediaTrackSettings & { latency?: number }).latency),
   };
 }
 

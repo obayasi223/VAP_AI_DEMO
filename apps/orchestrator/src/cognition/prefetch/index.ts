@@ -27,6 +27,7 @@ interface Current {
   started_at: number;
   ready: boolean;
   similarity: Maybe<number>;
+  trigger: PrepareDecision['trigger'];
 }
 
 export interface ResponsePrefetchOptions {
@@ -69,6 +70,7 @@ export class ResponsePrefetch {
       started_at: this.options.time.monotonicMs(),
       ready: false,
       similarity: decision.similarity,
+      trigger: decision.trigger,
     };
     this.lastSent = { text: decision.text, segment_id: decision.segment_id };
     this.emit('prefetch.started', this.current);
@@ -92,7 +94,7 @@ export class ResponsePrefetch {
         break;
       case 'cancelled':
       case 'failed':
-        this.emit('prefetch.cancelled', current, change.reason ?? change.state);
+        this.emit('prefetch.cancelled', current, change.reason ?? change.state, change.discarded);
         this.current = null;
         // 失敗した準備は送れていないので、同じ入力での再試行を類似度で止めない。
         if (change.state === 'failed') this.lastSent = null;
@@ -106,6 +108,7 @@ export class ResponsePrefetch {
     event: 'prefetch.started' | 'prefetch.ready' | 'prefetch.cancelled',
     current: Current,
     cancel_reason?: string,
+    discarded?: SpeechStateChange['discarded'],
   ): void {
     this.options.emitter.emit({
       event,
@@ -115,7 +118,11 @@ export class ResponsePrefetch {
       similarity: current.similarity,
       similarity_method: SIMILARITY_METHOD,
       model_version: this.options.speech.model_version,
+      ...(event === 'prefetch.started' ? { trigger: current.trigger } : {}),
       ...(cancel_reason === undefined ? {} : { cancel_reason }),
+      ...(discarded === undefined
+        ? {}
+        : { discarded_chunks: discarded.chunks, discarded_samples: discarded.samples }),
     } as EventDraft);
   }
 

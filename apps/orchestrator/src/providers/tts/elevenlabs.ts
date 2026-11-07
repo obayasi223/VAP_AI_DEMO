@@ -72,6 +72,11 @@ export interface ElevenLabsOptions {
   retry_base_ms: number;
   retry_max_ms: number;
   down_after_attempts: number;
+  /**
+   * apply_language_text_normalization を URL に付ける（日本語の漢字の読みの対策。J が追加）。
+   * 資料では日本語のみ対応で遅延が増える。multi-stream-input での効果は docs/provider_matrix.md を参照。
+   */
+  apply_language_text_normalization: boolean;
 }
 
 export const DEFAULT_ELEVENLABS_OPTIONS: ElevenLabsOptions = {
@@ -87,6 +92,7 @@ export const DEFAULT_ELEVENLABS_OPTIONS: ElevenLabsOptions = {
   retry_base_ms: 200,
   retry_max_ms: 5000,
   down_after_attempts: 3,
+  apply_language_text_normalization: false,
 };
 
 /** 失敗の種類。LLM の GeminiProviderError と同じ考え方で、呼び出し側が文字列を解釈しなくてよいようにする。 */
@@ -445,6 +451,7 @@ export class ElevenLabsConnection implements TtsConnection {
       inactivity_timeout: String(this.options.inactivity_timeout_sec),
       language_code: this.options.language_code,
     });
+    if (this.options.apply_language_text_normalization) query.set('apply_language_text_normalization', 'true');
     return `${this.options.base_url}/v1/text-to-speech/${encodeURIComponent(this.config.voice_id)}/multi-stream-input?${query}`;
   }
 

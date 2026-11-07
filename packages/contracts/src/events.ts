@@ -7,6 +7,7 @@ import { z } from 'zod';
 import {
   AudioContextStateName,
   AudioLatency,
+  GazeTarget,
   SignalParameters,
   SignalPhase,
   TrackSettings,
@@ -485,6 +486,34 @@ export const ClockSyncEvent = eventSchema('clock.sync', {
   rtt_ms: Maybe(NonNegativeMs),
 });
 
+// ---- セッションの接続、視線の描画（J が追加） -------------------------------------
+
+/**
+ * client.hello の内容の記録。AudioContext の実際のレートと user_agent をログに残す（計画 §3.2）。
+ * 時刻は Node が受けた時刻（時計差の推定より前に届くので補正できない）。中身はブラウザの申告のまま。
+ */
+export const SessionClientEvent = eventSchema('session.client', {
+  protocol_version: z.number().int().min(1),
+  audio_context_sample_rate_hz: z.number().positive(),
+  frame_samples: z.number().int().min(1),
+  user_agent: z.string(),
+  track_settings: TrackSettings,
+  latency: AudioLatency,
+  /** new_session は新しいセッション、reattached は切断後の同じセッションへの再接続。 */
+  connection: z.enum(['new_session', 'reattached']),
+});
+
+/** gaze.report の記録。G1 の「gaze.decision が描画に反映される」の証拠。rendered_at は rAF の時刻。 */
+export const GazeRenderedEvent = z.discriminatedUnion('visible', [
+  eventSchema('gaze.rendered', { target: GazeTarget, visible: z.literal(true), rendered_at: MonotonicMs }),
+  eventSchema('gaze.rendered', {
+    target: GazeTarget,
+    visible: z.literal(false),
+    rendered_at: z.null(),
+    null_reason: NonEmptyString,
+  }),
+]);
+
 // ---- 全体 ------------------------------------------------------------------
 
 export const ResearchEvent = z.discriminatedUnion('event', [
@@ -514,6 +543,8 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   CostUsageEvent,
   WozOverrideEvent,
   ClockSyncEvent,
+  SessionClientEvent,
+  GazeRenderedEvent,
 ]);
 export type ResearchEvent = z.infer<typeof ResearchEvent>;
 export type ResearchEventName = ResearchEvent['event'];
@@ -546,6 +577,8 @@ export const EVENT_NAMES = [
   'cost.usage',
   'woz.override',
   'clock.sync',
+  'session.client',
+  'gaze.rendered',
 ] as const satisfies readonly ResearchEventName[];
 
 export type EventOf<N extends ResearchEventName> = Extract<ResearchEvent, { event: N }>;
