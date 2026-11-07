@@ -1,25 +1,26 @@
-// 保存した逐次 ASR を時刻どおりに流し、InitiativeMonitor を実モデルで動かす。
+// 保存した逐次 ASR を時刻どおりに流し、発話希望の判定を**本実装の経路**で動かす（関門 G2 の準備）。
+//   経路: session/initiative_wiring.ts の InitiativeWiring（G の InitiativeMonitor → E2a の CandidateLedger）。
+//         LLM は D の実 Gemini プロバイダ（streamGenerateContent）。セッションと同じ部品を通る。
 //   --asr handwritten|recorded  素材（handwritten は実 ASR ではない）
 //   --scenarios C1,C2           既定は素材のあるもの全部（G3 の C5 を除く）
-//   --models gemini-3.5-flash-lite:minimal,gemini-3.8-flash:low
+//   --models gemini-3.5-flash-lite:minimal  モデルと思考の段（既定は S の推奨）
 //   --label <名前>              結果の保存先 fixtures/initiative/runs/<名前>/
 //   --prompt <版>               既定は現在の版
-//   --max-calls <n>             実 API の呼び出しの累計の上限（素材の種類ごとに数える。既定は handwritten 200、recorded 600）
-//   --min-new-chars、--boundary-chars  起動の条件（既定は policy の initiative.trigger）
+//   --max-calls <n>             実 API の呼び出しの累計の上限（--ledger のファイルで数える）
+//   --ledger <名前>             呼び出しの台帳（fixtures/initiative/runs/<名前>.json）。既定は素材ごとの台帳
+//   --min-new-chars、--boundary-chars  起動の条件（既定は policy の initiative.trigger。none で文の区切りを見ない）
 //   --yes                       実行（課金あり）
 import { parseArgs } from 'node:util';
 import { join } from 'node:path';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { SystemTimeSource, createEventEmitter } from '@llm-vap/contracts';
-import type { LlmProvider, ResearchEvent, TimeSource } from '@llm-vap/contracts';
-import { InMemoryCandidateStore } from '@llm-vap/testkit';
-import {
-  CURRENT_PROMPT_VERSION,
-  InitiativeMonitor,
-} from '../../apps/orchestrator/src/cognition/initiative';
+import type { EventEmitter, LlmProvider, LlmRequest, LlmResult, LlmStream, ResearchEvent, TimeSource } from '@llm-vap/contracts';
+import { CURRENT_PROMPT_VERSION } from '../../apps/orchestrator/src/cognition/initiative';
 import type { TriggerOptions } from '../../apps/orchestrator/src/cognition/initiative';
+import { createGeminiProviderFromEnv } from '../../apps/orchestrator/src/providers/llm';
+import type { GeminiThinkingLevel } from '../../apps/orchestrator/src/providers/llm/gemini';
+import { InitiativeWiring, NO_CANDIDATE_SPEECH } from '../../apps/orchestrator/src/session/initiative_wiring';
 import { CallBudget } from './lib/call_budget';
-import { ThinGeminiProvider } from './lib/gemini_thin';
 import { RUNS_DIR, existsSync, loadPersona, loadPolicy, loadScenarios, readSttJsonl, sttPath, writeJson } from './lib/project';
 import type { Scenario } from './lib/project';
 import { replayStt } from './lib/replay';
@@ -28,12 +29,13 @@ const { values: args } = parseArgs({
   options: {
     asr: { type: 'string', default: 'recorded' },
     scenarios: { type: 'string' },
-    models: { type: 'string', default: 'gemini-3.5-flash-lite:minimal,gemini-3.8-flash:low' },
+    models: { type: 'string', default: 'gemini-3.5-flash-lite:minimal' },
     label: { type: 'string' },
     prompt: { type: 'string', default: CURRENT_PROMPT_VERSION },
     take: { type: 'string', default: '1' },
     concurrency: { type: 'string', default: '4' },
     'max-calls': { type: 'string' },
+    ledger: { type: 'string' },
     'min-new-chars': { type: 'string' },
     'boundary-chars': { type: 'string' },
     yes: { type: 'boolean', default: false },
@@ -43,8 +45,9 @@ const { values: args } = parseArgs({
 const origin = args.asr === 'handwritten' ? 'handwritten' : 'recorded';
 const take = Number(args.take);
 const policy = loadPolicy();
+const ledgerName = args.ledger ?? (origin === 'handwritten' ? 'call_ledger' : 'call_ledger.recorded');
 const budget = new CallBudget(
-  join(RUNS_DIR, origin === 'handwritten' ? 'call_ledger.json' : 'call_ledger.recorded.json'),
+  join(RUNS_DIR, `${ledgerName}.json`),
   Number(args['max-calls'] ?? (origin === 'handwritten' ? 200 : 600)),
 );
 const policyTrigger = policy.initiative.trigger;
@@ -58,6 +61,8 @@ const trigger: TriggerOptions = {
         ? Number(args['boundary-chars'])
         : policyTrigger.min_new_chars_at_boundary,
 };
+/** E2a へ人の発話の有無を伝える間隔。セッションの tick（20ms）より粗いが、話の後の判定（MIN_GAP_TIME_MS）には足りる。 */
+const FLOOR_TICK_MS = 100;
 
 function pickScenarios(): Scenario[] {
   const only = args.scenarios?.split(',');
@@ -68,9 +73,39 @@ function pickScenarios(): Scenario[] {
     .filter((s) => existsSync(sttPath(origin, s.id, take)));
 }
 
-/** D の実装ができたら、ここを差し替える。 */
-function makeProvider(model: string, thinking_level: string, time: TimeSource): LlmProvider {
-  return new ThinGeminiProvider({ model, thinking_level, time, budget });
+/** 実 API の呼び出しの前に台帳で1回ぶん確保する（上限を超える前に止める）。 */
+class BudgetedLlm implements LlmProvider {
+  readonly provider: string;
+  readonly provider_class;
+  readonly model_version: string;
+  constructor(
+    private readonly inner: LlmProvider,
+    private readonly label: string,
+  ) {
+    this.provider = inner.provider;
+    this.provider_class = inner.provider_class;
+    this.model_version = inner.model_version;
+  }
+  generate(request: LlmRequest): Promise<LlmResult> {
+    budget.consume(`${this.label}:${request.request_id}`);
+    return this.inner.generate(request);
+  }
+  stream(_request: LlmRequest): LlmStream {
+    throw new Error('the initiative judge needs the whole JSON; stream is not used');
+  }
+}
+
+function makeProvider(model: string, thinking: string, time: TimeSource, emitter: EventEmitter): LlmProvider {
+  // セッション（app/providers.ts の initiativeFor）と同じ設定: 時間切れは max_result_age_ms、出力の上限 4096。
+  const inner = createGeminiProviderFromEnv({
+    time,
+    emitter,
+    model,
+    thinking_level: thinking as GeminiThinkingLevel,
+    max_output_tokens: 4096,
+    ...(policy.initiative.max_result_age_ms !== null ? { timeout_ms: policy.initiative.max_result_age_ms } : {}),
+  });
+  return new BudgetedLlm(inner, model);
 }
 
 async function runOne(scenario: Scenario, model: string, thinking: string, dir: string): Promise<void> {
@@ -86,46 +121,63 @@ async function runOne(scenario: Scenario, model: string, thinking: string, dir: 
     condition: () => 'initiative_no_cue',
     sink,
   });
-  const llm = makeProvider(model, thinking, time);
-  const monitor = new InitiativeMonitor({
+  const llm = makeProvider(model, thinking, time, emitter);
+  const wiring = new InitiativeWiring({
     llm,
-    store: new InMemoryCandidateStore(),
+    persona: loadPersona(scenario),
+    policy,
     emitter,
     time,
-    persona: loadPersona(scenario),
-    limits: policy.initiative,
+    speech: () => NO_CANDIDATE_SPEECH,
     trigger,
     prompt_version: args.prompt,
   });
+  // 人の発話の有無: 記録を流している間は話している、流し終えたら黙った（VAP がないので記録の範囲で近似する）。
+  let speaking = true;
+  const floor = setInterval(() => wiring.tick(time.monotonicMs(), speaking), FLOOR_TICK_MS);
+  wiring.tick(time.monotonicMs(), true);
   await replayStt(source, {
     time,
     onEvent: (event) => {
       const { schema_version: _s, t_monotonic_ms: _t, wall_clock: _w, session_id: _i, condition: _c, time_basis: _b, ...draft } = event;
       emitter.emit(draft);
-      monitor.onStt(event);
+      wiring.onStt(event);
     },
   });
   const speech_end_ms = time.monotonicMs();
-  await monitor.finishInput();
+  speaking = false;
+  wiring.tick(speech_end_ms, false);
+  await wiring.monitor.finishInput();
+  clearInterval(floor);
+  wiring.close();
   writeJson(join(dir, `${stem}.meta.json`), {
     asr_origin: origin,
     not_real_asr: origin === 'handwritten',
     preliminary: origin === 'handwritten',
-    note: origin === 'handwritten' ? '手書きの逐次 ASR による予備調査。§4.5a の関門の通過ではない。' : '実 ASR のリプレイ。人の評価が別途必要。',
+    note:
+      origin === 'handwritten'
+        ? '手書きの逐次 ASR による予備調査。§4.5a の関門（G2 を含む）の通過ではない。'
+        : '実 ASR のリプレイ。人の評価が別途必要。',
+    path: 'production_wiring',
     scenario: scenario.id,
     take: origin === 'recorded' ? take : null,
     model,
     thinking,
     provider: llm.provider,
+    provider_class: llm.provider_class,
+    // スパイク（p2_v2_tune など）は tools/initiative_spike/lib/gemini_thin.ts の Interactions API だった。
+    api: 'streamGenerateContent',
     prompt_version: args.prompt,
     persona: loadPersona(scenario).persona_id,
     trigger,
     limits: policy.initiative,
+    floor_tick_ms: FLOOR_TICK_MS,
     speech_end_ms,
-    llm_requests: monitor.requestCount(),
+    llm_requests: wiring.monitor.requestCount(),
+    candidates_at_end: wiring.ledger.list().length,
     finished_at: new Date().toISOString(),
   });
-  console.log(`done ${stem}: ${monitor.requestCount()} requests`);
+  console.log(`done ${stem}: ${wiring.monitor.requestCount()} requests`);
 }
 
 async function main(): Promise<void> {
@@ -134,8 +186,10 @@ async function main(): Promise<void> {
   if (!args.label) throw new Error('--label を指定してください');
   if (scenarios.length === 0) throw new Error(`素材が見つかりません（--asr ${origin}）`);
   console.log(`素材: ${origin}${origin === 'handwritten' ? '（実 ASR ではない。予備調査）' : ''}`);
+  console.log('経路: 本実装（InitiativeWiring → CandidateLedger）、D の Gemini プロバイダ');
   console.log(`対象: ${scenarios.map((s) => s.id).join(', ')} × ${models.map((m) => m.join(':')).join(', ')}、プロンプト ${args.prompt}`);
-  console.log(`呼び出し: 使用済み ${budget.used()} / 上限 ${budget.limit}`);
+  console.log(`起動の条件: ${JSON.stringify(trigger)}`);
+  console.log(`呼び出し: 使用済み ${budget.used()} / 上限 ${budget.limit}（${ledgerName}）`);
   if (!args.yes) {
     console.log('課金が発生するので、実行するには --yes を付けてください。実 API は呼び出していません。');
     process.exit(3);

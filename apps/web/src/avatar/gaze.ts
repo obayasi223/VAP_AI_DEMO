@@ -140,17 +140,33 @@ export class GazeLayer implements AvatarLayer {
   }
 }
 
+/** 描画の前に次の目標で上書きされ、一度も描かれなかった判断の null_reason。 */
+export const GAZE_SUPERSEDED_BEFORE_RENDER = 'superseded_before_render';
+
 /**
  * browser_rpc の GazeReport を作る。目標が変わった後の最初の rAF を描画の時刻として報告する。
  * 背景タブでは rAF が来ないので visible=false を直ちに出し、見えるようになった最初の描画でもう一度出す。
+ * 描画の前に次の目標が来たら、前の目標は描かれていないので visible=false と
+ * GAZE_SUPERSEDED_BEFORE_RENDER で報告する（報告が黙って消えないように。判断ごとに報告が1つ以上出る）。
+ * 背景タブで既に visible=false を出した目標は、上書きされても重ねて出さない。
  */
 export class GazeReporter {
   private pending: GazeTarget | null = null;
+  private pendingReportedHidden = false;
 
   constructor(private readonly emit: (report: GazeReport) => void) {}
 
   commanded(target: GazeTarget, visible: boolean): void {
+    if (this.pending !== null && !this.pendingReportedHidden) {
+      this.emit({
+        type: 'gaze.report',
+        target: this.pending,
+        visible: false,
+        client_t_ms: { value: null, null_reason: GAZE_SUPERSEDED_BEFORE_RENDER },
+      });
+    }
     this.pending = target;
+    this.pendingReportedHidden = !visible;
     if (!visible) {
       this.emit({
         type: 'gaze.report',
@@ -166,6 +182,7 @@ export class GazeReporter {
     if (this.pending === null) return;
     const target = this.pending;
     this.pending = null;
+    this.pendingReportedHidden = false;
     this.emit({ type: 'gaze.report', target, visible: true, client_t_ms: { value: rafMs } });
   }
 }

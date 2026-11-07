@@ -15,6 +15,22 @@ import type { EventOf } from '@llm-vap/contracts';
 import { commonPrefixLength, normalizeForMatch, rawPrefixForNormalized } from './text';
 
 export type SttEvent = EventOf<'stt.interim'> | EventOf<'stt.final'>;
+/**
+ * 安定テキストを作るのに読む項目だけ。記録の stt.* イベント（リプレイ）と、セッションの SttResult から
+ * 作った値（session/initiative_wiring.ts の sttInputFromResult）のどちらも渡せる。
+ */
+export type SttInput = Pick<
+  SttEvent,
+  | 'event'
+  | 'transcript_revision'
+  | 'segment_id'
+  | 'asr_segment_id'
+  | 'text'
+  | 'stable_text'
+  | 'stability_source'
+  | 'parts'
+  | 'audio_frame_end'
+>;
 export type StableMode = 'high_water' | 'literal';
 
 export interface AsrSegmentSnapshot {
@@ -46,7 +62,7 @@ export class StableTranscriptView {
     private readonly options: { min_stability: number; mode?: StableMode },
   ) {}
 
-  apply(event: SttEvent): ApplyResult {
+  apply(event: SttInput | SttEvent): ApplyResult {
     this.latestRevision = Math.max(this.latestRevision, event.transcript_revision);
     this.latestSegmentId = Math.max(this.latestSegmentId, event.segment_id);
     const before = this.bySegment.get(event.asr_segment_id);
@@ -81,7 +97,7 @@ export class StableTranscriptView {
   }
 
   /** derived の経路は C が stable_text を決める。provider の経路は閾値を変えて再現できるよう parts から求める。 */
-  private literalStable(event: SttEvent): string {
+  private literalStable(event: SttInput): string {
     if (event.stability_source === 'derived') return event.stable_text;
     return splitInterimParts(event.parts, this.options.min_stability).stable_text;
   }

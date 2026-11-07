@@ -262,6 +262,13 @@ describe('判定の順序（古い transcript_revision の結果が新しい状�
     ]);
   });
 
+  it('NONE の拒否は operation=NONE で記録する（NEW と区別する）', () => {
+    const r = rig();
+    r.ledger.applyModelDecision(noneD({ rev: 20 }));
+    expect(r.ledger.applyModelDecision(noneD({ rev: 18 }))).toMatchObject({ ok: false, reason: 'stale_transcript_revision' });
+    expect(rejects(r.sink).at(-1)).toMatchObject({ operation: 'NONE', requested_state: null });
+  });
+
   it('新しい NONE の後に届いた古い NEW は候補にしない', () => {
     const r = rig();
     r.ledger.applyModelDecision(noneD({ rev: 20 }));
@@ -390,7 +397,7 @@ describe('根拠の検証（追補1: 入力と照合できない根拠は採用�
   });
 });
 
-describe('話の後に届いた NEW（E3 で調停するまでの規則: 記録して保留）', () => {
+describe('話の後に届いた NEW（E3 で調停するまでの規則: 記録して保留し、人が再開したら照合し直して候補にする）', () => {
   it('人が MIN_GAP 以上黙った後の NEW は候補にせず保留し、want は none のまま', () => {
     const r = rig();
     r.ledger.observeUserFloor(true, 0);
@@ -414,9 +421,40 @@ describe('話の後に届いた NEW（E3 で調停するまでの規則: 記録�
     expect(r.ledger.applyModelDecision(newD({ at: 99999 })).ok).toBe(true);
   });
 
-  it('人が話し始めたら保留を棄てる。通常応答の開始と segment の変更でも棄てる', () => {
+  it('人が話を再開したら（話の途中の間だった）保留を棄てず、根拠と順序を照合し直して候補にする', () => {
+    const r = rig();
+    r.ledger.observeUserFloor(false, 0);
+    r.ledger.applyModelDecision(newD({ at: 1000, request_id: 'ini_pause' }));
+    const promoted = r.ledger.observeUserFloor(true, 2000);
+    expect(promoted).toMatchObject({ request_id: 'ini_pause', result: { ok: true, ref: { candidate_id: 'c_0001', candidate_version: 1 } } });
+    expect(r.ledger.heldPostTurn()).toBeNull();
+    expect(r.ledger.get('c_0001')).toMatchObject({ state: 'INTENT_READY', decided_at: 2000 });
+    expect(r.sink.ofType('candidate.state_changed')).toMatchObject([
+      { candidate_id: 'c_0001', from: null, to: 'INTENT_READY', cause_source: 'model_decision', decision: 'NEW', request_id: 'ini_pause' },
+    ]);
+    expect(rejects(r.sink).map((e) => e.reason)).toEqual(['post_turn_new_held']);
+  });
+
+  it('人が再開しても、照合に通らなければ（根拠の消失、順序の逆転）棄てて理由を残す', () => {
+    const lost = rig();
+    lost.ledger.observeUserFloor(false, 0);
+    lost.ledger.applyModelDecision(newD({ at: 1000 }));
+    lost.state.stable = [];
+    expect(lost.ledger.observeUserFloor(true, 2000)).toMatchObject({ result: { ok: false, reason: 'evidence_invalid' } });
+    expect(lost.ledger.list()).toHaveLength(0);
+    expect(rejects(lost.sink).at(-1)).toMatchObject({ reason: 'evidence_invalid', operation: 'NEW' });
+
+    const stale = rig();
+    stale.ledger.observeUserFloor(false, 0);
+    stale.ledger.applyModelDecision(newD({ at: 1000, rev: 10 }));
+    stale.ledger.applyModelDecision(noneD({ at: 1100, rev: 12 }));
+    expect(stale.ledger.observeUserFloor(true, 2000)).toMatchObject({ result: { ok: false, reason: 'stale_transcript_revision' } });
+    expect(rejects(stale.sink).at(-1)).toMatchObject({ reason: 'stale_transcript_revision', details: ['promote'] });
+    expect(stale.ledger.list()).toHaveLength(0);
+  });
+
+  it('人が再開しないまま通常応答が始まったら保留を棄てる。segment の変更でも棄てる', () => {
     for (const drop of [
-      (r: ReturnType<typeof rig>) => r.ledger.observeUserFloor(true, 2000),
       (r: ReturnType<typeof rig>) => r.ledger.onNormalResponseStarted(2000),
       (r: ReturnType<typeof rig>) => r.ledger.onSegmentChanged(1, 2000),
     ]) {

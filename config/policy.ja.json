@@ -44,7 +44,9 @@
   "gaze": {
     "pause_min_ms": 200,
     "signal": "p_now",
-    "p_threshold": 0.5
+    "p_threshold": 0.5,
+    "hold_away_min_ms": 600,
+    "re_avert_min_ms": 1000
   },
   "similarity": {
     "method": "char_ngram_cosine",

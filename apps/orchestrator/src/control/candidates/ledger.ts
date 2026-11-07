@@ -9,15 +9,12 @@
  *   版と PCM の一致を確かめる。
  * - モデルの説明文は記録するだけで判定に使わない（追補1）。
  */
-import { CandidateConflictError, absent, present, verified } from '@llm-vap/contracts';
+import { absent, present, verified } from '@llm-vap/contracts';
 import type {
   CandidateCause,
-  CandidateContentPatch,
   CandidateRecord,
   CandidateRef,
-  CandidateRegistration,
   CandidateState,
-  CandidateStore,
   EventEmitter,
   SpeechGenerator,
 } from '@llm-vap/contracts';
@@ -281,8 +278,9 @@ export class CandidateLedger {
   // ---- 保留した NEW（E3 で調停） ---------------------------------------------
 
   /**
-   * 保留した NEW を候補にする（E3 の入口）。根拠と順序は今の時点でもう一度確かめる。
-   * 話の後かどうかの判定だけは省く（E3 がその上で選んだので）。
+   * 保留した NEW を候補にする。根拠と順序は今の時点でもう一度確かめ、通らなければ棄てて candidate.rejected に
+   * 理由を残す（details の先頭が 'promote'）。話の後かどうかの判定だけは省く。
+   * 呼ぶのは observeUserFloor（人が話を再開した＝話の途中の間だった）と、将来の E3 の調停。
    */
   promoteHeld(at: number): DecisionResult | null {
     const held = this.held;
@@ -413,11 +411,19 @@ export class CandidateLedger {
 
   // ---- 外の状況（J から） ------------------------------------------------------
 
-  /** 人が話しているか（E1 の TurnState.user_speaking）。話の後の NEW の判定に使う。 */
-  observeUserFloor(user_speaking: boolean, at: number): void {
-    if (this.floor && this.floor.user_speaking === user_speaking) return;
+  /**
+   * 人が話しているか（E1 の TurnState.user_speaking）。話の後の NEW の判定に使う。
+   * 「話の後」は user_speaking 偽が post_turn_silence_ms 続いたことだけで決めているので、話の途中の長い間も
+   * 含みうる。保留中に人が再開したら、その間は話の途中だったとみなし、保留した NEW を棄てずに照合し直して
+   * 候補にする（promoteHeld）。照合に通らなければ棄てて理由を残す。結果は呼び手（G）へ返す。
+   */
+  observeUserFloor(user_speaking: boolean, at: number): { request_id: string; result: DecisionResult } | null {
+    if (this.floor && this.floor.user_speaking === user_speaking) return null;
     this.floor = { user_speaking, since: at };
-    if (user_speaking && this.held) this.dropHeld(at, 'user_resumed');
+    if (!user_speaking || !this.held) return null;
+    const request_id = this.held.decision.request_id;
+    const result = this.promoteHeld(at);
+    return result ? { request_id, result } : null;
   }
 
   /** segment_id の変更（AI の発話開始、§4.1 の ASR.reset）。 */
@@ -454,73 +460,6 @@ export class CandidateLedger {
       if (now - record.timeline.decided_at >= expiry) this.withdrawByCode(record, 'expired', now);
     }
     if (this.held && now - this.held.held_at >= expiry) this.dropHeld(now, 'expired');
-  }
-
-  // ---- 旧 IF（S の monitor.ts を変えずに差し替えるための口） ---------------------
-
-  /**
-   * 契約の CandidateStore として使う口。S の monitor.ts は自分で candidate.state_changed を出すので、
-   * この口からはイベントを出さない（二重にしない）。採番、版の照合、遷移表、PCM の破棄だけを行う。
-   * G への移管後は applyModelDecision へ移り、この口は使わない。
-   */
-  asStore(): CandidateStore {
-    return {
-      register: (input: CandidateRegistration): CandidateRef => {
-        const record = this.newRecord(
-          {
-            request_id: 'legacy_store',
-            transcript_revision: input.transcript_revision,
-            segment_id: input.segment_id,
-            received_at: input.decided_at,
-          },
-          {
-            intent_type: input.intent_type,
-            evidence_span: input.evidence_span,
-            evidence_segment_ids: input.evidence_segment_ids,
-            proposed_utterance: input.proposed_utterance,
-            expiry_policy: input.expiry_policy,
-            urgency: input.urgency,
-          },
-          LEGACY_NOTES,
-          [...input.evidence_segment_ids],
-          'INTENT_READY',
-          input.decided_at,
-        );
-        this.markApplied(input.transcript_revision);
-        return refOf(record);
-      },
-      get: (id) => this.get(id),
-      list: (options) => this.list(options),
-      update: (id, expected_version, patch: CandidateContentPatch, updated_at) => {
-        const record = this.records.get(id);
-        if (!record) throw new Error(`unknown candidate ${id}`);
-        if (record.candidate_version !== expected_version) {
-          throw new CandidateConflictError(`${id}: expected version ${expected_version}, current ${record.candidate_version}`);
-        }
-        if (!MODEL_APPLICABLE_STATES.includes(record.state)) {
-          throw new CandidateConflictError(`${id}: not revisable in ${record.state}`);
-        }
-        Object.assign(record, structuredClone(patch));
-        record.candidate_version += 1;
-        record.updated_at = updated_at;
-        if (patch.transcript_revision !== undefined) this.markApplied(patch.transcript_revision);
-        this.deps.speech.discardCandidate(id, 'candidate_revised', record.candidate_version);
-        return refOf(record);
-      },
-      setState: (id, state, updated_at) => {
-        const record = this.records.get(id);
-        if (!record) throw new Error(`unknown candidate ${id}`);
-        const reachable = this.transitions().some(
-          (row) => row.from === record.state && row.to === state,
-        );
-        if (!reachable) throw new CandidateConflictError(`${id}: ${record.state} -> ${state} is not in the table`);
-        record.state = state;
-        record.updated_at = updated_at;
-        if (TERMINAL_STATES.includes(state)) record.timeline.resolved_at = updated_at;
-        if (state === 'WITHDRAWN') this.deps.speech.discardCandidate(id, 'candidate_withdrawn');
-        return toContract(record);
-      },
-    };
   }
 
   // ---- 内部 --------------------------------------------------------------------
@@ -667,7 +606,7 @@ export class CandidateLedger {
     extra: { held?: boolean; record?: LedgerRecord; candidate_id?: string } = {},
   ): Rejection {
     const record = extra.record ?? null;
-    const operation = d.decision === 'NONE' ? 'NEW' : d.decision;
+    const operation = d.decision;
     if (reason !== 'active_candidate_exists') {
       this.emitRejected({
         candidate_id: record?.candidate_id ?? extra.candidate_id ?? null,
@@ -717,7 +656,7 @@ export class CandidateLedger {
     candidate_id: string | null;
     candidate_version: number | null;
     source: 'model_decision' | 'code';
-    operation: 'NEW' | 'KEEP' | 'REVISE' | 'WITHDRAW' | 'transition' | 'speech_start' | 'held';
+    operation: 'NONE' | 'NEW' | 'KEEP' | 'REVISE' | 'WITHDRAW' | 'transition' | 'speech_start' | 'held';
     current_state: CandidateState | null;
     requested_state: CandidateState | null;
     cause: CandidateCause | null;
@@ -780,12 +719,6 @@ export class CandidateLedger {
 
 const EVIDENCE_METHOD = 'e2a_listed_segments_contain_span_and_exist_in_latest';
 const WITHDRAW_EVIDENCE_METHOD = 'e2a_listed_segments_contain_span_after_candidate';
-
-const LEGACY_NOTES: CandidateModelNotes = {
-  reason: { source: 'model_output', value: null, null_reason: 'legacy_store_interface' },
-  why_now: { source: 'model_output', value: null, null_reason: 'legacy_store_interface' },
-  cost_of_waiting: { source: 'model_output', value: null, null_reason: 'legacy_store_interface' },
-};
 
 function refOf(record: LedgerRecord): CandidateRef {
   return { candidate_id: record.candidate_id, candidate_version: record.candidate_version };

@@ -102,6 +102,7 @@
 | p の向き | `p_ai = p[1]`（`policy.ja.json` の `direction_status` は `measured`）。変換は `control/vap_direction.ts` の1か所 | R2 の実測で「添字 i はチャネル i の話者」。AI を ch2（sys）に置く配線は E2E で確認（AI の再生中に `vad[1]` が上がる） |
 | 視線の設定 | `policy.ja.json` の `gaze` が null の間は逸らさない | 原著に数値がない。null を別の値へ置き換えない。**値が入るまで視線は動かない** |
 | 視線の判定の向き | `p_ai < p_threshold` のポーズで逸らす | V-D。閾値ちょうどは逸らさない。同じポーズの中では向きを保つ（原著にない、行き来を防ぐため） |
+| 視線の保持時間（**原著にない追加**） | ja は `gaze.hold_away_min_ms`=600、`gaze.re_avert_min_ms`=1000【暫定、根拠なし、未校正】。hri2025 は保持なし（方策に項目がなく、`controlSettings` で null、原著どおり）。`control/gaze.ts` の `applyHold` | E2E で、200ms のポーズで逸らした 70〜180ms 後に AI が話し続けて user へ戻る短い逸らしが複数出た（目がちらつく）。規則: 逸らした後 600ms までは user へ戻さない。**ただし人が話している（`user_speaking`）、割り込み中、AI の発話の終わり、VAP の鮮度切れのときは保持より優先して直ちに戻す**（相手の発話や受け渡しへの反応を遅らせない。理由は `user_speaking:…` のように頭に付けて残す）。戻した後 1000ms までは再び逸らさない（例外なし。そのポーズの最初の判定は `re_avert_min_ms<1000:…` の理由で残す）。保持中に AI が話し続けると、ポーズが終わってもしばらく逸れたまま。値の妥当性は人の評価で見ていない |
 | 発話開始前に視線を逸らす動作 | 入れない | 根拠が Fig. 1 の読み取りのみ。V-D に記述がなく、IV-B はベースラインの説明 |
 | 鮮度切れの定義 | `audio_frame` の遅れ（計画）に加えて受信時刻の遅れも見る | 音声そのものが止まると frame の差が開かず、古い p を fresh と扱うため |
 | hri2025 の鮮度と助走 | ja と同じ 500ms と 10 秒をコードで持つ | 方策に項目がなく、原著にもない。原著再現の根拠にしない |
@@ -123,7 +124,20 @@
 
 `config/policy.ja.json`:
 
-- `gaze`: `signal=p_now`、`p_threshold=0.5`、`pause_min_ms=200`。null のままだと視線が動かないため。人の評価も実対話での確認もしていない。
+- `gaze`: `signal=p_now`、`p_threshold=0.5`、`pause_min_ms=200`。null のままだと視線が動かないため。人の評価も実対話での確認もしていない。`hold_away_min_ms=600`、`re_avert_min_ms=1000` は短い逸らしのちらつきを防ぐための保持時間（§7、原著にない）。
 - `turn.fallback_silence_max_ms=1500`、`turn.fallback_interrupt_min_words=3`、`turn.fallback_energy_silence_dbfs=-45`。VAP の鮮度切れのときの代替（計画 §4.1 の表）。null のままだと MaAI が落ちたとき AI は割り込まれても止まらず、待機中は招待以外で話し始めない。-45 dBFS は有線ヘッドセットの近接マイクを想定した値で、実機の雑音の大きさは測っていない。語数は `Intl.Segmenter` の語で数え、「うん」「はい」（1語）の相槌では止めない。
 - `similarity.threshold=0.9`。null だと実 ASR ログの再生で 376 秒に 669 回の準備になった（同じ文の連続読み上げで、人の会話の頻度ではない）。0.9 では 7 回。比較する文が累積なので、長い発話の末尾が応答に届かない危険がある。校正のときに確かめる。
 
+
+## 9. 発話希望（G と E2a）の規則と残した差（波2）
+
+実装は `apps/orchestrator/src/cognition/initiative/`（G）と `apps/orchestrator/src/control/candidates/`（E2a）。値はどれも【未検証の暫定値】。
+
+| 項目 | 規則 | 理由、残る問題 |
+|---|---|---|
+| 話の後に届いた `NEW` | 人の `user_speaking` 偽が `post_turn_silence_ms`（J は MIN_GAP_TIME を渡す）続いた後に届いた `NEW` は、候補にせず E2a が保留する（`candidate.rejected` の `post_turn_new_held`、G の `initiative.discarded` に写し）。**保留中に人が話を再開したら、その間は話の途中だったとみなし、保留を棄てずに `promoteHeld` で根拠（最新の安定テキスト）と順序（segment、`transcript_revision`）を照合し直して候補にする**（G が採番の後に `initiative.decision` の `NEW` を出す。`decided_at` は候補にした時刻、`received_at` は応答を受けた時刻）。照合に通らなければ棄てて `candidate.rejected` に理由を残す（`details` の先頭が `promote`）。**人が再開しないまま通常の応答が始まったら棄てる**（`held_dropped:normal_response_started`）。segment の変更、新しい `NEW`、期限、根拠の消失でも棄てる | 「話の後」を無音の長さだけで決めているので、話の途中の長い間に届いた `NEW` も保留に入る。人が続けたことが「途中だった」の唯一の手がかり。保留から候補にするときに鮮度（`max_result_age_ms`、新規の安定文字数）は見直さない。間が長いほど古い判定が候補になりうる。E3 の調停は未実装 |
+| 判定の入力の範囲 | LLM に渡すのは今の segment（AI が最後に話し始めた後の利用者の発話）の安定テキストだけ。前のターン（利用者と AI の両方）は渡さない（`transcript_view.ts` の `snapshot`）。長い話は古い区間から落とすが、未解決の候補の根拠の区間は落とさない | 意図どおり。根拠の照合は今の segment の中だけで行い、前のターンの語は根拠にならない。そのため「さっき言ったことと矛盾する」のような前のターンに跨る申し出は出せない。persona の役割と関心は system 側で渡している |
+| 起動とターンの終わり | 新規の安定文字が `trigger.min_new_stable_chars` 以上、文中の区切りの後に `min_new_chars_at_boundary` 以上、または **final を受けたとき（増分が1文字以上なら文字数によらず1回）**。リプレイの `finishInput` も入力の終わりを final とみなす同じ規則 | final を文字数で止めると、ターンの終わりの判定（撤回の機会）が抜けていた。Google は話の途中の間にも final を打つので、その分の要求は増える |
+| 判定の失敗の後 | 失敗した要求の入力は判定済みにしない。待ち（2秒から倍、上限30秒）が明けたら、新しい増分がなくても J の tick（`poll`）で同じ入力から判定し直す | 失敗した入力が判定済みになると、話が止まった後は二度と判定されなかった |
+| 撤回の根拠の位置 | 候補の根拠が入力に見つからなければ、撤回の根拠が後ろかを確かめられないので撤回を棄却する（`candidate_evidence_not_in_input`） | 入力の上限で落ちた区間の候補を、前の発話で撤回させないため |
+| プロバイダの状態の名前 | 判定用の Gemini は `provider.status` を `gemini:initiative` で出す（応答用は `gemini`）。要求の上限の報告は `initiative_monitor` の行。`cost.usage` と `llm.*` の `provider` は両方とも `gemini` のままで、用途は `purpose`（`initiative`）で分ける | 研究者画面の行は provider 名で引くので、同じ名前だと取り違える。`packages/analysis` の単価の照合は `provider` で引くので `cost.usage` の名前は変えない |

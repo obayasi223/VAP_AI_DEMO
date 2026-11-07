@@ -35,6 +35,15 @@ export interface OrchestratorConfig {
   /** 台本の TTS が使う WAV。 */
   scripted_tts_wav: string;
   elevenlabs_language_normalization: boolean;
+  /**
+   * InitiativeMonitor（発話希望の判定）を動かす条件。既定は ja の方策で3条件とも（計画 §4.6「候補の生成までは
+   * 同じ経路」）。INITIATIVE_CONDITIONS=none で止める。波2では候補を作るだけで、発声と吸気には使わない。
+   */
+  initiative_conditions: Condition[];
+  /** AI の役割・関心（config/persona.ja.json）。 */
+  persona_file: string;
+  /** 判定に使う Gemini のモデル。S の推奨（docs/initiative_spike.md）の flash-lite（minimal）が既定。 */
+  initiative_model: string;
 }
 
 /** リポジトリの .env を読む（あれば）。既に設定された環境変数は上書きしない。 */
@@ -48,6 +57,12 @@ function mode(name: string, env: NodeJS.ProcessEnv): ProviderMode {
   const value = env[name] || 'production';
   if (value === 'production' || value === 'test_double') return value;
   throw new Error(`${name} must be production or test_double (development is not wired), got ${value}`);
+}
+
+function conditions(value: string | undefined): Condition[] {
+  if (value === undefined || value.trim() === '') return [...Condition.options];
+  if (value.trim() === 'none') return [];
+  return value.split(',').map((c) => Condition.parse(c.trim()));
 }
 
 function flag(value: string | undefined, fallback: boolean): boolean {
@@ -79,5 +94,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
     client_token: env.ORCHESTRATOR_CLIENT_TOKEN || null,
     scripted_tts_wav: path.resolve(REPO_ROOT, env.SCRIPTED_TTS_WAV || 'models/ja.wav'),
     elevenlabs_language_normalization: flag(env.ELEVENLABS_LANGUAGE_NORMALIZATION, false),
+    initiative_conditions: conditions(env.INITIATIVE_CONDITIONS),
+    persona_file: path.resolve(REPO_ROOT, env.PERSONA_FILE || 'config/persona.ja.json'),
+    initiative_model: env.INITIATIVE_GEMINI_MODEL || 'gemini-3.5-flash-lite',
   };
 }

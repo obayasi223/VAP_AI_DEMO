@@ -666,6 +666,11 @@
             "source": "model_output",
             "value": "本人が直後に説明した"
           },
+          "reason": {
+            "source": "model_output",
+            "value": null,
+            "null_reason": "model_left_empty"
+          },
           "withdraw_evidence_segment_ids": {
             "source": "verified",
             "value": [
@@ -2985,6 +2990,10 @@
         "decision": "WITHDRAW",
         "withdrawn_at": 1500,
         "withdraw_reason": {
+          "source": "model_output",
+          "value": "x"
+        },
+        "reason": {
           "source": "model_output",
           "value": "x"
         },

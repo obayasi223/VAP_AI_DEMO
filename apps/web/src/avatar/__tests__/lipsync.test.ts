@@ -61,6 +61,18 @@ describe('wordToSegments', () => {
     expect(wordToSegments({ text: '天気', start_ms: 0, end_ms: 300 })).toBeNull();
     expect(wordToSegments({ text: 'あ', start_ms: 10, end_ms: 10 })).toEqual([]);
   });
+
+  it('reading（Node の推定の読み）があれば漢字の語もモーラに分ける', () => {
+    const segments = wordToSegments({ text: '天気', reading: 'テンキ', start_ms: 0, end_ms: 300 })!;
+    expect(segments.map((s) => s.mora.kind).join('')).toBe('eNi');
+    // 発音の長音（トーキョー）は前の母音を伸ばす。
+    expect(wordToSegments({ text: '東京', reading: 'トーキョー', start_ms: 0, end_ms: 400 })!.map((s) => s.mora.kind).join('')).toBe('oooo');
+  });
+
+  it('reading が読めない（かなでない）ときは表記に戻る', () => {
+    expect(wordToSegments({ text: '天気', reading: 'X', start_ms: 0, end_ms: 300 })).toBeNull();
+    expect(wordToSegments({ text: 'てんき', reading: 'X', start_ms: 0, end_ms: 300 })!.length).toBe(3);
+  });
 });
 
 describe('labialClosure', () => {
@@ -130,6 +142,28 @@ describe('AlignmentMouthSource', () => {
     expect(advance(200).ih).toBe(0);
     expect(source.mode).toBe('volume');
     expect(advance(400).ih).toBe(0);
+    expect(source.mode).toBe('volume');
+  });
+
+  it('漢字の語に reading があれば母音の口形になる。推定の語時刻なら reading があっても音量だけ', () => {
+    const { source, advance, getNow } = rig();
+    source.addAlignment({
+      audio_playback_id: 1,
+      generation: 0,
+      items: [{ text: '今日', reading: 'キョー', start_ms: 0, end_ms: 400, granularity: 'word' }],
+      reading_source: 'morphological_estimate',
+    });
+    source.addAlignment({
+      audio_playback_id: 1,
+      generation: 0,
+      items: [{ text: '気', reading: 'キ', start_ms: 400, end_ms: 800, granularity: 'word' }],
+      source: 'estimated_time_proportional',
+    });
+    source.onPlaybackReport({ type: 'playback.started', audio_playback_id: 1, generation: 0, client_t_ms: getNow() });
+    const shape = advance(150);
+    expect(source.mode).toBe('alignment');
+    expect(shape.oh).toBeGreaterThan(0.3);
+    advance(400);
     expect(source.mode).toBe('volume');
   });
 

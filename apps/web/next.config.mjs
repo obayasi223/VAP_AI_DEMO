@@ -8,8 +8,8 @@ const nextConfig = {
   reactStrictMode: true,
   // Next が next dev のたびに AGENTS.md を生成するのを止める。
   agentRules: false,
-  // contracts は TS のソースをそのまま公開しているので Next 側で変換する。
-  transpilePackages: ['@llm-vap/contracts'],
+  // contracts と analysis は TS のソースをそのまま公開しているので Next 側で変換する。
+  transpilePackages: ['@llm-vap/contracts', '@llm-vap/analysis'],
   turbopack: { root: repoRoot },
   outputFileTracingRoot: repoRoot,
 };

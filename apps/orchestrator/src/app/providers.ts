@@ -2,8 +2,10 @@
  * セッションごとのプロバイダの組み立て（レーン J）。emitter と時刻源をセッションに結ぶため、毎回作る。
  * 失敗は例外にせず理由として返す（音声の経路と画面を止めない。黙って台本へ切り替えない）。
  */
+import { readFileSync } from 'node:fs';
 import { absent } from '@llm-vap/contracts';
 import type {
+  Condition,
   EventEmitter,
   LlmProvider,
   Policy,
@@ -14,6 +16,8 @@ import type {
   TurnCompletionEstimator,
 } from '@llm-vap/contracts';
 import { NullTurnCompletionEstimator, createCompletionEstimator } from '../cognition/completion';
+import { CURRENT_PROMPT_VERSION, parsePersona } from '../cognition/initiative';
+import type { InitiativePersona } from '../cognition/initiative';
 import { createGeminiProviderFromEnv } from '../providers/llm';
 import { createGoogleSttProviderFromEnv } from '../providers/stt';
 import { chooseTtsProvider, createElevenLabsTtsProviderFromEnv, createGeminiTtsProviderFromEnv } from '../providers/tts';
@@ -36,6 +40,22 @@ export interface SessionProviders {
   completion_name: string;
   /** 推定器を作れなかった理由。作れた（または推定器なしの方策）なら null。 */
   completion_error: string | null;
+  /** 発話希望の判定（G）。省略は無効（試験の台）。 */
+  initiative?: InitiativeSetup;
+}
+
+/**
+ * 発話希望の判定の組み立て。enabled=false は条件や方策で止めたもの（理由つき）。
+ * enabled=true で llm か persona が null なら、動かすはずが作れなかったもの（理由つき）。
+ */
+export interface InitiativeSetup {
+  enabled: boolean;
+  reason: string | null;
+  llm: LlmProvider | null;
+  persona: InitiativePersona | null;
+  prompt_version: string;
+  /** 求めたモデル（Gemini）。台本では test_double。 */
+  model: string;
 }
 
 function message(error: unknown): string {
@@ -97,6 +117,7 @@ export async function createSessionProviders(input: {
   }
 
   const completion = completionFor(config.policy, llm.ok ? llm.value : null);
+  const initiative = initiativeFor({ config, time, emitter, env });
   if (completion.error !== null) console.error(`[orchestrator] completion estimator unavailable: ${completion.error}`);
   const cls = (b: Built<{ provider_class: ProviderClass }>) => (b.ok ? b.value.provider_class : 'unavailable');
   const name = (b: Built<{ provider: string }>) => (b.ok ? b.value.provider : 'unavailable');
@@ -110,7 +131,65 @@ export async function createSessionProviders(input: {
     requested: { stt: config.stt, tts: config.tts, llm: config.llm },
     completion_name: completion.name,
     completion_error: completion.error,
+    initiative,
   };
+}
+
+/**
+ * 判定には応答と別の LlmProvider を作る（モデルと思考の段、時間切れが違う）。
+ * 時間切れは policy の max_result_age_ms（それより遅い NEW と REVISE は鮮度で棄てるので、待っても使えない）。
+ * 出力の上限はスパイクと同じ 4096（説明の項目が多く、1024 では切れうる）。
+ */
+/** 判定用の Gemini の provider.status の名前。 */
+export const INITIATIVE_GEMINI_STATUS = 'gemini:initiative';
+
+function initiativeFor(input: {
+  config: OrchestratorConfig;
+  time: TimeSource;
+  emitter: EventEmitter;
+  env: NodeJS.ProcessEnv;
+}): InitiativeSetup {
+  const { config, time, emitter, env } = input;
+  const off = (reason: string): InitiativeSetup => ({
+    enabled: false,
+    reason,
+    llm: null,
+    persona: null,
+    prompt_version: CURRENT_PROMPT_VERSION,
+    model: config.llm === 'test_double' ? 'test_double' : config.initiative_model,
+  });
+  if (config.policy.policy_id !== 'ja') return off('policy_has_no_initiative_section');
+  if (!config.initiative_conditions.includes(config.condition as Condition)) {
+    return off(`disabled_for_condition:${config.condition}`);
+  }
+  const unavailable = (reason: string): InitiativeSetup => ({ ...off(reason), enabled: true });
+  let persona: InitiativePersona;
+  try {
+    persona = parsePersona(JSON.parse(readFileSync(config.persona_file, 'utf8')));
+  } catch (error) {
+    return unavailable(`persona: ${message(error).slice(0, 200)}`);
+  }
+  let llm: LlmProvider;
+  if (config.llm === 'test_double') {
+    llm = new ScriptedReplyLlm({ time, emitter });
+  } else if (!env.GEMINI_API_KEY) {
+    return unavailable('gemini: GEMINI_API_KEY is not set');
+  } else {
+    try {
+      llm = createGeminiProviderFromEnv({
+        time,
+        emitter,
+        model: config.initiative_model,
+        max_output_tokens: 4096,
+        // 応答用の Gemini と provider.status の行を分ける（cost.usage は 'gemini' のまま、purpose で分かる）。
+        status_name: INITIATIVE_GEMINI_STATUS,
+        ...(config.policy.initiative.max_result_age_ms !== null ? { timeout_ms: config.policy.initiative.max_result_age_ms } : {}),
+      });
+    } catch (error) {
+      return unavailable(`gemini: ${message(error).slice(0, 200)}`);
+    }
+  }
+  return { enabled: true, reason: null, llm, persona, prompt_version: CURRENT_PROMPT_VERSION, model: llm.model_version };
 }
 
 /** 作れなければ Null の推定器へ落とすが、理由を返す（黙って推定器なしにしない）。 */

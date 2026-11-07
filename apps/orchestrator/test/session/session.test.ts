@@ -109,6 +109,31 @@ describe('開始できないときの応答（指摘 6）', () => {
     expect(link2.of('playback.begin')).toHaveLength(1);
     expect(rig.session.turnState.segment_id).toBe(1);
   });
+
+  it('入力で止められなかった開始の拒否では、開始しなかった前提で tick を計算し直す（turn.allowed を毎 tick 出さない）', async () => {
+    rig = await createRig();
+    await warmUp(rig);
+    // D の startChecked が拒否し続ける（入力の start_blocked_reason では分からない拒否）。
+    const speech = (rig.session as unknown as { speech: { startChecked: (id: number) => unknown } }).speech;
+    const original = speech.startChecked.bind(speech);
+    let refuse = true;
+    speech.startChecked = (id: number) => (refuse ? { ok: false, reason: 'not_ready' } : original(id));
+    rig.stt().deliver({ kind: 'final', text: 'こんにちは', audio_frame_end: rig.frame });
+    for (let i = 0; i < 200 && rig.session.counters.start_rolled_back === 0; i++) await rig.step();
+    expect(rig.session.counters.start_rolled_back).toBe(1);
+    const allowedBefore = rig.events.ofType('turn.allowed').length;
+    await rig.steps(10);
+    expect(rig.session.counters.start_rolled_back).toBe(11);
+    // 許可の状態は変わっていないので、開始しなかった tick では turn.allowed を重ねて出さない。
+    expect(rig.events.ofType('turn.allowed').length).toBe(allowedBefore);
+    expect(rig.session.turnState.segment_id).toBe(0);
+    expect(rig.session.turnState.speaking.phase).toBe('silent');
+    expect(rig.session.turnState.want_to_speak.kind).toBe('response');
+    refuse = false;
+    await rig.steps(2);
+    expect(rig.link.of('playback.begin')).toHaveLength(1);
+    expect(rig.session.turnState.segment_id).toBe(1);
+  });
 });
 
 describe('状態の表示とログ（指摘 10、13、14）', () => {

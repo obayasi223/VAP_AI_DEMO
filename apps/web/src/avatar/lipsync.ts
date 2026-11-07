@@ -5,7 +5,8 @@
  * 語時刻が誤っていても、音が無いところで口が開くことはない。
  *
  * 母音の口形を使うのは、安全に読みが分かるときだけ:
- *  - 語がかな（ひらがな・カタカナ、長音、句読点）だけでできている。漢字・英数字を含む語は読みが分からないので使わない。
+ *  - 語に読み（item.reading、Node の形態素解析の推定のカタカナ）があればそれを使う。読みが誤っていても口形が少し違うだけ。
+ *  - 読みがなければ、語がかな（ひらがな・カタカナ、長音、句読点）だけでできている。漢字・英数字を含む語は読みが分からないので使わない。
  *  - 語時刻が推定（source = estimated_time_proportional）ではない。
  *  - その再生の位置（playback.started／position）を受けている。
  * どれかを満たさない区間は、従来の音量だけの口（aa）に戻す。
@@ -94,9 +95,14 @@ export interface VisemeSegment {
   mora: Mora;
 }
 
-/** 語の時刻をモーラ数で等分する（語の中は推定）。読めない語は null。 */
-export function wordToSegments(item: { text: string; start_ms: number; end_ms: number }): VisemeSegment[] | null {
-  const morae = kanaToMorae(item.text);
+/** 語の時刻をモーラ数で等分する（語の中は推定）。読めない語は null。reading があれば表記より先に使う。 */
+export function wordToSegments(item: {
+  text: string;
+  start_ms: number;
+  end_ms: number;
+  reading?: string | undefined;
+}): VisemeSegment[] | null {
+  const morae = (item.reading ? kanaToMorae(item.reading) : null) ?? kanaToMorae(item.text);
   if (morae === null) return null;
   const duration = Math.max(item.end_ms - item.start_ms, 0);
   if (morae.length === 0 || duration === 0) return [];
@@ -168,7 +174,7 @@ interface PlaybackTimeline {
 
 export type LipSyncMode = 'volume' | 'alignment';
 
-export type PlaybackAlignmentLike = Pick<PlaybackAlignment, 'audio_playback_id' | 'generation' | 'items' | 'source'>;
+export type PlaybackAlignmentLike = Pick<PlaybackAlignment, 'audio_playback_id' | 'generation' | 'items' | 'source' | 'reading_source'>;
 
 /** 口が使う項目だけ。PlaybackStarted／Position／Ended をそのまま渡せる。 */
 export type PlaybackReportLike =

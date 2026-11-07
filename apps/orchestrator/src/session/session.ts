@@ -10,8 +10,12 @@
  *   SpeechGenerator の下り → PCM 枠と playback.*、ブラウザの playback.* → SpeechGenerator（時刻を補正）
  *   SpeechGenerator の onFinished → 履歴（発話済みの部分のみ）
  *
+ *   STT 結果 → 発話希望（initiative_wiring.ts: InitiativeMonitor → CandidateLedger）。tick → 期限と人の発話の有無、
+ *   advance_segment → 候補の期限、通常応答の開始 → 残っている候補の撤回、候補の発話の終わり → finishSpeech
+ *
  * want_to_speak（準備済みの応答）、permitted_to_speak（TurnManager の許可）、speaking（再生の報告）は
- * 別々に持つ。ここでは混ぜない。波1の範囲なので InitiativeMonitor と吸気は配線しない。
+ * 別々に持つ。ここでは混ぜない。波2の範囲では発話希望の候補を作って記録と研究者画面に出すだけで、
+ * TurnManager にも D にも渡さない（候補を話さず、吸気もしない。吸気と合図のゲートは波3）。
  */
 import {
   SAMPLE_RATE_HZ,
@@ -54,6 +58,7 @@ import type { SessionProviders } from '../app/providers';
 import { isReadyBufferMs } from '../app/maai_setup';
 import { FALLBACK_ENERGY_FLOOR_DBFS, PlaybackTracker, rmsDbfs } from './audio_state';
 import { SessionHistory, UserUtterances } from './history';
+import { InitiativeWiring } from './initiative_wiring';
 
 export interface BrowserLink {
   sendJson(message: NodeToBrowser): void;
@@ -135,6 +140,9 @@ export class Session {
   private tts: TtsConnection | null = null;
   private speech: SpeechGeneratorImpl | null = null;
   private prefetch: ResponsePrefetch | null = null;
+  /** 発話希望の判定と候補。無効（条件、方策）か作れなければ null。 */
+  private initiative: InitiativeWiring | null = null;
+  private initiativeReason: string | null = null;
   private readonly unsubscribe: Unsubscribe[] = [];
   private tickTimer: NodeJS.Timeout | null = null;
   private closed = false;
@@ -178,6 +186,8 @@ export class Session {
     for (const [kind, cls] of Object.entries(providers.classes)) {
       if (cls === 'test_double') this.fixedReasons.push(`test_double:${kind}:${providers.names[kind as 'stt']}`);
     }
+    // STT の結果より先に作る（最初の発話から判定する）。D の音声は後から作られるので関数で渡す。
+    this.buildInitiative();
 
     if (providers.stt.ok) {
       try {
@@ -266,13 +276,44 @@ export class Session {
       retry_attempt: 0,
       next_retry_ms: absent('not_retrying'),
     });
+    const initiative = providers.initiative;
+    if (initiative?.enabled) {
+      const llm = initiative.llm;
+      manifest.initiative =
+        this.initiative !== null && llm !== null
+          ? { provider: llm.provider, provider_class: llm.provider_class, reason: null }
+          : { provider: 'initiative_unavailable', provider_class: 'unavailable', reason: this.initiativeReason };
+    }
+    this.emitter.emit({
+      event: 'provider.status',
+      provider: 'initiative_monitor',
+      provider_class: initiative?.llm?.provider_class ?? 'production',
+      status: this.initiative !== null ? 'ok' : initiative?.enabled ? 'down' : 'degraded',
+      reason: this.initiative !== null ? absent('created_at_session_start') : present((this.initiativeReason ?? 'off').slice(0, 300)),
+      retry_attempt: 0,
+      next_retry_ms: absent('not_retrying'),
+    });
     const maai = this.options.maai;
     manifest.vap = {
       provider: 'maai_worker',
       provider_class: maai === null ? 'unavailable' : maai.providerClass,
       reason: maai === null ? (this.options.maaiUnavailableReason ?? 'maai_disabled') : null,
     };
-    void this.options.log.describe({ condition: this.options.condition, policy_id: this.options.policy.policy_id, providers: manifest });
+    void this.options.log.describe({
+      condition: this.options.condition,
+      policy_id: this.options.policy.policy_id,
+      providers: manifest,
+      initiative: {
+        running: this.initiative !== null,
+        reason: this.initiativeReason,
+        prompt_version: initiative?.prompt_version ?? null,
+        model: this.initiative !== null ? (initiative?.llm?.model_version ?? null) : null,
+        persona_id: initiative?.persona?.persona_id ?? null,
+        persona_version: initiative?.persona?.version ?? null,
+        // 波2: 候補は作るだけで、発声（D）にも吸気（H2）にも渡さない。
+        candidates_used_for: 'log_and_research_view_only',
+      },
+    });
   }
 
   /** 切断後に同じセッションへ戻ってきた。 */
@@ -352,6 +393,7 @@ export class Session {
     this.prefetch = new ResponsePrefetch({ speech, time: this.time, emitter: this.emitter });
     this.unsubscribe.push(
       speech.onFinished((finished) => {
+        this.initiative?.onSpeechFinished(finished, this.time.monotonicMs());
         const segment = this.startedInSegment.get(finished.audio_playback_id);
         this.startedInSegment.delete(finished.audio_playback_id);
         this.history.commitAssistantSpoken(
@@ -366,6 +408,43 @@ export class Session {
         );
       }),
     );
+  }
+
+  private buildInitiative(): void {
+    const setup = this.options.providers.initiative;
+    const policy = this.options.policy;
+    if (!setup) {
+      this.initiativeReason = 'initiative_not_configured';
+      return;
+    }
+    if (!setup.enabled || setup.llm === null || setup.persona === null || policy.policy_id !== 'ja') {
+      this.initiativeReason = setup.reason ?? 'initiative_unavailable';
+      return;
+    }
+    try {
+      this.initiative = new InitiativeWiring({
+        llm: setup.llm,
+        persona: setup.persona,
+        policy,
+        emitter: this.emitter,
+        time: this.time,
+        speech: () => this.speech,
+        prompt_version: setup.prompt_version,
+      });
+    } catch (error) {
+      // policy の未校正（null）など。音声の経路は止めない。
+      this.initiativeReason = `initiative_unavailable:${String(error instanceof Error ? error.message : error).slice(0, 200)}`;
+    }
+  }
+
+  /** 候補の状態の正本（E2a）。読み出し専用に使う（試験と研究者向け）。判定が動いていなければ null。 */
+  get candidates(): InitiativeWiring['ledger'] | null {
+    return this.initiative?.ledger ?? null;
+  }
+
+  /** 発話希望の判定が動いているか（研究者画面と試験向け）。止めた・作れなかったときは理由。 */
+  initiativeStatus(): { running: boolean; reason: string | null } {
+    return { running: this.initiative !== null, reason: this.initiativeReason };
   }
 
   private attachMaai(): void {
@@ -535,6 +614,8 @@ export class Session {
     };
     this.transcript = snapshot;
     this.requestCompletion(snapshot);
+    // 判定は非同期（LLM を待たない）。増分で起動し、ターン完了の推定とは条件を共有しない（計画 §4.5）。
+    this.initiative?.onSttResult(result);
   }
 
   /** 推定は非同期。新しい revision の結果だけを残す（E1 が segment の境界で古い値を読まない）。 */
@@ -603,24 +684,31 @@ export class Session {
         }
       }
       const previous = this.turnState;
-      const { state, decisions } = this.turnManager.step(previous, this.inputs(), now);
+      const inputs = this.inputs();
+      let { state, decisions } = this.turnManager.step(previous, inputs, now);
       this.turnState = state;
-      for (const decision of decisions) {
-        if (decision.kind === 'start_speech' && !this.startSpeech(decision.audio_playback_id)) {
-          // 入力で止められなかった拒否。前進を取り消し、segment も STT も進めない（応答を失わない）。
+      // 再生の開始は、他の決定を実行する前に試す。入力で止められなかった拒否なら、その理由を start_blocked_reason に
+      // 入れて同じ tick を前の状態から計算し直す（TurnManager は純粋関数）。segment も STT も進めず（応答を失わない）、
+      // 同じ tick の他の決定（準備、turn.allowed、視線、鮮度）は開始しなかった前提の1組だけを実行する。
+      const start = decisions.find((d) => d.kind === 'start_speech');
+      if (start !== undefined) {
+        const refused = this.startSpeech(start.audio_playback_id);
+        if (refused !== null) {
           this.counters.start_rolled_back += 1;
-          this.turnState = previous;
-          break;
+          ({ state, decisions } = this.turnManager.step(previous, { ...inputs, start_blocked_reason: `start_refused:${refused}` }, now));
+          this.turnState = state;
         }
-        this.dispatch(decision);
       }
+      for (const decision of decisions) this.dispatch(decision, now);
+      // 期限と人の発話の有無だけを同期で進める。LLM の結果は待たない。
+      this.initiative?.tick(now, this.turnState.user_speaking);
     } catch (error) {
       this.counters.tick_errors += 1;
       if (this.counters.tick_errors <= 5) console.error(`[session ${this.session_id}] tick failed:`, error);
     }
   }
 
-  private dispatch(decision: TurnDecision): void {
+  private dispatch(decision: TurnDecision, now: number): void {
     this.counters.decisions[decision.kind] = (this.counters.decisions[decision.kind] ?? 0) + 1;
     switch (decision.kind) {
       case 'prepare':
@@ -628,7 +716,9 @@ export class Session {
         this.prefetch?.execute(decision);
         return;
       case 'start_speech':
-        return; // tick の中で startSpeech が扱う
+        // 波2では TurnManager が始めるのは通常の応答だけ。残っている候補は撤回する（計画 §4.6）。
+        this.initiative?.onNormalResponseStarted(now);
+        return; // 再生の開始は tick の中で startSpeech が扱う
       case 'interrupt_speech':
         this.speech?.stop(decision.audio_playback_id, decision.reason, {
           stop_point: decision.stop_point,
@@ -638,6 +728,7 @@ export class Session {
         return;
       case 'advance_segment':
         this.stt?.advanceSegment(decision.new_segment_id, decision.at_audio_frame);
+        this.initiative?.onSegmentChanged(decision.new_segment_id, now);
         return;
       case 'turn_allowed':
         this.emitter.emit({ event: 'turn.allowed', ...decision.payload });
@@ -654,18 +745,18 @@ export class Session {
     }
   }
 
-  /** start_speech の実行。拒否されたら false（理由を数える）。 */
-  private startSpeech(audio_playback_id: number): boolean {
-    if (this.speech === null) return false;
+  /** start_speech の実行。拒否されたら理由（数える）、始めたら null。 */
+  private startSpeech(audio_playback_id: number): string | null {
+    if (this.speech === null) return 'speech_unavailable';
     const result =
       this.link === null ? { ok: false as const, reason: 'browser_detached' } : this.speech.startChecked(audio_playback_id);
     if (!result.ok) {
       this.counters.start_refused[result.reason] = (this.counters.start_refused[result.reason] ?? 0) + 1;
-      return false;
+      return result.reason;
     }
     // TurnManager は start と同じ tick で segment を進めている。その値が AI の発話の segment。
     this.startedInSegment.set(audio_playback_id, this.turnState.segment_id);
-    return true;
+    return null;
   }
 
   /** VAP の鮮度の切替をログへ（画面だけでなく記録に残す）。VAP ではなく TurnManager の判断。 */
@@ -711,6 +802,7 @@ export class Session {
     this.endPlaybackOnBehalf(`session_closed:${reason}`);
     this.closed = true;
     if (this.tickTimer !== null) clearInterval(this.tickTimer);
+    this.initiative?.close();
     this.link = null;
     for (const unsubscribe of this.unsubscribe.splice(0)) unsubscribe();
     this.prefetch?.dispose();

@@ -32,6 +32,8 @@ export interface RunSummary {
   /** ゲートを通り、話している間に受け取った NEW。 */
   new_during_speech: number;
   new_after_speech: number;
+  /** 話の後に届いて E2a が保留した NEW（候補にしていない。本実装の経路のみ）。 */
+  new_held_post_turn: number;
   withdrawn_by_model: number;
   withdrawn_by_code: number;
   active_at_end: number;
@@ -51,6 +53,43 @@ export interface HoldRow {
   cue_avoided: boolean;
 }
 
+/**
+ * llm.response の output からモデルの JSON を取り出す。スパイクの monitor は解釈済みの JSON を、
+ * 本実装（Gemini プロバイダが発行）は { text, finish_reason } を、台本の LLM は本文の文字列を残すので、どれも読む。
+ */
+export function modelJsonOf(response: RawEvent | undefined): Record<string, unknown> {
+  const value = (response?.output as { value?: unknown } | undefined)?.value;
+  const parse = (text: string): Record<string, unknown> => {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : { unparsed_text: text };
+    } catch {
+      return { unparsed_text: text };
+    }
+  };
+  // 台本の LLM（app/scripted.ts）は本文の文字列をそのまま残す。
+  if (typeof value === 'string') return parse(value);
+  if (!value || typeof value !== 'object') return {};
+  const o = value as Record<string, unknown>;
+  if (typeof o.text === 'string' && o.decision === undefined) return parse(o.text);
+  return o;
+}
+
+/**
+ * llm.request の入力の安定テキスト。スパイクは segments を、本実装はプロンプトの文（#番号（…）: 文）を残す。
+ */
+export function inputSegmentsOf(request: RawEvent): { asr_segment_id: number; stable_text: string }[] {
+  const input = request.input as { segments?: { asr_segment_id: number; stable_text: string }[]; messages?: { text?: string }[] } | undefined;
+  if (input?.segments) return input.segments;
+  const text = input?.messages?.map((m) => m.text ?? '').join('\n') ?? '';
+  const rows: { asr_segment_id: number; stable_text: string }[] = [];
+  for (const line of text.split('\n')) {
+    const m = /^#(\d+)（[^）]*）: (.*)$/u.exec(line);
+    if (m) rows.push({ asr_segment_id: Number(m[1]), stable_text: m[2] as string });
+  }
+  return rows;
+}
+
 export function summarizeRun(events: readonly RawEvent[], speech_end_ms: number): RunSummary {
   const requests = new Map<string, RawEvent>();
   const responses = new Map<string, RawEvent>();
@@ -62,7 +101,7 @@ export function summarizeRun(events: readonly RawEvent[], speech_end_ms: number)
 
   const order: string[] = [];
   for (const e of events) {
-    if (e.event === 'llm.request') {
+    if (e.event === 'llm.request' && (e.purpose === undefined || e.purpose === 'initiative')) {
       requests.set(e.request_id as string, e);
       order.push(e.request_id as string);
     } else if (e.event === 'llm.response') responses.set(e.request_id as string, e);
@@ -94,8 +133,8 @@ export function summarizeRun(events: readonly RawEvent[], speech_end_ms: number)
     const response = responses.get(id);
     const decision = decisions.get(id);
     const discard = discardFor.get(id);
-    const output = ((response?.output as { value?: unknown })?.value ?? {}) as Record<string, unknown>;
-    const segments = ((request.input as { segments?: { asr_segment_id: number; stable_text: string }[] })?.segments ?? []);
+    const output = modelJsonOf(response);
+    const segments = inputSegmentsOf(request);
     const received = (response?.received_at as number | undefined) ?? null;
     const sent = request.sent_at as number;
     const label = (decision?.decision as string) ?? (output.decision as string) ?? 'ERROR';
@@ -150,6 +189,7 @@ export function summarizeRun(events: readonly RawEvent[], speech_end_ms: number)
     gate_rejected_new: rows.filter((r) => r.output.decision === 'NEW' && r.gate === 'rejected').length,
     new_during_speech: news.filter((r) => !r.after_speech_end).length,
     new_after_speech: news.filter((r) => r.after_speech_end).length,
+    new_held_post_turn: rows.filter((r) => r.output.decision === 'NEW' && r.gate_reasons.includes('post_turn_new_held')).length,
     withdrawn_by_model,
     withdrawn_by_code,
     active_at_end: open.size,

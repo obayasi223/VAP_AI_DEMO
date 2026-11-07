@@ -20,6 +20,12 @@ export const jaWithGaze = (signal: 'p_now' | 'p_future' = 'p_now'): PolicyJa =>
     p.gaze = { pause_min_ms: 200, signal, p_threshold: 0.5 };
   });
 
+/** 保持時間つきの視線の設定（原著にない追加。docs/known_gaps.md §7）。 */
+export const jaWithGazeHold = (hold_away_min_ms = 600, re_avert_min_ms = 1000): PolicyJa =>
+  ja((p) => {
+    p.gaze = { pause_min_ms: 200, signal: 'p_now', p_threshold: 0.5, hold_away_min_ms, re_avert_min_ms };
+  });
+
 export const T0 = 100_000;
 
 /** pAi は AI 側の値。向きの変換は実物（readVap）を通すので、ここは生の配列で作る（ch1=mic, ch2=sys）。 */

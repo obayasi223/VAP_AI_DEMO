@@ -4,17 +4,20 @@
 //   cd tools/provider_probe
 //   node --env-file=../../.env reading_roundtrip.mjs --conditions el_ja,el_nolang,el_hira_ja,gemini --yes
 // Stops at once on a quota or auth error (exit 4) and when a cap would be crossed (exit 5).
+// reading_tts experiment (README): --set new|old|both --out reading_tts with el_ja,el_risky_ja,el_all_ja. The risky/all
+// texts come from lib/reading_variants.json (reading_variants.ts). A clip whose text was already synthesized under the same
+// settings (here or in out/reading_roundtrip) is copied instead of synthesized again: same text, same request, one take.
 import { parseArgs } from 'node:util';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireEnv, requireGoogleStt, requireConfirm, fail, redact, sleep, pcmToWav } from './lib/common.mjs';
 import { wsUrl, connect } from './lib/tts.mjs';
 import { makeClient, durationMs } from './lib/stt.mjs';
-import { SENTENCES } from './lib/reading_sentences.mjs';
+import { SENTENCES, SENTENCES_NEW } from './lib/reading_sentences.mjs';
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), 'out', 'reading_roundtrip');
-const LEDGER = join(OUT, 'ledger.json');
+const HERE = dirname(fileURLToPath(import.meta.url));
+const VARIANTS = JSON.parse(readFileSync(join(HERE, 'lib', 'reading_variants.json'), 'utf8'));
 const EL_MODEL = 'eleven_flash_v2_5';
 const GEMINI_MODEL = 'gemini-3.8-flash-lite-tts';
 const EL_RATE = 24000;
@@ -38,12 +41,17 @@ const CONDITIONS = {
   // Same as el_ja and el_hira_ja, but close_context only after the audio has gone quiet. Checks for a cut tail.
   el_ja_late_close: { provider: 'elevenlabs', kana: false, query: { language_code: 'ja' }, lateClose: true },
   el_hira_ja_late_close: { provider: 'elevenlabs', kana: true, query: { language_code: 'ja' }, lateClose: true },
+  // reading_tts: the text the orchestrator would send with TTS_READING_MODE=risky / all.
+  el_risky_ja: { provider: 'elevenlabs', variant: 'risky', query: { language_code: 'ja' } },
+  el_all_ja: { provider: 'elevenlabs', variant: 'all', query: { language_code: 'ja' } },
 };
 
 const { values: args } = parseArgs({
   options: {
     conditions: { type: 'string', default: 'el_ja,el_nolang,el_hira_ja,gemini' },
     sentences: { type: 'string', default: '' },
+    set: { type: 'string', default: 'old' },
+    out: { type: 'string', default: 'reading_roundtrip' },
     'max-el-chars': { type: 'string', default: '1000' },
     'max-stt-s': { type: 'string', default: '180' },
     'synth-only': { type: 'boolean', default: false },
@@ -61,7 +69,11 @@ class StopRun extends Error {
 const wanted = args.conditions.split(',');
 for (const c of wanted) if (!CONDITIONS[c]) throw new Error(`unknown condition ${c}`);
 const ids = args.sentences ? new Set(args.sentences.split(',')) : null;
-const sentences = SENTENCES.filter((s) => !ids || ids.has(s.id));
+const pool = args.set === 'new' ? SENTENCES_NEW : args.set === 'both' ? [...SENTENCES, ...SENTENCES_NEW] : SENTENCES;
+const sentences = pool.filter((s) => !ids || ids.has(s.id));
+const OUT = join(HERE, 'out', args.out);
+const LEDGER = join(OUT, 'ledger.json');
+const REUSE_DIRS = [...new Set([OUT, join(HERE, 'out', 'reading_roundtrip')])];
 const maxElChars = Number(args['max-el-chars']);
 const maxSttS = Number(args['max-stt-s']);
 
@@ -76,10 +88,65 @@ const ledger = existsSync(LEDGER)
 const saveLedger = () => writeFileSync(LEDGER, `${JSON.stringify(ledger, null, 2)}\n`);
 
 const clipPath = (cond, s, ext) => join(OUT, `${cond}__${s.id}.${ext}`);
-const textOf = (cond, s) => (CONDITIONS[cond].kana ? s.kana : s.kanji);
+const textOf = (cond, s) => {
+  const { variant, kana } = CONDITIONS[cond];
+  if (variant) return VARIANTS[s.id][variant];
+  return kana ? s.kana : s.kanji;
+};
+const sameRequest = (a, b) =>
+  CONDITIONS[a].provider === CONDITIONS[b].provider &&
+  !CONDITIONS[a].lateClose === !CONDITIONS[b].lateClose &&
+  JSON.stringify(CONDITIONS[a].query ?? CONDITIONS[a].body ?? null) === JSON.stringify(CONDITIONS[b].query ?? CONDITIONS[b].body ?? null);
+
+/** An earlier clip with the same text and the same request settings, if any. */
+function findReusable(cond, s) {
+  const text = textOf(cond, s);
+  for (const dir of REUSE_DIRS) {
+    for (const other of Object.keys(CONDITIONS)) {
+      if (!sameRequest(cond, other)) continue;
+      if (dir === OUT && other === cond) continue;
+      for (const sid of [s.id]) {
+        const tts = join(dir, `${other}__${sid}.tts.json`);
+        if (!existsSync(tts) || !existsSync(join(dir, `${other}__${sid}.wav`))) continue;
+        if (JSON.parse(readFileSync(tts, 'utf8')).text === text) return { dir, cond: other, id: sid };
+      }
+    }
+  }
+  return null;
+}
+
+/** Copies an earlier clip (and its transcript) instead of synthesizing again. */
+function reuseClip(cond, s, from) {
+  const src = (ext) => join(from.dir, `${from.cond}__${from.id}.${ext}`);
+  copyFileSync(src('wav'), clipPath(cond, s, 'wav'));
+  const meta = JSON.parse(readFileSync(src('tts.json'), 'utf8'));
+  writeFileSync(clipPath(cond, s, 'tts.json'), `${JSON.stringify({ ...meta, cond, reused_from: `${from.dir.split('/').pop()}/${from.cond}__${from.id}` }, null, 2)}\n`);
+  if (existsSync(src('stt.json'))) {
+    const stt = JSON.parse(readFileSync(src('stt.json'), 'utf8'));
+    writeFileSync(clipPath(cond, s, 'stt.json'), `${JSON.stringify({ ...stt, cond, sent_s_this_run: 0 }, null, 2)}\n`);
+  }
+}
 
 const jobs = wanted.flatMap((cond) => sentences.map((s) => ({ cond, s })));
-const toSynth = jobs.filter((j) => !existsSync(clipPath(j.cond, j.s, 'wav')));
+// Copy what can be reused first, so that two conditions with the same text in this run make one request.
+let reused = 0;
+for (const { cond, s } of jobs) {
+  if (existsSync(clipPath(cond, s, 'wav'))) continue;
+  const from = findReusable(cond, s);
+  if (from) {
+    reuseClip(cond, s, from);
+    reused += 1;
+  }
+}
+const seen = new Set();
+const toSynth = jobs.filter((j) => {
+  if (existsSync(clipPath(j.cond, j.s, 'wav'))) return false;
+  const key = `${CONDITIONS[j.cond].provider}|${JSON.stringify(CONDITIONS[j.cond].query ?? null)}|${j.s.id}|${textOf(j.cond, j.s)}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  return true;
+});
+if (reused) console.log(`再利用 ${reused} 件（同じ文・同じ設定の既存のテイク）`);
 const plannedEl = toSynth.filter((j) => CONDITIONS[j.cond].provider.startsWith('elevenlabs')).reduce((n, j) => n + [...textOf(j.cond, j.s)].length, 0);
 requireConfirm(args, `新規合成 ${toSynth.length} 件、ElevenLabs 約 ${plannedEl} 文字（累計 ${ledger.elevenlabs_chars}）、STT 累計 ${ledger.stt_sent_s.toFixed(1)} 秒`);
 if (ledger.elevenlabs_chars + plannedEl > maxElChars) {
@@ -291,6 +358,11 @@ async function main() {
   for (const { cond, s } of jobs) {
     const wavPath = clipPath(cond, s, 'wav');
     if (existsSync(wavPath)) continue;
+    const from = findReusable(cond, s);
+    if (from) {
+      reuseClip(cond, s, from);
+      continue;
+    }
     const text = textOf(cond, s);
     const provider = CONDITIONS[cond].provider;
     const got = provider === 'gemini' ? await synthGemini(text) : provider === 'elevenlabs_http' ? await synthElevenLabsHttp(cond, text) : await synthElevenLabs(cond, text);
@@ -311,8 +383,20 @@ async function main() {
   }
 
   // Phase 2: STT, a few streams at once. Each stream runs at real time.
-  const pending = jobs.filter((j) => !existsSync(clipPath(j.cond, j.s, 'stt.json')));
-  const client = pending.length ? await makeClient(STT.location) : null;
+  // A copied clip takes the transcript of its source once that exists; it is transcribed only if the source is not.
+  const copyTranscript = ({ cond, s }) => {
+    const meta = JSON.parse(readFileSync(clipPath(cond, s, 'tts.json'), 'utf8'));
+    if (!meta.reused_from) return false;
+    const src = join(HERE, 'out', `${meta.reused_from}.stt.json`);
+    if (!existsSync(src)) return false;
+    const stt = JSON.parse(readFileSync(src, 'utf8'));
+    writeFileSync(clipPath(cond, s, 'stt.json'), `${JSON.stringify({ ...stt, cond, sent_s_this_run: 0 }, null, 2)}\n`);
+    return true;
+  };
+  const waiting = jobs.filter((j) => !existsSync(clipPath(j.cond, j.s, 'stt.json')));
+  const pending = waiting.filter((j) => !JSON.parse(readFileSync(clipPath(j.cond, j.s, 'tts.json'), 'utf8')).reused_from);
+  const later = waiting.filter((j) => !pending.includes(j));
+  const client = pending.length || later.length ? await makeClient(STT.location) : null;
   let stop = null;
   const worker = async () => {
     while (pending.length && !stop) {
@@ -338,6 +422,8 @@ async function main() {
     }
   };
   await Promise.all([worker(), worker(), worker(), worker()]);
+  for (const j of later) if (!copyTranscript(j) && !stop) pending.push(j);
+  if (pending.length && !stop) await Promise.all([worker(), worker()]);
   if (client) await client.close();
   if (stop) throw stop;
   console.log(JSON.stringify(ledger));

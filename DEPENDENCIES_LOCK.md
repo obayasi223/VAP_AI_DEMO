@@ -39,6 +39,11 @@ Node 24 の理由は `docs/provider_matrix.md` §1 の #3（`@google-cloud/speec
 | @google-cloud/speech | 8.2.1 | Apache-2.0 | apps/orchestrator の STT（C） |
 | playwright | 1.65.0 | Apache-2.0 | apps/web の実ブラウザ試験（A） |
 | esbuild | 0.28.2 | MIT | apps/web の Worklet と Worker の束ね（A） |
+| kuromoji | 0.1.2 | Apache-2.0（辞書 mecab-ipadic-2.7.0-20070801 は NAIST／ICOT の条件。`THIRD_PARTY_NOTICES.md`） | apps/orchestrator の読み（口形の読み、TTS の読みの変換。`apps/orchestrator/src/speech/reading/`） |
+| @types/kuromoji | 0.1.3 | MIT | 型（devDependencies） |
+
+kuromoji の推移的な依存: async 2.6.4（MIT）、lodash 4.18.1（MIT、async 経由）、doublearray 0.0.2（MIT）、zlibjs 0.3.1（MIT）、@types/doublearray（MIT、型）。
+kuromoji は 2018 年から更新がない（0.1.2 が最新）。辞書の読み込みは起動時に1回で、この環境の実測は 0.7 秒、プロセスの RSS が約 400MB 増える（2026-11-08）。解析は 1 文で中央値 0.28ms、95% 点 0.67ms。
 
 **VRM モデルのライセンス:** 埋め込みメタは CC0。VRoid 公式ページでの確認は未了（`THIRD_PARTY_NOTICES.md`）。上の表はライブラリのライセンスで、モデルの確認の代わりにならない。
 

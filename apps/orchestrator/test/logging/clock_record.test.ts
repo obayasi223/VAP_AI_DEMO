@@ -3,6 +3,7 @@ import {
   atFromBrowser,
   computeClockSample,
   createEventEmitter,
+  draftFromClockReport,
   ManualTimeSource,
   MemoryEventSink,
 } from '@llm-vap/contracts';
@@ -43,6 +44,21 @@ describe('BrowserClockRecorder', () => {
     recorder.record({ offset_ms: 20, rtt_ms: 4, uncertainty_ms: 2 });
     expect(old.toServerMs(0)).toBe(10);
     expect(recorder.mapping()!.toServerMs(0)).toBe(20);
+  });
+});
+
+describe('clock.report の変換は1か所', () => {
+  it('BrowserClockRecorder の clock.sync は契約の draftFromClockReport と同じ中身', () => {
+    const { sink, emitter } = setup();
+    const report = { type: 'clock.report' as const, offset_ms: -812.5, rtt_ms: 4, uncertainty_ms: 2, samples: 8, client_t_ms: 900 };
+    new BrowserClockRecorder(emitter).record(report);
+    const { sink: expectedSink, emitter: expectedEmitter } = setup();
+    expectedEmitter.emit(draftFromClockReport(report));
+    const strip = (e: Record<string, unknown>) => {
+      const { event_id: _id, seq: _seq, t_monotonic_ms: _t, t_wall: _w, ...rest } = e;
+      return rest;
+    };
+    expect(sink.ofType('clock.sync').map(strip)).toEqual(expectedSink.ofType('clock.sync').map(strip));
   });
 });
 

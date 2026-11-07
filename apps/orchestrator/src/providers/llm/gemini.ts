@@ -100,6 +100,12 @@ export interface GeminiProviderOptions {
   base_url?: string;
   max_output_tokens?: number;
   timeout_ms?: number;
+  /**
+   * provider.status に出す名前。既定は provider（'gemini'）。同じセッションで用途の違う Gemini を2つ持つとき
+   * （応答用と発話希望の判定用）、研究者画面の行が混ざらないように判定用へ 'gemini:initiative' などを渡す。
+   * cost.usage と llm.* の provider は 'gemini' のまま（単価の照合は provider で引き、用途は purpose で分かる）。
+   */
+  status_name?: string;
 }
 
 interface WireChunk {
@@ -205,6 +211,8 @@ export class GeminiLlmProvider implements LlmProvider {
   private readonly time: TimeSource;
   private readonly emitter: EventEmitter;
   private lastStatus: ProviderHealth | null = null;
+  /** provider.status の名前（GeminiProviderOptions.status_name）。 */
+  readonly status_name: string;
 
   constructor(options: GeminiProviderOptions) {
     if (!options.api_key) {
@@ -223,6 +231,7 @@ export class GeminiLlmProvider implements LlmProvider {
     this.provider_class = this.baseUrl === GEMINI_DEFAULT_BASE_URL ? 'production' : 'test_double';
     this.maxOutputTokens = options.max_output_tokens ?? 1024;
     this.timeoutMs = options.timeout_ms ?? 30_000;
+    this.status_name = options.status_name ?? this.provider;
   }
 
   /**
@@ -459,7 +468,7 @@ export class GeminiLlmProvider implements LlmProvider {
     this.lastStatus = status;
     this.emitter.emit({
       event: 'provider.status',
-      provider: this.provider,
+      provider: this.status_name,
       provider_class: this.provider_class,
       status,
       reason: reason === null ? absent('healthy') : present(reason),

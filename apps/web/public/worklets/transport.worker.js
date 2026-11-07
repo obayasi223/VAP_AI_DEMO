@@ -19970,15 +19970,23 @@ var AlignmentItem = external_exports.strictObject({
   /** この再生の先頭からの時刻。 */
   start_ms: NonNegativeMs,
   end_ms: NonNegativeMs,
-  granularity: external_exports.enum(["word", "char"])
+  granularity: external_exports.enum(["word", "char"]),
+  /**
+   * 語の読み（カタカナの発音）。形態素解析の推定で、誤りうる（reading_source を見る）。口形にだけ使う。
+   * 表記がかなで読みも同じ語と、読みの分からない語には付かない。
+   */
+  reading: external_exports.string().min(1).optional()
 });
 var PlaybackAlignmentSource = external_exports.enum(["provider_char", "estimated_time_proportional"]);
+var PlaybackReadingSource = external_exports.enum(["morphological_estimate"]);
 var PlaybackAlignment = external_exports.strictObject({
   type: external_exports.literal("playback.alignment"),
   audio_playback_id: AudioPlaybackId,
   generation: Generation,
   items: external_exports.array(AlignmentItem),
-  source: PlaybackAlignmentSource.optional()
+  source: PlaybackAlignmentSource.optional(),
+  /** items に reading があるときの由来。morphological_estimate は形態素解析の辞書の推定（実測ではない）。 */
+  reading_source: PlaybackReadingSource.optional()
 });
 var SessionStatus = external_exports.strictObject({
   type: external_exports.literal("session.status"),

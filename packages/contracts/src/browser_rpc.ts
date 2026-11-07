@@ -304,6 +304,11 @@ export const AlignmentItem = z.strictObject({
   start_ms: NonNegativeMs,
   end_ms: NonNegativeMs,
   granularity: z.enum(['word', 'char']),
+  /**
+   * 語の読み（カタカナの発音）。形態素解析の推定で、誤りうる（reading_source を見る）。口形にだけ使う。
+   * 表記がかなで読みも同じ語と、読みの分からない語には付かない。
+   */
+  reading: z.string().min(1).optional(),
 });
 export type AlignmentItem = z.infer<typeof AlignmentItem>;
 
@@ -314,6 +319,10 @@ export type AlignmentItem = z.infer<typeof AlignmentItem>;
 export const PlaybackAlignmentSource = z.enum(['provider_char', 'estimated_time_proportional']);
 export type PlaybackAlignmentSource = z.infer<typeof PlaybackAlignmentSource>;
 
+/** 語の読みの由来。 */
+export const PlaybackReadingSource = z.enum(['morphological_estimate']);
+export type PlaybackReadingSource = z.infer<typeof PlaybackReadingSource>;
+
 /** 口形と発話済みの計算に使う語時刻。TTS から届くたびに差分で送る。 */
 export const PlaybackAlignment = z.strictObject({
   type: z.literal('playback.alignment'),
@@ -321,6 +330,8 @@ export const PlaybackAlignment = z.strictObject({
   generation: Generation,
   items: z.array(AlignmentItem),
   source: PlaybackAlignmentSource.optional(),
+  /** items に reading があるときの由来。morphological_estimate は形態素解析の辞書の推定（実測ではない）。 */
+  reading_source: PlaybackReadingSource.optional(),
 });
 export type PlaybackAlignment = z.infer<typeof PlaybackAlignment>;
 

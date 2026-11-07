@@ -477,6 +477,28 @@ export class WavScriptedTtsProvider implements TtsProvider {
 export const DEFAULT_SCRIPTED_REPLY =
   'なるほど、それは大変ですね。朝の光を浴びると、体が目覚めやすくなると言われています。まずは、起きたらすぐにカーテンを開けてみてはどうでしょうか。';
 
+/**
+ * 発話希望の判定（purpose=initiative）への台本の返答。常に NONE で、候補を作らない。
+ * 判定の経路（構造化出力の解釈、E2a への適用、initiative.decision）を E2E で通すためのもので、判断ではない。
+ */
+export const SCRIPTED_INITIATIVE_REPLY = JSON.stringify({
+  reason: '台本の LLM の固定の返答（判定はしていない）',
+  why_now: '',
+  cost_of_waiting: '',
+  resolution_outlook: '',
+  decision: 'NONE',
+  target_candidate_id: '',
+  intent_type: '',
+  evidence_span: '',
+  evidence_segment_ids: [],
+  proposed_utterance: '',
+  expiry_policy: '',
+  urgency: '',
+  withdraw_reason: '',
+  withdraw_evidence_span: '',
+  withdraw_evidence_segment_ids: [],
+});
+
 export interface ScriptedReplyLlmOptions {
   time: TimeSource;
   emitter?: EventEmitter;
@@ -517,7 +539,8 @@ export class ScriptedReplyLlm implements LlmProvider {
   }
 
   stream(request: LlmRequest): LlmStream {
-    const { time, emitter, reply, chars_per_delta, delta_delay_ms, first_delta_delay_ms } = this.options;
+    const { time, emitter, chars_per_delta, delta_delay_ms, first_delta_delay_ms } = this.options;
+    const reply = request.purpose === 'initiative' ? SCRIPTED_INITIATIVE_REPLY : this.options.reply;
     const sent_at = time.monotonicMs();
     emitter?.emit({
       event: 'llm.request',

@@ -18,6 +18,7 @@ import type {
   PlaybackAlignmentSource,
   PlaybackEnded,
   PlaybackPosition,
+  PlaybackReadingSource,
   PlaybackStarted,
   PlaybackStopMode,
   PrepareRequest,
@@ -37,6 +38,7 @@ import type {
 } from '@llm-vap/contracts';
 import { AlignmentTimeline, proportionalText } from './alignment_timeline';
 import type { ResponsePromptBuilder } from './response_prompt';
+import { SpeechTextTrack, sharedReadingOptions, type ReadingTrackOptions } from './reading';
 
 /** provider_matrix §6.6: 5 が上限だが、上限時の挙動が未確認なので 4 本に抑える。 */
 const MAX_ACTIVE_CONTEXTS = 4;
@@ -67,11 +69,22 @@ export interface SpeechAudioSink {
   alignment(message: {
     audio_playback_id: number;
     generation: number;
-    items: { text: string; start_ms: number; end_ms: number; granularity: 'word' }[];
+    items: WordItem[];
     /** 推定の語時刻のときだけ付く。ないときはプロバイダが返した時刻。 */
     source?: PlaybackAlignmentSource;
+    /** items に reading があるときだけ付く。 */
+    reading_source?: PlaybackReadingSource;
   }): void;
   stop(message: { audio_playback_id: number; generation: number; stop: PlaybackStopMode; reason: string }): void;
+}
+
+interface WordItem {
+  text: string;
+  start_ms: number;
+  end_ms: number;
+  granularity: 'word';
+  /** 口形の読み（形態素解析の推定、カタカナ）。 */
+  reading?: string;
 }
 
 export type SpeechState = 'preparing' | 'ready' | 'playing' | 'stopping' | 'finished' | 'cancelled' | 'failed';
@@ -110,6 +123,11 @@ export interface SpeechGeneratorOptions {
   /** policy.speech.is_ready_buffer_ms */
   is_ready_buffer_ms: number;
   first_playback_id?: number;
+  /**
+   * 読み（口形の reading と TTS の文の変換）。省略時は起動時に読み込んだ共有の設定（reading/runtime.ts の initReading）。
+   * initReading の前なら解析器なしで、従来どおり（TTS の文は元の文のまま、reading なし）。
+   */
+  reading?: ReadingTrackOptions;
 }
 
 interface PlannedStop {
@@ -134,7 +152,12 @@ interface Entry {
   timeline: AlignmentTimeline;
   /** TtsChunk.estimated_alignment の時間軸。語時刻の送信にだけ使い、停止点と発話済みの計算には使わない。 */
   estimatedTimeline: AlignmentTimeline;
+  /** TTS へ送った文。読みの変換が有効なら元の文（track.original）と違う。 */
   textSent: string;
+  /** 元の文・TTS の文・alignment の文字の対応と、口形の読み。 */
+  track: SpeechTextTrack;
+  /** timeline の確定済みの語が覆う alignment の文字数（UTF-16）。語の位置を track へ渡す。 */
+  alignmentWordChars: number;
   /**
    * 合成済みの音声に対応する文字数（chunk の alignment か estimated_alignment の chars の合計）。
    * TTS へ送った文の全部が合成済みとは限らない（Gemini は flush ごとに1要求で、次の文はまだ音声がない）。
@@ -144,7 +167,7 @@ interface Entry {
   synthLost: boolean;
   playGeneration: number | null;
   nextFrameSeq: number;
-  pendingWords: { text: string; start_ms: number; end_ms: number; granularity: 'word' }[];
+  pendingWords: WordItem[];
   pendingEstimatedWords: { text: string; start_ms: number; end_ms: number; granularity: 'word' }[];
   position: { written_ms: number; at_ms: number } | null;
   firstWrittenAt: number | null;
@@ -236,6 +259,8 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
       timeline: new AlignmentTimeline(),
       estimatedTimeline: new AlignmentTimeline(),
       textSent: '',
+      track: new SpeechTextTrack(this.options.reading ?? sharedReadingOptions()),
+      alignmentWordChars: 0,
       synthesizedChars: 0,
       synthLost: false,
       playGeneration: null,
@@ -287,6 +312,8 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
         await this.streamResponse(entry);
       }
       if (TERMINAL.has(entry.state) || entry.state === 'stopping') return;
+      // 読みの変換で句読点までためていた残り。
+      this.sendConverted(entry, entry.track.end());
       if (entry.textSent === '') {
         this.fail(entry, 'empty_text');
         return;
@@ -325,10 +352,18 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
 
   private sendToTts(entry: Entry, text: string): void {
     if (text === '' || !entry.context) return;
-    entry.context.sendText(text);
-    entry.textSent += text;
+    // 変換が無効なら text のまま。有効なら句読点までためて、置き換えた文を返す。
+    this.sendConverted(entry, entry.track.push(text));
     // 短文は flush がないと音声が始まらない（TtsContext.flush）。
     if (SENTENCE_END.test(text)) entry.context.flush();
+    // 口形の読みの解析は送った後（1文 1ms 未満）。
+    entry.track.analyzeSent();
+  }
+
+  private sendConverted(entry: Entry, ttsText: string): void {
+    if (ttsText === '' || !entry.context) return;
+    entry.context.sendText(ttsText);
+    entry.textSent += ttsText;
   }
 
   private closeInputQuietly(entry: Entry): void {
@@ -368,14 +403,21 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     if (chunk.alignment.value === null && chunk.pcm.length > 0) this.counters.alignment_gaps += 1;
     const chars = chunk.alignment.value?.chars ?? chunk.estimated_alignment?.chars;
     if (chars) entry.synthesizedChars += [...chars.join('')].length;
+    const provided = chunk.alignment.value;
+    // timeline が受け取る alignment（3つの配列の長さがそろう）だけを track へ渡し、文字の位置をそろえる。
+    if (
+      provided &&
+      provided.chars.length === provided.char_start_ms.length &&
+      provided.chars.length === provided.char_duration_ms.length
+    ) {
+      entry.track.addAlignment(provided.chars);
+    }
     entry.timeline.addChunk({
       sample_rate_hz: chunk.sample_rate_hz,
       samples: chunk.pcm.length,
       alignment: chunk.alignment,
     });
-    entry.pendingWords.push(
-      ...entry.timeline.confirm(chunk.is_last).map((word) => ({ ...word, granularity: 'word' as const })),
-    );
+    entry.pendingWords.push(...this.withReadings(entry, entry.timeline.confirm(chunk.is_last)));
     // プロバイダの時刻がある chunk では推定を使わない。音声の長さは時間軸を保つために足す。
     entry.estimatedTimeline.addChunk({
       sample_rate_hz: chunk.sample_rate_hz,
@@ -404,6 +446,16 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
       return;
     }
     if (entry.state === 'preparing' && this.bufferReached(entry)) this.setState(entry, 'ready', null);
+  }
+
+  /** 確定した語に口形の読みを付ける。語は alignment の文字を先頭から隙間なく覆う（AlignmentTimeline.confirm）。 */
+  private withReadings(entry: Entry, words: { text: string; start_ms: number; end_ms: number }[]): WordItem[] {
+    return words.map((word) => {
+      const a0 = entry.alignmentWordChars;
+      entry.alignmentWordChars += word.text.length;
+      const reading = entry.track.readingForAlignment(a0, entry.alignmentWordChars, word.text);
+      return reading === null ? { ...word, granularity: 'word' as const } : { ...word, granularity: 'word' as const, reading };
+    });
   }
 
   /** 定義: 最初の PCM が規定量バッファされた状態。規定量より短い発話は合成の完了で満たす。 */
@@ -512,7 +564,13 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
   private sendWords(entry: Entry): void {
     const generation = entry.playGeneration as number;
     if (entry.pendingWords.length > 0) {
-      this.options.sink.alignment({ audio_playback_id: entry.id, generation, items: entry.pendingWords });
+      const withReading = entry.pendingWords.some((word) => word.reading !== undefined);
+      this.options.sink.alignment({
+        audio_playback_id: entry.id,
+        generation,
+        items: entry.pendingWords,
+        ...(withReading ? { reading_source: 'morphological_estimate' as const } : {}),
+      });
       entry.pendingWords = [];
     }
     if (entry.pendingEstimatedWords.length > 0) {
@@ -656,7 +714,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
       entry.contextOpen = false;
       entry.synthComplete = true;
       entry.synthLost = true;
-      entry.pendingWords.push(...entry.timeline.confirm(true).map((word) => ({ ...word, granularity: 'word' as const })));
+      entry.pendingWords.push(...this.withReadings(entry, entry.timeline.confirm(true)));
       entry.pendingEstimatedWords.push(
         ...entry.estimatedTimeline.confirm(true).map((word) => ({ ...word, granularity: 'word' as const })),
       );
@@ -742,6 +800,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
         spoken_text: text,
         spoken_text_precision: precision,
         samples_written: message.samples_written,
+        ...(entry.track.transforms && entry.textSent !== entry.track.original ? { tts_text: entry.textSent } : {}),
       };
       if (interrupted && planned) {
         this.options.emitter.emit({
@@ -799,16 +858,20 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     completed: boolean,
   ): { text: string; precision: SpokenTextPrecision } {
     const heardMs = Math.max(0, samples_written / SAMPLES_PER_MS - (entry.outputLatencyMs ?? 0));
+    const track = entry.track;
     if (entry.timeline.alignment_complete) {
+      const aligned = completed ? entry.timeline.fullText() : entry.timeline.textUntil(heardMs);
       return {
-        text: completed ? entry.timeline.fullText() : entry.timeline.textUntil(heardMs),
+        // 読みの変換では alignment の文字は TTS の文なので、元の文へ戻す（置き換えた語の途中なら、その語の前まで）。
+        text: track.transforms ? track.originalForAlignmentPrefix(aligned.length) : aligned,
         precision: 'alignment_char',
       };
     }
     // 比例配分は合成済みの音声に対応する文に限る。最後まで再生した（completed）ときも、合成済みの範囲が上限。
     const synthesized = this.synthesizedText(entry);
+    const heard = completed ? synthesized : proportionalText(synthesized, heardMs, entry.timeline.duration_ms);
     return {
-      text: completed ? synthesized : proportionalText(synthesized, heardMs, entry.timeline.duration_ms),
+      text: track.transforms ? track.originalForTtsPrefix(heard.length) : heard,
       precision: 'time_proportional',
     };
   }

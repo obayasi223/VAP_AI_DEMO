@@ -49,6 +49,16 @@ export interface SessionManifestDetails {
   condition: Condition;
   policy_id: string;
   providers: Record<string, ManifestProvider>;
+  /** 発話希望の判定（G）の状態。止めた・作れなかったときは理由。 */
+  initiative?: {
+    running: boolean;
+    reason: string | null;
+    prompt_version: string | null;
+    model: string | null;
+    persona_id: string | null;
+    persona_version: number | null;
+    candidates_used_for: string;
+  };
 }
 /** session.log の状態を provider.status に出すときの名前。 */
 export const SESSION_LOG_PROVIDER = 'session_log';

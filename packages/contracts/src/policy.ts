@@ -141,6 +141,13 @@ export const PolicyJa = z.strictObject({
     /** p_now と p_future のどちらで判定するか、原著に書かれていない（計画 §4.2）。 */
     signal: z.enum(['p_now', 'p_future']).nullable(),
     p_threshold: Uncalibrated(Probability),
+    /**
+     * 逸らした後、user へ戻すまでの最短（原著にない、ちらつきの防止。docs/known_gaps.md §7）。
+     * 人の発話、割り込み、AI の発話の終わり、VAP の鮮度切れではこれを待たずに戻す。省略と null は保持なし。
+     */
+    hold_away_min_ms: Uncalibrated(NonNegativeMs).optional(),
+    /** user へ戻した後、再び逸らすまでの最短（原著にない）。省略と null は保持なし。 */
+    re_avert_min_ms: Uncalibrated(NonNegativeMs).optional(),
   }),
   similarity: z.strictObject({
     method: NonEmptyString,

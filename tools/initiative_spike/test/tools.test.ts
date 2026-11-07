@@ -4,7 +4,9 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ManualTimeSource, ResearchEvent } from '@llm-vap/contracts';
+import { ManualTimeSource, MemoryEventSink, ResearchEvent, createEventEmitter } from '@llm-vap/contracts';
+import { ScriptedReplyLlm } from '../../../apps/orchestrator/src/app/scripted';
+import { InitiativeWiring, NO_CANDIDATE_SPEECH } from '../../../apps/orchestrator/src/session/initiative_wiring';
 import { StableTranscriptView } from '../../../apps/orchestrator/src/cognition/initiative/transcript_view';
 import { CallBudget, CallBudgetExceeded } from '../lib/call_budget';
 import { textFromEvent } from '../lib/gemini_thin';
@@ -117,6 +119,44 @@ describe('リプレイ', () => {
       },
     });
     expect(seen).toEqual(events.map((e) => e.transcript_revision));
+  });
+});
+
+describe('本実装の経路でのリプレイ（run_replay.ts と同じ部品。LLM は台本で、判断は試していない）', () => {
+  it('手書きの素材を InitiativeWiring に流すと、プロバイダの llm.* から集計でき、入力の区間も読める', async () => {
+    const scenario = loadScenarios().find((s) => s.id === 'C2')!;
+    const source = readSttJsonl(sttPath('handwritten', 'C2'));
+    const time = new ManualTimeSource();
+    const sink = new MemoryEventSink();
+    const emitter = createEventEmitter({ time, session_id: 's', condition: () => 'initiative_no_cue', sink });
+    const wiring = new InitiativeWiring({
+      llm: new ScriptedReplyLlm({ time, emitter, first_delta_delay_ms: 0, delta_delay_ms: 0, chars_per_delta: 100_000 }),
+      persona: loadPersona(scenario),
+      policy: loadPolicy(),
+      emitter,
+      time,
+      speech: () => NO_CANDIDATE_SPEECH,
+      trigger: { min_new_stable_chars: 40, min_new_chars_at_boundary: null },
+    });
+    await replayStt(source, {
+      time,
+      waitUntil: async (t) => {
+        time.set(Math.max(t, time.monotonicMs()));
+      },
+      onEvent: (e) => {
+        wiring.onStt(e);
+      },
+    });
+    await wiring.monitor.finishInput();
+    const events = sink.events as unknown as RawEvent[];
+    const summary = summarizeRun(events, time.monotonicMs());
+    expect(summary.llm_requests).toBeGreaterThan(1);
+    expect(summary.llm_requests).toBe(wiring.monitor.requestCount());
+    expect(summary.rows.every((r) => r.decision === 'NONE' && r.gate === 'not_applicable')).toBe(true);
+    expect(summary.rows[0]?.stable_input).toMatch(/^#\d+ /);
+    expect(summary.rows[0]?.output.decision).toBe('NONE');
+    // 台本の LLM は cost.usage を出さず、monitor も出さない（二重計上しない）。
+    expect(sink.ofType('cost.usage')).toHaveLength(0);
   });
 });
 

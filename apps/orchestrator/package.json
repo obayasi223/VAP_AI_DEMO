@@ -8,13 +8,16 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@llm-vap/analysis": "0.1.0",
     "@google-cloud/speech": "8.2.1",
     "@llm-vap/contracts": "0.1.0",
+    "kuromoji": "0.1.2",
     "ws": "8.22.1"
   },
   "devDependencies": {
     "@llm-vap/testkit": "0.1.0",
-    "@types/ws": "8.18.2"
+    "@types/ws": "8.18.2",
+    "@types/kuromoji": "0.1.3"
   },
   "engines": {
     "node": ">=24 <25"

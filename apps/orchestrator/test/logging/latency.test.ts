@@ -6,7 +6,7 @@ import {
   latencyStat,
   quantile,
   type LatencyRow,
-} from '../../src/logging';
+} from '@llm-vap/analysis';
 import { BROWSER, envelope } from './helpers';
 
 function row(rows: LatencyRow[], id: string, breakdown: string | null = null): LatencyRow {

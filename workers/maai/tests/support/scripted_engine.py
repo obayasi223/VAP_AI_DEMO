@@ -6,6 +6,7 @@ is_fake=True、model_variant=FAKE_NOT_MAAI を名乗る。本番の入口はこ�
 
 from __future__ import annotations
 
+import os
 import time
 
 import numpy as np
@@ -21,6 +22,7 @@ class ScriptedEngine:
         skip_first: bool = True,
         fault: str | None = None,
         fault_after: int = 0,
+        gate_path: str | None = None,
     ) -> None:
         self.info = EngineInfo(
             maai_version="scripted",
@@ -33,6 +35,9 @@ class ScriptedEngine:
         self.skip_first = skip_first
         self.fault = fault
         self.fault_after = fault_after
+        # gate_path があれば、そのファイルができるまで process を止める。試験が「処理が進まない間に音声を積む」
+        # 状況を時刻や負荷に依存せずに作るため（過負荷の破棄の試験）。
+        self.gate_path = gate_path
         self.calls: list[tuple[np.ndarray, np.ndarray]] = []
         self.resets = 0
         self._first = skip_first
@@ -43,6 +48,8 @@ class ScriptedEngine:
 
     def process(self, x1, x2):
         self.calls.append((x1.copy(), x2.copy()))
+        while self.gate_path is not None and not os.path.exists(self.gate_path):
+            time.sleep(0.005)
         if self.delay_s:
             time.sleep(self.delay_s)
         if self._first:

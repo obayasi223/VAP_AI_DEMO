@@ -16,7 +16,7 @@ import {
   type ResearchEvent,
   type TimingPrecision,
 } from '@llm-vap/contracts';
-import { normalizeForMatch } from '../../cognition/initiative/text';
+import { normalizeForMatch } from './text';
 
 // ---- 分位点 ----------------------------------------------------------------
 

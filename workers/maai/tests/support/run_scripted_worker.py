@@ -25,6 +25,7 @@ def main() -> int:
     ap.add_argument("--fault-after", type=int, default=0)
     ap.add_argument("--fail-load", action="store_true")
     ap.add_argument("--exit-on-stdin-eof", action="store_true")
+    ap.add_argument("--gate-file", help="process() waits until this file exists")
     args = ap.parse_args()
 
     def factory(request, _settings):
@@ -35,6 +36,7 @@ def main() -> int:
             delay_s=args.delay_ms / 1000,
             fault=args.fault,
             fault_after=args.fault_after,
+            gate_path=args.gate_file,
         )
 
     code = run_server(load_settings(DEFAULT_CONFIG_PATH), factory, "127.0.0.1", args.port, args.exit_on_stdin_eof)

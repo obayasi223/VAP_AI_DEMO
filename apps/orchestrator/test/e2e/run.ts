@@ -23,6 +23,7 @@ import { DEFAULT_SCRIPTED_REPLY } from '../../src/app/scripted';
 import { createMaaiClient } from '../../src/app/maai_setup';
 import { OrchestratorServer, SwitchableTimeSource } from '../../src/ws/server';
 import type { Session } from '../../src/session/session';
+import { controlSettings, type GazeSettings } from '../../src/control';
 import { checkLog } from '../../../../tools/log_check/check';
 import { readWavMono16, resampleInt16, writeWavMono16 } from '../../../web/test/audio_browser/signal';
 
@@ -216,15 +217,21 @@ async function main(): Promise<void> {
     const view1 = await page.evaluate(() => {
       const c = window.__participant!.controller;
       // 主スレッドの時間軸で、gaze.command の受信から描画の報告までの遅れ（目標が変わったものだけ）。
-      const delays: number[] = [];
+      // 報告は目標の変化ごとに順に出るので、前から順に対応づける。描画前に上書きされたものは 'superseded'。
+      const delays: (number | 'superseded' | null)[] = [];
       let prev: string = 'user';
+      let cursor = 0;
       for (const cmd of c.record.gazeCommands) {
         if (cmd.target === prev) continue;
         prev = cmd.target;
-        const rep = c.record.gazeReports.find(
-          (r) => r.target === cmd.target && r.visible && r.client_t_ms.value !== null && r.client_t_ms.value >= cmd.client_t_ms - 1,
-        );
-        delays.push(rep?.client_t_ms.value != null ? rep.client_t_ms.value - cmd.client_t_ms : -1);
+        const i = c.record.gazeReports.findIndex((r, j) => j >= cursor && r.target === cmd.target);
+        if (i < 0) {
+          delays.push(null);
+          continue;
+        }
+        cursor = i + 1;
+        const r = c.record.gazeReports[i]!;
+        delays.push(r.visible && r.client_t_ms.value !== null ? r.client_t_ms.value - cmd.client_t_ms : 'superseded');
       }
       return { view: c.current(), gazeCommandToRenderMs: delays, record: { ...c.record, gazeReports: c.record.gazeReports.length, gazeCommands: c.record.gazeCommands.length } };
     });
@@ -310,7 +317,7 @@ async function main(): Promise<void> {
     }
 
     const events = readEvents(path.join(config.sessions_dir, session1.session_id, 'events.jsonl'));
-    analyse(events, session1);
+    analyse(events, session1, controlSettings(config.policy).gaze);
     if (session2) {
       const e2 = readEvents(path.join(config.sessions_dir, session2.session_id, 'events.jsonl'));
       const vap2 = ofType(e2, 'vap.state');
@@ -336,7 +343,10 @@ async function main(): Promise<void> {
   }
 }
 
-function analyse(events: ResearchEvent[], session: Session): void {
+/** 保持時間を待たずに user へ戻してよい理由（apps/orchestrator/src/control/gaze.ts の returnsImmediately）。 */
+const IMMEDIATE_RETURN = /^(ai_not_speaking|ai_interrupted|user_speaking|vap_)/;
+
+function analyse(events: ResearchEvent[], session: Session, gazeSettings: GazeSettings): void {
   const started = ofType(events, 'speech.started');
   const ended = ofType(events, 'speech.ended');
   const interrupted = ofType(events, 'speech.interrupted');
@@ -397,12 +407,40 @@ function analyse(events: ResearchEvent[], session: Session): void {
   const inPause = decisions.filter((d) => d.in_speech_pause);
   // 同じ向きの繰り返し（user → user）は描画が変わらないので報告も出ない。向きが変わった判断だけを数える。
   const changes = decisions.filter((d, i) => d.target !== (i === 0 ? 'user' : decisions[i - 1]!.target));
-  const lagOf = (d: (typeof decisions)[number]) => {
-    const r = rendered.find((x) => x.target === d.target && x.visible && x.rendered_at >= d.t_monotonic_ms - 5);
-    return r && r.visible ? r.rendered_at - d.t_monotonic_ms : null;
-  };
-  const lags = changes.map(lagOf);
-  const reflected = changes.filter((_d, i) => lags[i] !== null && lags[i]! <= 1000);
+  // ブラウザは目標の変化ごとに順に報告する（描画、または描画前に上書きされた未描画）。前から順に対応づけ、
+  // 1つの報告を2つの判断に使わない（後の同じ向きの描画で、消えた報告を埋め合わせない）。
+  type Outcome = { kind: 'rendered'; lag_ms: number } | { kind: 'superseded' | 'hidden' | 'missing' };
+  let cursor = 0;
+  const outcomes: Outcome[] = changes.map((d) => {
+    for (let i = cursor; i < rendered.length; i += 1) {
+      const r = rendered[i]!;
+      if (r.target !== d.target) continue;
+      const t = r.visible ? r.rendered_at : r.t_monotonic_ms;
+      if (t < d.t_monotonic_ms - 5) continue;
+      cursor = i + 1;
+      if (r.visible) return { kind: 'rendered', lag_ms: r.rendered_at - d.t_monotonic_ms };
+      return { kind: r.null_reason === 'superseded_before_render' ? 'superseded' : 'hidden' };
+    }
+    return { kind: 'missing' };
+  });
+  const reflected = outcomes.filter((o) => o.kind === 'rendered' && o.lag_ms <= 1000);
+  const superseded = outcomes.filter((o) => o.kind === 'superseded');
+  // 保持時間（原著にない、docs/known_gaps.md §7）: 逸らしの長さと、戻してから再び逸らすまでの間。
+  const holdAway = gazeSettings.hold_away_min_ms;
+  const reAvert = gazeSettings.re_avert_min_ms;
+  const shortAway: { ms: number; reason: string }[] = [];
+  const shortReAvert: { ms: number }[] = [];
+  const awayMs: number[] = [];
+  for (let i = 1; i < changes.length; i += 1) {
+    const prev = changes[i - 1]!;
+    const cur = changes[i]!;
+    const ms = Math.round(cur.t_monotonic_ms - prev.t_monotonic_ms);
+    if (prev.target === 'away' && cur.target === 'user') {
+      awayMs.push(ms);
+      if (holdAway !== null && ms < holdAway && !IMMEDIATE_RETURN.test(cur.reason)) shortAway.push({ ms, reason: cur.reason });
+    }
+    if (prev.target === 'user' && cur.target === 'away' && reAvert !== null && ms < reAvert) shortReAvert.push({ ms });
+  }
   results.gaze = {
     decisions: decisions.length,
     in_pause: inPause.length,
@@ -411,11 +449,22 @@ function analyse(events: ResearchEvent[], session: Session): void {
     rendered: rendered.length,
     target_changes: changes.length,
     reflected_within_1s: reflected.length,
-    decision_to_render_ms: lags.map((x) => (x === null ? null : Math.round(x))),
+    superseded_before_render: superseded.length,
+    outcomes: outcomes.map((o) => (o.kind === 'rendered' ? Math.round(o.lag_ms) : o.kind)),
+    away_ms: awayMs,
+    away_returned_immediately: changes.filter((c, i) => c.target === 'user' && changes[i - 1]?.target === 'away' && IMMEDIATE_RETURN.test(c.reason)).map((c) => c.reason),
+    hold_away_min_ms: holdAway,
+    re_avert_min_ms: reAvert,
     rendered_basis: [...new Set(rendered.map((r) => r.time_basis.source))],
   };
   check('視線: AI 発話中のポーズで gaze.decision が発生', inPause.length >= 1, results.gaze);
-  check('視線: gaze.decision が 1 秒以内に描画へ反映（gaze.rendered、同じ向き）', changes.length > 0 && reflected.length === changes.length, results.gaze);
+  check(
+    '視線: 向きの変わった gaze.decision ごとに、1 秒以内の描画（同じ向き）か「未描画で上書き」の報告がある',
+    changes.length > 0 && reflected.length + superseded.length === changes.length,
+    results.gaze,
+  );
+  check('視線: 逸らしが保持時間より短く戻らない（人の発話、割り込み、発話の終わり、鮮度切れを除く）', shortAway.length === 0, { hold_away_min_ms: holdAway, short: shortAway });
+  check('視線: 戻した後、再逸らしまでの最短を守る', shortReAvert.length === 0, { re_avert_min_ms: reAvert, short: shortReAvert });
 
   const clock = ofType(events, 'clock.sync').filter((e) => e.source === 'browser_rtt');
   check('時計: clock.report から browser_rtt の clock.sync が出る', clock.length >= 1, { n: clock.length, last: clock.at(-1) && { offset: clock.at(-1)!.offset_ms, error: clock.at(-1)!.error_ms } });

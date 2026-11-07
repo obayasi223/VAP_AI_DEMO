@@ -12,6 +12,7 @@
     "test:audio:browser": "tsx test/audio_browser/run.ts"
   },
   "dependencies": {
+    "@llm-vap/analysis": "0.1.0",
     "@llm-vap/contracts": "0.1.0",
     "@pixiv/three-vrm": "3.5.5",
     "next": "16.4.5",

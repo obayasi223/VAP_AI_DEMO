@@ -3,13 +3,11 @@
  * ASR の句読点と空白は revision ごとに変わる（実測: 「国。」「国が？」）ので、比較では除く。
  */
 
-/** 句読点（Unicode の P）と空白を除く。数字や「円」などの意味のある文字は残す。 */
+/** 句読点（Unicode の P）と空白。normalizeForMatch（正本は @llm-vap/analysis/text）と同じ規則。 */
 const IGNORED = /[\s\p{P}]/u;
-const IGNORED_ALL = /[\s\p{P}]/gu;
 
-export function normalizeForMatch(text: string): string {
-  return text.replace(IGNORED_ALL, '').normalize('NFKC');
-}
+// 正規化の正本は @llm-vap/analysis（遅延の集計と同じ規則を使うため。層の向きは packages → apps）。
+export { normalizeForMatch } from '@llm-vap/analysis/text';
 
 export function commonPrefixLength(a: string, b: string): number {
   const n = Math.min(a.length, b.length);

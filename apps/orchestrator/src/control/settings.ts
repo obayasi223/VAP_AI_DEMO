@@ -28,6 +28,10 @@ export interface GazeSettings {
   pause_min_ms: number | null;
   signal: 'p_now' | 'p_future' | null;
   p_threshold: number | null;
+  /** 逸らした後に user へ戻すまでの最短（原著にない）。null は保持なし。 */
+  hold_away_min_ms: number | null;
+  /** user へ戻した後に再び逸らすまでの最短（原著にない）。null は保持なし。 */
+  re_avert_min_ms: number | null;
 }
 
 export interface ControlOptions {
@@ -90,7 +94,8 @@ export function controlSettings(policy: Policy, options: ControlOptions = {}): C
       fallback_silence_max_ms: null,
       fallback_interrupt_min_words: null,
       // 原著に数値がなく、方策に gaze の節もない（hri2025_mapping の V-D）。
-      gaze: { pause_min_ms: null, signal: null, p_threshold: null },
+      // 保持時間も原著にないので入れない。
+      gaze: { pause_min_ms: null, signal: null, p_threshold: null, hold_away_min_ms: null, re_avert_min_ms: null },
       invitation_grants_turn: false,
     };
   }
@@ -103,7 +108,13 @@ export function controlSettings(policy: Policy, options: ControlOptions = {}): C
     user_speaking_min_ms: policy.turn.user_speaking_min_ms,
     fallback_silence_max_ms: policy.turn.fallback_silence_max_ms,
     fallback_interrupt_min_words: policy.turn.fallback_interrupt_min_words,
-    gaze: policy.gaze,
+    gaze: {
+      pause_min_ms: policy.gaze.pause_min_ms,
+      signal: policy.gaze.signal,
+      p_threshold: policy.gaze.p_threshold,
+      hold_away_min_ms: policy.gaze.hold_away_min_ms ?? null,
+      re_avert_min_ms: policy.gaze.re_avert_min_ms ?? null,
+    },
     invitation_grants_turn: true,
   };
 }

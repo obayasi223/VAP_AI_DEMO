@@ -290,6 +290,28 @@
               "type": "null"
             }
           ]
+        },
+        "hold_away_min_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "re_avert_min_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

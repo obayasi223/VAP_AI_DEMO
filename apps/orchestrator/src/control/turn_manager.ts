@@ -378,6 +378,9 @@ function pushGaze(s: TurnState, tick: Tick): void {
     view,
     user_speaking: s.user_speaking,
     previous_target: s.gaze_target,
+    now: tick.now,
+    changed_at: s.gaze_changed_at,
+    pause_evaluated: s.gaze_pause_logged,
   });
   // 向きの変化に加え、ポーズごとに最初の判定を1回残す（譲渡なしの判定もログから確かめられるように）。
   const firstInPause = judgement.evaluated && !s.gaze_pause_logged;
@@ -394,6 +397,7 @@ function pushGaze(s: TurnState, tick: Tick): void {
       },
     });
   }
+  if (judgement.target !== s.gaze_target) s.gaze_changed_at = tick.now;
   s.gaze_target = judgement.target;
   s.gaze_pause_logged = judgement.in_speech_pause && (s.gaze_pause_logged || judgement.evaluated);
 }

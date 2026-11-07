@@ -86,6 +86,8 @@ export interface TurnState extends TurnStateCore {
   /** turn_allowed の変化の検出に使う。 */
   last_turn_allowed_key: string | null;
   gaze_pause_logged: boolean;
+  /** gaze_target が最後に変わった時刻。保持時間（hold_away_min_ms、re_avert_min_ms）に使う。null は未変化。 */
+  gaze_changed_at: number | null;
 }
 
 export function createInitialState(): TurnState {
@@ -122,5 +124,6 @@ export function createInitialState(): TurnState {
     last_cancelled_prepare_id: null,
     last_turn_allowed_key: null,
     gaze_pause_logged: false,
+    gaze_changed_at: null,
   };
 }

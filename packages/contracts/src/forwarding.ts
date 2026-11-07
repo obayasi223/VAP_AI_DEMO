@@ -5,6 +5,7 @@
  * EVENT_ROUTES はイベントごとの発行場所の一覧。別プロセスの時刻は補正して EmitOptions.at で渡す。
  */
 import type { AudioReport, ClockReport, GazeReport, SignalReport, SignalParameters } from './browser_rpc';
+import type { ClockSample } from './clock';
 import type { EmitOptions, EventDraft } from './emit';
 import type { ResearchEventName, TimeBasis } from './events';
 import type { MaaiVapStateMessage, MaaiWorkerStatus } from './maai_rpc';
@@ -82,8 +83,11 @@ export function draftFromAudioReport(report: AudioReport): EventDraft {
   };
 }
 
-/** clock.report を browser_rtt の clock.sync へ。 */
-export function draftFromClockReport(report: ClockReport): EventDraft {
+/**
+ * clock.report（またはその推定の ClockSample）を browser_rtt の clock.sync へ。
+ * 変換はここだけに置く。Node の BrowserClockRecorder もこれを使う（二重に持たない）。
+ */
+export function draftFromClockReport(report: ClockReport | ClockSample): EventDraft {
   return {
     event: 'clock.sync',
     source: 'browser_rtt',

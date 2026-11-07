@@ -13,11 +13,12 @@ import {
   encodeAudioFrame,
   present,
 } from '@llm-vap/contracts';
-import type { BrowserToNode, ClientHello, NodeToBrowser, Policy } from '@llm-vap/contracts';
+import type { BrowserToNode, ClientHello, Condition, LlmRequest, NodeToBrowser, Policy } from '@llm-vap/contracts';
 import { ScriptedLlmProvider, ScriptedSttProvider, ScriptedTtsProvider } from '@llm-vap/testkit';
 import type { ScriptedSttSession, ScriptedTtsConnection } from '@llm-vap/testkit';
 import { NullTurnCompletionEstimator } from '../../src/cognition/completion';
-import type { SessionProviders } from '../../src/app/providers';
+import type { InitiativeSetup, SessionProviders } from '../../src/app/providers';
+import { CURRENT_PROMPT_VERSION } from '../../src/cognition/initiative';
 import type { SessionLog, SessionManifestDetails } from '../../src/logging';
 import type { MaaiClientListeners, MaaiWorkerClient } from '../../src/maai';
 import { Session } from '../../src/session/session';
@@ -139,15 +140,61 @@ export interface Rig {
   steps(n: number, options?: { loud?: boolean; p?: [number, number, boolean] }): Promise<void>;
   /** ブラウザの再生の報告。 */
   browser(message: BrowserToNode): void;
+  /** 発話希望の判定に渡した LLM（options.initiative を渡したときだけ）。 */
+  initiativeLlm: ScriptedLlmProvider | null;
 }
 
-export async function createRig(options: { policy?: Policy; maai?: boolean; reply?: string } = {}): Promise<Rig> {
+export const TEST_PERSONA = {
+  persona_id: 'test_persona',
+  version: 1,
+  role: '試験用の役割',
+  interests: ['試験'],
+  conversation_purpose: '試験',
+  not_of_interest: ['無関係な話'],
+};
+
+export interface RigInitiative {
+  /** false は条件で止めた場合（setup.enabled=false）。 */
+  enabled?: boolean;
+  responder?: (request: LlmRequest) => string | Promise<string>;
+  reason?: string;
+}
+
+export async function createRig(
+  options: { policy?: Policy; maai?: boolean; reply?: string; initiative?: RigInitiative; condition?: Condition } = {},
+): Promise<Rig> {
   const time = new ManualTimeSource(1000);
   const events = new MemoryEventSink();
   const emitter = createEventEmitter({ time, session_id: 's_test', condition: () => 'reactive', sink: events });
   const sttProvider = new ScriptedSttProvider(() => time.monotonicMs());
   const ttsProvider = new ScriptedTtsProvider({ ms_per_char: 100, chars_per_chunk: 4 });
   const llm = new ScriptedLlmProvider({ responder: () => options.reply ?? '三時からです。', chars_per_delta: 3 });
+  const initiativeLlm = options.initiative
+    ? new ScriptedLlmProvider({
+        responder: options.initiative.responder ?? (() => '{"decision":"NONE"}'),
+        now: () => time.monotonicMs(),
+        chars_per_delta: 100_000,
+      })
+    : null;
+  const initiative: InitiativeSetup | undefined = options.initiative
+    ? options.initiative.enabled === false
+      ? {
+          enabled: false,
+          reason: options.initiative.reason ?? 'disabled_for_condition:reactive',
+          llm: null,
+          persona: null,
+          prompt_version: CURRENT_PROMPT_VERSION,
+          model: 'test_double',
+        }
+      : {
+          enabled: true,
+          reason: null,
+          llm: initiativeLlm,
+          persona: TEST_PERSONA,
+          prompt_version: CURRENT_PROMPT_VERSION,
+          model: 'test_double',
+        }
+    : undefined;
   const providers: SessionProviders = {
     stt: { ok: true, value: sttProvider },
     tts: { ok: true, value: ttsProvider },
@@ -158,6 +205,7 @@ export async function createRig(options: { policy?: Policy; maai?: boolean; repl
     requested: { stt: 'test_double', tts: 'test_double', llm: 'test_double' },
     completion_name: 'none',
     completion_error: null,
+    ...(initiative ? { initiative } : {}),
   };
   const described: SessionManifestDetails[] = [];
   const log = {
@@ -170,7 +218,7 @@ export async function createRig(options: { policy?: Policy; maai?: boolean; repl
   const maai = options.maai === false ? null : new FakeMaai();
   const session = new Session({
     session_id: 's_test',
-    condition: 'reactive',
+    condition: options.condition ?? 'reactive',
     policy: options.policy ?? productionJaPolicy(),
     time,
     emitter,
@@ -212,6 +260,7 @@ export async function createRig(options: { policy?: Policy; maai?: boolean; repl
     browser(message) {
       session.handleJson(message);
     },
+    initiativeLlm,
   };
   return rig;
 }

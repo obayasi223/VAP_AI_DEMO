@@ -6,9 +6,16 @@ import { createRequire } from 'node:module';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SENTENCES } from './lib/reading_sentences.mjs';
+import { parseArgs } from 'node:util';
+import { SENTENCES as SENTENCES_OLD, SENTENCES_NEW } from './lib/reading_sentences.mjs';
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), 'out', 'reading_roundtrip');
+// --out reading_tts --set old|new|both for the reading_tts experiment. Without them, as before.
+const { values: opts, positionals } = parseArgs({
+  allowPositionals: true,
+  options: { out: { type: 'string', default: 'reading_roundtrip' }, set: { type: 'string', default: 'old' } },
+});
+const SENTENCES = opts.set === 'new' ? SENTENCES_NEW : opts.set === 'both' ? [...SENTENCES_OLD, ...SENTENCES_NEW] : SENTENCES_OLD;
+const OUT = join(dirname(fileURLToPath(import.meta.url)), 'out', opts.out);
 const require = createRequire(join(process.env.KUROMOJI_DIR, 'x.js'));
 const kuromoji = require('kuromoji');
 const dicPath = join(dirname(require.resolve('kuromoji')), '..', 'dict');
@@ -52,7 +59,7 @@ function sim(a, b) {
   return 1 - row[y.length] / Math.max(x.length, y.length);
 }
 
-const conditions = process.argv.slice(2);
+const conditions = positionals;
 const conds = conditions.length ? conditions : ['el_ja', 'el_nolang', 'el_hira_ja', 'gemini'];
 const pct = (x) => (x === null ? '-' : (x * 100).toFixed(0));
 const rows = [];
@@ -95,6 +102,7 @@ for (const s of SENTENCES) {
 }
 md += `\n## 書き起こし\n\n| 文 | 条件 | 書き起こし | かな一致 | 音声秒 |\n|---|---|---|---|---|\n`;
 for (const x of rows) md += `| ${x.id} | ${x.cond} | ${x.text} | ${pct(x.kana)} | ${x.audio_s.toFixed(2)} |\n`;
-writeFileSync(join(OUT, `report_${conds.join('+')}.md`), md);
-writeFileSync(join(OUT, `report_${conds.join('+')}.json`), `${JSON.stringify(rows, null, 2)}\n`);
+const suffix = opts.set === 'old' ? '' : `_${opts.set}`;
+writeFileSync(join(OUT, `report_${conds.join('+')}${suffix}.md`), md);
+writeFileSync(join(OUT, `report_${conds.join('+')}${suffix}.json`), `${JSON.stringify(rows, null, 2)}\n`);
 console.log(md);

@@ -2,6 +2,7 @@
  * Orchestrator の起動点（レーン J）。`npm run dev:orchestrator`（ルート）。
  *
  *  1. .env を読む（キーの値は表示しない）
+ *  1b. 読みの辞書（kuromoji）を読む（口形の読み、TTS の読みの変換。speech/reading/runtime.ts）
  *  2. MaAI ワーカー（実 MaAI、.venv の Python）を先に起動して重みを読む。HF_HUB_OFFLINE=1 でネットに出ない
  *  3. HTTP／WS を待ち受ける。参加者の画面が「はじめる」を押すとセッションが始まる
  *  4. Ctrl+C で開いているセッションのログを閉じてから終わる
@@ -11,6 +12,7 @@ import { loadDotEnv, readConfig } from './app/config';
 import type { MaaiWorkerClient } from './maai';
 import { createMaaiClient } from './app/maai_setup';
 import { OrchestratorServer, SwitchableTimeSource } from './ws/server';
+import { initReading } from './speech/reading';
 
 export async function main(): Promise<OrchestratorServer> {
   const loaded = loadDotEnv();
@@ -18,6 +20,17 @@ export async function main(): Promise<OrchestratorServer> {
   const say = (message: string) => console.log(`[orchestrator] ${message}`);
   say(`.env ${loaded ? 'loaded' : 'not found (using the environment only)'}; policy ${config.policy.policy_id} (${config.policy_file})`);
   say(`providers: STT=${config.stt} TTS=${config.tts} LLM=${config.llm}${config.stt !== 'production' || config.tts !== 'production' || config.llm !== 'production' ? '  ※ test_double は受け入れの証拠に数えない' : ''}`);
+
+  // 応答の前に辞書を読み込む（1回だけ、0.7 秒前後）。失敗しても起動は続け、口形は従来どおりになる。
+  const reading = await initReading();
+  say(
+    `reading: lip=${reading.config.lip ? 'on' : 'off'} tts_mode=${reading.config.tts_mode} ` +
+      (reading.error
+        ? `analyzer unavailable (${reading.error})`
+        : reading.analyzer
+          ? `${reading.analyzer} loaded in ${reading.load_ms?.toFixed(0)} ms (sample sentence ${reading.sample_tokenize_ms?.toFixed(2)} ms)`
+          : 'analyzer not loaded'),
+  );
 
   const maaiTime = new SwitchableTimeSource(new SystemTimeSource());
   let maai: MaaiWorkerClient | null = null;

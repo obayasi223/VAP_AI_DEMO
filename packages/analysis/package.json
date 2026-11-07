@@ -1,0 +1,20 @@
+{
+  "name": "@llm-vap/analysis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure log analysis (latency intervals, cost) shared by orchestrator, research dashboard (web) and log_check. No Node or DOM dependency.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./text": "./src/text.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@llm-vap/contracts": "0.1.0"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}

@@ -19,6 +19,16 @@
 
 推移的な依存（npm と Python）の一覧は未作成。
 
+### 形態素解析（読み。後続のレーンが追加、2026-11-08）
+
+| 名前 | 版 | ライセンス |
+|---|---|---|
+| kuromoji | 0.1.2 | Apache-2.0（`node_modules/kuromoji/LICENSE-2.0.txt`） |
+| 同梱の辞書 mecab-ipadic | 2.7.0-20070801 | NAIST の著作権表示と免責、ICOT Free Software の条件（NO WARRANTY の条項を必ず添える）。全文は `node_modules/kuromoji/NOTICE.md` |
+| async, lodash, doublearray, zlibjs, @types/kuromoji, @types/doublearray | | MIT |
+
+辞書を再配布する場合（配布物に `node_modules` を含めるなど）は、`NOTICE.md` の著作権表示と NO WARRANTY の条項をそのまま添える。
+
 ## モデルの重み（計画 §1.1 の調査結果。R2 が確認する）
 
 | 重み | ライセンス | 状態 |

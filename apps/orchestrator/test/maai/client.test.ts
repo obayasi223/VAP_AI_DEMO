@@ -14,6 +14,8 @@ import {
   type ResearchEvent,
 } from '@llm-vap/contracts';
 import path from 'node:path';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { WorkerClockRecorder } from '../../src/logging';
 import {
   MaaiWorkerClient,
@@ -187,26 +189,43 @@ describe('audio and results', () => {
   });
 
   it('overload drops both channels together and later states stay aligned', async () => {
-    const client = scriptedClient({ launch: scriptedLaunch('--delay-ms', '200') });
-    const { vap, drops, history } = track(client);
-    await client.start('s1');
-    const mic = noise(33, 64000);
-    const sys = noise(44, 64000);
-    await stream(client, mic, sys, 0, 0);
-    await until(() => drops.some((d) => d.cause === 'overload') && vap.length >= 2, 8000, 'overload drop');
-    for (const drop of drops) {
-      expect(drop).toMatchObject({ channels: 'both', zero_filled: false, cause: 'overload' });
+    // 処理の速さと送信の速さの競争にしない: エンジンを gate で止めたまま音声を積み、破棄を確かめてから進める。
+    // 待ちの上限は失敗の検出用で、合否は時刻に依存しない（負荷で遅くても順序は同じ）。
+    const gateDir = mkdtempSync(path.join(tmpdir(), 'maai-gate-'));
+    const gate = path.join(gateDir, 'open');
+    try {
+      const client = scriptedClient({ launch: scriptedLaunch('--gate-file', gate) });
+      const { vap, drops, history } = track(client);
+      await client.start('s1');
+      // 64000 を gate の間に送り、gate を開けてから続き（3周期、上限未満）を送る。破棄の後に残る量は
+      // 破棄の切り方で 1〜4 周期と変わるので、続きで VAP_STATE が2つ以上出ることを保証する。
+      const head = 64000;
+      const mic = noise(33, head + 3 * 1280);
+      const sys = noise(44, head + 3 * 1280);
+      await stream(client, mic.subarray(0, head), sys.subarray(0, head), 0, 0);
+      expect(client.undeliveredSamples()).toBe(0);
+      // 1周期（1280）を取ったところでエンジンが止まるので、上限（320ms = 5120）を超えた分は必ず破棄になる。
+      await until(() => drops.some((d) => d.cause === 'overload'), 30000, 'overload drop');
+      expect(vap).toHaveLength(0);
+      writeFileSync(gate, '');
+      await stream(client, mic.subarray(head), sys.subarray(head), head, 0);
+      await until(() => vap.length >= 2, 30000, 'VAP_STATE after the gate opened');
+      for (const drop of drops) {
+        expect(drop).toMatchObject({ channels: 'both', zero_filled: false, cause: 'overload' });
+      }
+      for (const state of vap) {
+        const end = state.audio_frame;
+        const digest = state.raw.worker_input as { x1_crc32: number; x2_crc32: number };
+        expect(digest.x1_crc32).toBe(crc32(mic.subarray(end - 1280, end)));
+        expect(digest.x2_crc32).toBe(crc32(sys.subarray(end - 1280, end)));
+      }
+      // gate の間は process_stuck も理由に入りうるので、理由の一覧に recent_overload_drop があるものを待つ。
+      await until(() => history.some((h) => h.state === 'degraded' && (h.reason ?? '').includes('recent_overload_drop')), 30000, 'degraded by overload');
+      expect(client.current().vap_available).toBe(true);
+    } finally {
+      rmSync(gateDir, { recursive: true, force: true });
     }
-    for (const state of vap) {
-      const end = state.audio_frame;
-      const digest = state.raw.worker_input as { x1_crc32: number; x2_crc32: number };
-      expect(digest.x1_crc32).toBe(crc32(mic.subarray(end - 1280, end)));
-      expect(digest.x2_crc32).toBe(crc32(sys.subarray(end - 1280, end)));
-    }
-    await until(() => history.some((h) => h.state === 'degraded'), 5000, 'degraded');
-    expect(history.find((h) => h.state === 'degraded')?.reason).toContain('recent_overload_drop');
-    expect(client.current().vap_available).toBe(true);
-  });
+  }, 60000);
 });
 
 describe('stop and crash', () => {

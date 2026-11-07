@@ -3,7 +3,8 @@
  * 「うっかり譲渡」しうるポーズで逸らし、譲渡されないポーズでは逸らさない。逆にすると赤になる。
  */
 import { describe, expect, it } from 'vitest';
-import { Driver, T0, gaze, hri2025, ja, jaWithGaze, kinds, playing, pick } from './helpers';
+import { Driver, T0, gaze, hri2025, ja, jaWithGaze, jaWithGazeHold, kinds, playing, pick } from './helpers';
+import { controlSettings } from '../../src/control';
 
 const pause = (ms = 300) => ({ playback: playing(9, ms) });
 
@@ -100,5 +101,108 @@ describe('設定が未校正', () => {
     const d = new Driver(hri2025());
     d.tick(T0, { p: [0.1, 0.1, false], ...pause(5000) });
     expect(d.state.gaze_target).toBe('user');
+  });
+});
+
+describe('保持時間（原著にない、ちらつきの防止）', () => {
+  /** E2E で見た形: 200ms のポーズで逸らし、AI が 100ms 後に話し続ける。 */
+  const avertThenResume = (d: Driver) => {
+    d.tick(T0, { p: [0.2, 0.2, false], ...pause(200) });
+    expect(d.state.gaze_target).toBe('away');
+    return d.tick(T0 + 100, { p: [0.9, 0.9, false], ...pause(0) });
+  };
+
+  it('保持なし（従来）では、ポーズが終わると 100ms でも user へ戻る', () => {
+    const d = new Driver(jaWithGaze());
+    expect(gaze(avertThenResume(d))).toMatchObject({ target: 'user' });
+  });
+
+  it('逸らした後 hold_away_min_ms までは、AI が話し続けても user へ戻さない', () => {
+    const d = new Driver(jaWithGazeHold(600, 1000));
+    expect(kinds(avertThenResume(d))).not.toContain('gaze');
+    expect(d.state.gaze_target).toBe('away');
+    expect(kinds(d.tick(T0 + 599, { p: [0.9, 0.9, false], ...pause(0) }))).not.toContain('gaze');
+    expect(d.state.gaze_target).toBe('away');
+    expect(gaze(d.tick(T0 + 600, { p: [0.9, 0.9, false], ...pause(0) }))).toMatchObject({ target: 'user', reason: 'not_in_speech_pause' });
+  });
+
+  it('user へ戻した後 re_avert_min_ms までは、次のポーズで移行が予測されても逸らさない', () => {
+    const d = new Driver(jaWithGazeHold(600, 1000));
+    d.tick(T0, { p: [0.2, 0.2, false], ...pause(200) });
+    d.tick(T0 + 600, { p: [0.9, 0.9, false], ...pause(0) });
+    expect(d.state.gaze_target).toBe('user');
+    const held = gaze(d.tick(T0 + 900, { p: [0.2, 0.2, false], ...pause(250) }));
+    // ポーズの最初の判定は残す（向きは user のまま）。
+    expect(held).toMatchObject({ target: 'user' });
+    expect(held?.reason).toMatch(/^re_avert_min_ms<1000:pause_predicted_handover/);
+    d.tick(T0 + 1599, { p: [0.2, 0.2, false], ...pause(949) });
+    expect(d.state.gaze_target).toBe('user');
+    expect(gaze(d.tick(T0 + 1600, { p: [0.2, 0.2, false], ...pause(950) }))).toMatchObject({ target: 'away' });
+  });
+
+  it('保持中に次のポーズが始まったら、そのポーズの予測で判定し直す（移行が予測されなければ user へ戻す）', () => {
+    const d = new Driver(jaWithGazeHold(600, 1000));
+    avertThenResume(d);
+    expect(d.state.gaze_target).toBe('away');
+    // 次のポーズ。最短に満たない間は保持のまま。
+    d.tick(T0 + 200, { p: [0.9, 0.9, false], ...pause(100) });
+    expect(d.state.gaze_target).toBe('away');
+    const payload = gaze(d.tick(T0 + 300, { p: [0.9, 0.9, false], ...pause(200) }));
+    expect(payload).toMatchObject({ target: 'user' });
+    expect(payload?.reason).toMatch(/^pause_no_handover_predicted/);
+  });
+
+  it('保持中の次のポーズでも移行が予測されれば逸らしたまま', () => {
+    const d = new Driver(jaWithGazeHold(600, 1000));
+    avertThenResume(d);
+    d.tick(T0 + 200, { p: [0.2, 0.2, false], ...pause(100) });
+    const payload = gaze(d.tick(T0 + 300, { p: [0.2, 0.2, false], ...pause(200) }));
+    // 向きは変わらないが、ポーズの最初の判定として新しい予測が残る。
+    expect(payload).toMatchObject({ target: 'away' });
+    expect(payload?.reason).toMatch(/^pause_predicted_handover/);
+    expect(d.state.gaze_target).toBe('away');
+    // そのポーズの中では向きを保つ。
+    expect(kinds(d.tick(T0 + 320, { p: [0.9, 0.9, false], ...pause(220) }))).not.toContain('gaze');
+    expect(d.state.gaze_target).toBe('away');
+  });
+
+  it('人が話し始めたら保持時間を待たずに user へ戻す', () => {
+    const d = new Driver(jaWithGazeHold(600, 1000));
+    d.tick(T0, { p: [0.2, 0.2, false], ...pause(200) });
+    expect(gaze(d.tick(T0 + 100, { p: [0.9, 0.9, true], ...pause(300) }))).toMatchObject({ target: 'user', reason: 'user_speaking_in_pause' });
+  });
+
+  it('AI の発話中（ポーズでない）でも、人が話し始めたら保持時間を待たずに戻し、理由に残す', () => {
+    const d = new Driver(jaWithGazeHold(600, 1000));
+    d.tick(T0, { p: [0.2, 0.2, false], ...pause(200) });
+    expect(gaze(d.tick(T0 + 100, { p: [0.9, 0.9, true], ...pause(0) }))).toMatchObject({ target: 'user', reason: 'user_speaking:not_in_speech_pause' });
+  });
+
+  it('AI の発話の終わりでは保持時間を待たずに user へ戻す', () => {
+    const d = new Driver(jaWithGazeHold(600, 1000));
+    d.tick(T0, { p: [0.2, 0.2, false], ...pause(200) });
+    expect(gaze(d.tick(T0 + 100, { p: [0.2, 0.2, false], playback: { state: 'idle' } }))).toMatchObject({ target: 'user', reason: 'ai_not_speaking' });
+  });
+
+  it('割り込みでは保持時間を待たずに user へ戻す', () => {
+    const d = new Driver(jaWithGazeHold(600, 1000));
+    d.tick(T0, { p: [0.2, 0.2, false], ...pause(200) });
+    d.tick(T0 + 20, { p: [0.1, 0.1, true], ...pause(220) });
+    expect(d.state.speaking.phase).toBe('stopping');
+    expect(d.state.gaze_target).toBe('user');
+  });
+
+  it('VAP の鮮度切れでは保持時間を待たずに既定の注視へ戻す', () => {
+    const d = new Driver(jaWithGazeHold(600, 1000));
+    d.tick(T0, { p: [0.2, 0.2, false], ...pause(200) });
+    // VAP の受信が 500ms 以上止まる（stale）。
+    d.tick(T0 + 100, { p: [0.2, 0.2, false], ...pause(300), vap_received_at: { value: T0 - 1000 } });
+    expect(d.state.vap_freshness).not.toBe('fresh');
+    expect(d.state.gaze_target).toBe('user');
+  });
+
+  it('ja の方策に暫定値が入り、hri2025 は保持なし（原著どおり）', () => {
+    expect(controlSettings(ja()).gaze).toMatchObject({ hold_away_min_ms: 600, re_avert_min_ms: 1000 });
+    expect(controlSettings(hri2025()).gaze).toMatchObject({ hold_away_min_ms: null, re_avert_min_ms: null });
   });
 });

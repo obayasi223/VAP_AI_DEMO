@@ -10,7 +10,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { EVENT_ROUTES, EVENT_NAMES, ResearchEvent, type ResearchEventName } from '@llm-vap/contracts';
-import { computeLatencyReport, summarizeCost, type CostSummary, type LatencyReport } from '../../apps/orchestrator/src/logging/analysis';
+import { computeLatencyReport, summarizeCost, type CostSummary, type LatencyReport } from '@llm-vap/analysis';
 
 export interface InvalidLine {
   line: number;

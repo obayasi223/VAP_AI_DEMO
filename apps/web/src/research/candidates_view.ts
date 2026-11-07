@@ -1,5 +1,6 @@
 /**
  * 候補イベントのライブ表示の中身（I2）。initiative.decision と candidate.state_changed を表の行にする。
+ * 棄てた判定（initiative.discarded は G のゲート、candidate.rejected は E2a）は理由つきで別の表にする（波2で追加）。
  * 規則: モデル出力（ModelOutput）と、実測の時刻・コードの検証結果（Verified）を別の欄に分ける。
  * 画面はモデル出力の欄に「LLM 生成」と必ず書く（判定に使っていない文で、事実ではない）。
  */
@@ -7,6 +8,8 @@ import type { EventOf, ResearchEvent } from '@llm-vap/contracts';
 
 type Decision = EventOf<'initiative.decision'>;
 type StateChange = EventOf<'candidate.state_changed'>;
+type Discarded = EventOf<'initiative.discarded'>;
+type Rejected = EventOf<'candidate.rejected'>;
 
 /** モデル出力の 1 項目。値がなければ理由。 */
 export interface ModelText {
@@ -49,6 +52,21 @@ export interface StateChangeRow {
   cause: { source: 'code'; cause: string } | { source: 'model_decision'; decision: string; request_id: string };
 }
 
+/** 棄てた判定の1行。理由はコードの値で、モデルの説明文ではない。 */
+export interface DropRow {
+  key: string;
+  t_ms: number;
+  /** initiative.discarded（G のゲート、判定の失敗、E2a の拒否の写し）か candidate.rejected（E2a）か。 */
+  source: 'initiative.discarded' | 'candidate.rejected';
+  reason: string;
+  candidate_id: string | null;
+  /** candidate.rejected の operation（NEW、KEEP、transition など）。 */
+  operation: string | null;
+  details: string[];
+  /** 棄てずに保留した（話の後の NEW）。 */
+  held: boolean;
+}
+
 export interface CandidateNow {
   candidate_id: string;
   candidate_version: number;
@@ -63,6 +81,11 @@ export interface CandidateSummary {
   counts: Record<string, number>;
   discarded: number;
   aborted: number;
+  /** E2a の拒否の件数（candidate.rejected と、それを出さない active_candidate_exists）。 */
+  /* discarded は G の棄却だけ（E2a の拒否の写し e2a_rejected: は数えない）。 */
+  rejected: number;
+  /** 新しい順。 */
+  drops: DropRow[];
 }
 
 const MAX_ROWS = 40;
@@ -118,7 +141,7 @@ export function decisionRow(event: Decision, index: number): DecisionRow {
             method: event.withdraw_evidence_segment_ids.method,
           },
         ],
-        model: [modelText('撤回の理由', event.withdraw_reason)],
+        model: [modelText('撤回の理由', event.withdraw_reason), modelText('理由', event.reason)],
       };
     case 'NEW':
     case 'REVISE':
@@ -149,6 +172,9 @@ export function decisionRow(event: Decision, index: number): DecisionRow {
   }
 }
 
+/** G が E2a の拒否を initiative.discarded へ写すときの頭（monitor.ts の rejected）。 */
+const E2A_COPY_PREFIX = 'e2a_rejected:';
+
 export class CandidateTracker {
   private readonly decisions: DecisionRow[] = [];
   private readonly changes: StateChangeRow[] = [];
@@ -156,6 +182,8 @@ export class CandidateTracker {
   private readonly counts: Record<string, number> = {};
   private discarded = 0;
   private aborted = 0;
+  private rejected = 0;
+  private readonly drops: DropRow[] = [];
   private seq = 0;
 
   add(event: ResearchEvent): void {
@@ -169,7 +197,22 @@ export class CandidateTracker {
         this.addChange(event);
         break;
       case 'initiative.discarded':
+        // E2a の拒否の写し（e2a_rejected:）は candidate.rejected と同じものなので数えず、表にも重ねない。
+        // ただし active_candidate_exists は E2a が candidate.rejected を出さない（state_changed に残る）ので、
+        // E2a の拒否として1回だけ数える。
+        if (event.reason.startsWith(E2A_COPY_PREFIX)) {
+          if (event.reason.startsWith(`${E2A_COPY_PREFIX}active_candidate_exists`)) {
+            this.rejected += 1;
+            this.addDiscarded(event);
+          }
+          break;
+        }
         this.discarded += 1;
+        this.addDiscarded(event);
+        break;
+      case 'candidate.rejected':
+        this.rejected += 1;
+        this.addRejected(event);
         break;
       case 'initiative.aborted':
         this.aborted += 1;
@@ -177,6 +220,37 @@ export class CandidateTracker {
       default:
         break;
     }
+  }
+
+  private addDrop(row: DropRow): void {
+    this.drops.unshift(row);
+    if (this.drops.length > MAX_ROWS) this.drops.length = MAX_ROWS;
+  }
+
+  private addDiscarded(event: Discarded): void {
+    this.addDrop({
+      key: `d/${this.seq++}`,
+      t_ms: event.t_monotonic_ms,
+      source: 'initiative.discarded',
+      reason: event.reason,
+      candidate_id: event.candidate_id.value,
+      operation: null,
+      details: [],
+      held: event.reason.includes('post_turn_new_held'),
+    });
+  }
+
+  private addRejected(event: Rejected): void {
+    this.addDrop({
+      key: `r/${this.seq++}`,
+      t_ms: event.t_monotonic_ms,
+      source: 'candidate.rejected',
+      reason: event.reason,
+      candidate_id: event.candidate_id.value,
+      operation: event.operation,
+      details: event.details,
+      held: event.held,
+    });
   }
 
   private addChange(event: StateChange): void {
@@ -210,6 +284,8 @@ export class CandidateTracker {
       counts: { ...this.counts },
       discarded: this.discarded,
       aborted: this.aborted,
+      rejected: this.rejected,
+      drops: this.drops.slice(),
     };
   }
 }

@@ -1,6 +1,6 @@
 import { GazeReport } from '@llm-vap/contracts';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_GAZE, GazeController, GazeLayer, GazeReporter } from '../gaze';
+import { DEFAULT_GAZE, GAZE_SUPERSEDED_BEFORE_RENDER, GazeController, GazeLayer, GazeReporter } from '../gaze';
 import { PoseFrame } from '../pose';
 import { seededRng, SmoothDamp } from '../util';
 
@@ -154,12 +154,37 @@ describe('GazeReporter', () => {
     expect(reports[1]).toMatchObject({ visible: true, client_t_ms: { value: 200 } });
   });
 
-  it('描画前に目標が変わったら最後の目標だけを報告する', () => {
+  it('描画前に目標が変わったら、上書きされた目標を「未描画で上書き」として報告し、最後の目標を描画で報告する', () => {
+    const reports: GazeReport[] = [];
+    const r = new GazeReporter((report) => reports.push(GazeReport.parse(report)));
+    r.commanded('away', true);
+    r.commanded('user', true);
+    r.rendered(10);
+    expect(reports).toEqual([
+      { type: 'gaze.report', target: 'away', visible: false, client_t_ms: { value: null, null_reason: GAZE_SUPERSEDED_BEFORE_RENDER } },
+      { type: 'gaze.report', target: 'user', visible: true, client_t_ms: { value: 10 } },
+    ]);
+  });
+
+  it('判断ごとに報告が1つ以上出る（3件の上書きでも消えない）', () => {
     const reports: GazeReport[] = [];
     const r = new GazeReporter((report) => reports.push(report));
     r.commanded('away', true);
     r.commanded('user', true);
+    r.commanded('away', true);
     r.rendered(10);
-    expect(reports.map((x) => x.target)).toEqual(['user']);
+    expect(reports.map((x) => `${x.target}:${x.visible}`)).toEqual(['away:false', 'user:false', 'away:true']);
+  });
+
+  it('背景タブで visible=false を出した目標は、上書きされても重ねて出さない', () => {
+    const reports: GazeReport[] = [];
+    const r = new GazeReporter((report) => reports.push(report));
+    r.commanded('away', false);
+    r.commanded('user', true);
+    r.rendered(10);
+    expect(reports.map((x) => [x.target, x.visible, x.client_t_ms.value === null ? (x.client_t_ms as { null_reason: string }).null_reason : x.client_t_ms.value])).toEqual([
+      ['away', false, 'page_hidden_no_raf'],
+      ['user', true, 10],
+    ]);
   });
 });

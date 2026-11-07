@@ -57,6 +57,32 @@ node tts_probe.mjs --mode idle --yes
 node tts_probe.mjs --mode billing --yes     # 他の利用が同時にない時間帯に
 ```
 
+## 読みの実験（reading_tts、2026-11-08）
+
+TTS へ送る文の読みの変換（orchestrator の `TTS_READING_MODE`）を STT 往復で比べた。条件は (a) `el_ja` 漢字のまま、(b) `el_risky_ja` 規則の語だけひらがな、(c) `el_all_ja` 漢字と数を全部ひらがな。ElevenLabs `eleven_flash_v2_5`、multi-stream-input、`language_code=ja`、各条件 1 テイク。STT は asia-northeast1 の `long`。
+
+- (b) の規則は文を作る前に固定した（`apps/orchestrator/src/speech/reading/pieces.ts` の冒頭）: R1 固有名詞とその直後の接尾、R2 数詞＋表にある助数詞、R3 漢字 1〜2 字の名詞（サ変接続・非自立・接尾・代名詞を除く）。
+- 文は既存の 15 文（`SENTENCES`）と、規則を決めた後に同じ担当が作って固定した会話の応答らしい 15 文（`SENTENCES_NEW`）。新しい文は規則を知っている者が書いたので、盲検ではない。
+- TTS の文は本番と同じ変換で作り `lib/reading_variants.json` に固定した（`npx tsx tools/provider_probe/reading_variants.ts`）。
+- 同じ文・同じ設定の既存のテイク（`out/reading_roundtrip` の `el_ja`、`el_hira_ja`）は再利用した。使ったのは ElevenLabs 1019 文字、STT 161 秒（`out/reading_tts/ledger.json`）。
+
+```bash
+cd tools/provider_probe
+node --env-file=../../.env reading_roundtrip.mjs --set both --out reading_tts --conditions el_ja,el_risky_ja,el_all_ja --max-el-chars 1500 --max-stt-s 240 --yes
+KUROMOJI_DIR=$PWD/../.. node reading_roundtrip_score.mjs --out reading_tts --set new el_ja el_risky_ja el_all_ja   # --set old も
+```
+
+| 文 | 条件 | かな一致 平均 | 最低 | かな一致 100% 未満の文 |
+|---|---|---|---|---|
+| 既存 15 | (a) 漢字 | 95 | 85 | 6（東京着、坂、金閣史、トレビール、接点、3泊円） |
+| 既存 15 | (b) risky | 97 | 78 | 3（s01 は語尾の欠け、s03 は変換しなかった「見学」→けんか、s05 は「お散歩」） |
+| 既存 15 | (c) all | 97 | 78 | 4（s01 同上、逢坂、には載せ、きってお） |
+| 新 15 | (a) 漢字 | 87 | 64 | 9（ハメ／翌日14人、2倍、4時ごと、ルシェ、上の町、腰のシャツ、全部派遣、異説、旅籠屋） |
+| 新 15 | (b) risky | 97 | 80 | 4（渋谷行き、変換しなかった「一日中家」、見つつ、配置換え） |
+| 新 15 | (c) all | 97 | 82 | 6（渋谷行き、1日中間（解析が「家」を カ と読んだ）、横浜まで、見つつ、ですよ、使いつかい） |
+
+判断: (b) を採用（設定で有効にできる）。既定は off のまま。STT の一致は人の聞こえ方でも抑揚でもない。(c) は解析の誤り（家＝カ）がそのまま声になり、助詞の聞き誤りも増えたので採らない。有効にする前に人が `out/reading_tts/` の WAV を聞き比べる（`el_ja__n05.wav` と `el_risky_ja__n05.wav` など）。`out/` は git の対象外。
+
 ## 試験
 
 ```bash

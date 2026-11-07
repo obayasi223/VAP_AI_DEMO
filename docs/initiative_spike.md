@@ -304,10 +304,10 @@ v1 では両モデルとも「話が先へ進んでしまう」を待つ不利�
 
 1. **安定テキストの定義。** 実測の `long` では 0.9 の範囲が revision ごとに伸び縮みする（文字数 0→10→9→0→24→0→28→35→34→28→42→28。`provider_probe/out/` の2本。文字は変わらない）。最新の revision だけを見ると、根拠が毎秒のように消える。そこで「一度 0.9 になった範囲は、最新の全文がその接頭部を保つ間は安定」とした（`transcript_view.ts` の `high_water`。比較用に `literal` あり）。0.01 の部分は安定に入らない。
 2. **interim の末尾の「。」は文末ではない。** 0.9 の瞬間の結果には必ず付く。起動の判定と LLM への入力から除いた。
-3. **起動の条件は policy に置けなかった。** 契約の `initiative` 節が strict なので `monitor.ts` の `DEFAULT_TRIGGER` に置いた。統括経由で契約に足すのがよい。
+3. **起動の条件は policy に置けなかった。** 契約の `initiative` 節が strict なので `monitor.ts` の `DEFAULT_TRIGGER` に置いた。統括経由で契約に足すのがよい。**→ 第3部で解消**（`policy.initiative.trigger` に置いた。値は【未検証の暫定値】）。
 4. **`policy.ja.json` の【暫定】値:** `max_new_stable_chars_since_input` 60、`max_result_age_ms` 8000（3.8-flash の p95 以上。flash-lite に決めたら 4000 程度へ下げる）、`max_requests_per_session` 200。いずれも実測で決めた値ではない。
 5. **撤回の検証。** `withdraw_evidence_span` を出力に足し、候補の根拠より後ろの発話であることをコードで確かめる。`WITHDRAW` は鮮度で棄却しない（安全側の判定なので）。
-6. **E2a、E2 までの代役。** `candidate.state_changed` の発行と、活動中の候補があるときの `NEW` の棄却を `monitor.ts` が行っている。移管のときに外す。
+6. **E2a、E2 までの代役。** `candidate.state_changed` の発行と、活動中の候補があるときの `NEW` の棄却を `monitor.ts` が行っている。移管のときに外す。**→ 第3部で解消**（どちらも E2a の `CandidateLedger` へ移した。monitor は `initiative.decision` と `initiative.discarded` だけを出す）。
 7. **試験の場所。** ルートの vitest は `apps/*/test/` しか見ないが、持ち物の外なので `__tests__/` に置いた。`npx vitest run --config tools/initiative_spike/vitest.config.ts` で実行する。ルートの `include` に足すか、移管時に移す。
 8. **Gemini の実装の差し替え。** `tools/initiative_spike/lib/gemini_thin.ts` は `LlmProvider` の形で、`run_replay.ts` の `makeProvider` だけを変えれば D の実装へ替えられる。
 
@@ -316,8 +316,55 @@ v1 では両モデルとも「話が先へ進んでしまう」を待つ不利�
 - **実音声、実 ASR、人の評価は全部これから。** 手書きの素材は話速が一定で、認識の誤りと区間の切れ方が現実と違う。形は短い1サンプルに寄せただけで、自然な話し方の安定テキストの遅れは未測定。
 - 過剰適合の検査は完全ではない。H1 と H2 は調整に使っていないが、台本もプロンプトも同じ作者（Claude）が書いたので盲検ではない。v2 の「手続きの抜け」は H1 を知った上で書いた。「足りない」の例は C2 に由来する。
 - 非決定性の評価ができていない（各 n=1〜2）。
-- コードの既定の起動条件（24／12 文字）と、話の後に届く `NEW` の扱い（現状は登録される。E3 の通常応答との調停が必要）。
+- コードの既定の起動条件（24／12 文字）は未検証。話の後に届く `NEW` の扱いは第3部で決めた（E2a が保留し、人が再開したら照合し直して候補にし、再開しないまま通常応答が始まったら棄てる。`docs/known_gaps.md` §9）。E3 の通常応答との調停は残る。
 - C5 は G3 の対象で、今回は流していない。
 - Windows の録音アプリの画面と出力の形式は確認していない（24bit と 32bit 浮動小数の WAV は試験で通した）。
 - 費用は集計していない（トークン数は `cost.usage` に記録）。
 
+
+---
+
+# 第3部: 本実装への移管（レーン G、波2）と関門 G2 の準備
+
+**関門 G2 は未通過。** 下の結果は手書きの逐次 ASR（`fixtures/initiative/handwritten/`、実 ASR ではない）を本実装の経路で流した予備の再実行で、G2 に必要な実音声、実 ASR、研究者の3列の評価はまだない。
+
+## 経路
+
+- `cognition/initiative/monitor.ts`（G）→ E2a の `CandidateLedger.applyModelDecision`。NONE、NEW、KEEP、REVISE、WITHDRAW の全部が E2a を通る。候補の状態、採番、`candidate.state_changed`、`candidate.rejected`、未再生の PCM の破棄（D の `discardCandidate`）は E2a。G は `initiative.decision` と `initiative.discarded` だけを出す。E2a の拒否は `initiative.discarded` に `e2a_rejected:<reason>` として写す。
+- `llm.request`、`llm.response`、`cost.usage` は D の Gemini プロバイダが出す。スパイクの monitor が出していた3つ（`cost.usage` の `tokens` 単位を含む）は消した（二重計上の解消）。
+- セッション（`session/session.ts`）とリプレイ（`tools/initiative_spike/run_replay.ts`）は同じ `session/initiative_wiring.ts` を通る。STT の結果で増分起動、tick で `observeUserFloor`・`tick`（期限）・`poll`（失敗後の待ちの明け）、`advance_segment` で `onSegmentChanged`、通常応答の開始で `onNormalResponseStarted`、候補の発話の終わりで `finishSpeech`（波2では候補を話さないので通常は呼ばれない）。
+- 判定の LLM は応答と別のインスタンス（`INITIATIVE_GEMINI_MODEL`、既定 `gemini-3.5-flash-lite`、思考 `minimal`、時間切れは `max_result_age_ms`、出力上限 4096）。条件は `INITIATIVE_CONDITIONS`（既定は ja で3条件とも、`none` で停止）。
+- 判定の失敗（429、時間切れ、不正な出力）は候補を作らず、理由を `initiative.discarded` に残し、次の起動を待たせる（2秒から倍、上限30秒。【未検証の暫定値】、`DEFAULT_FAILURE_BACKOFF`）。
+- **波2では候補を作って記録と研究者画面に出すだけ。** TurnManager にも D にも渡さず、候補の TTS も作らない。
+
+## 再実行の方法
+
+```bash
+bash tools/initiative_spike/run.sh replay --asr handwritten --scenarios C1,C2,C3a,C3b,C4,C6,V1,V2,V3,V4,H1,H2 \
+  --models gemini-3.5-flash-lite:minimal --label <名前> --ledger call_ledger.g2_prep --max-calls 100 \
+  --min-new-chars 40 --boundary-chars none --yes
+bash tools/initiative_spike/run.sh report --label <名前>
+```
+
+起動の条件はスパイク（`p2_v2_tune`）に合わせた 40 文字・文の区切りなし。リプレイは記録を流している間を「人が話している」、流し終えた後を「黙った」として E2a へ伝える（VAP がないので近似）。
+
+## 結果（2026-11-08、`g2_prep_production` 各 n=1、C2・V3・V4 は `g2_prep_production_r2` で n=2）
+
+| 台本 | スパイク（flash-lite、Interactions） | 本実装（flash-lite、streamGenerateContent） | スパイクと |
+|---|---|---|---|
+| C1 | NONE 6/6 | NONE 6/6 | 一致 |
+| C2 | NONE 6/6 | NEW → WITHDRAW（2/2、本人の補填の説明で撤回） | **不一致**（仮説「候補なし、または撤回」には合う） |
+| C3a | NONE 6/6 | NONE 6/6 | 一致 |
+| C3b | NEW → 根拠の消失でコード撤回 | 同じ | 一致 |
+| C4 | NONE 6/6 | NONE 6/6 | 一致 |
+| C6 | NONE 6/6 | NONE 6/6 | 一致 |
+| V1 | NEW（17.4秒） | NEW（17.3秒）、以後 KEEP | 一致 |
+| V2 | NEW（19.3秒） | NEW（11.5秒）、KEEP と REVISE | 一致（時刻は早い） |
+| V3 | NONE | 1回目 NEW（日付の順序を読み違えた誤り）、2回目 NONE | **1/2 不一致** |
+| V4 | 途中 NONE、1回は訂正後に誤った NEW | 2/2 とも途中で NEW → 本人の訂正で WITHDRAW、話の終わり直前に再び NEW（残る）、根拠が候補より前の WITHDRAW はゲートで棄却 | **不一致**（途中の申し出は 3.8-flash のスパイクに近い） |
+| H1 | NEW（20.5秒） | NEW（20.6秒）、以後 KEEP | 一致 |
+| H2 | NONE | NONE | 一致 |
+
+- Gemini の呼び出し 90 回（`call_ledger.g2_prep.json`、上限 100）。失敗 0、JSON の不正 0、ゲートでの NEW の棄却 0。遅延（要求から応答まで、90件）は p50 1352ms、p95 1746ms、max 1997ms（4本を同時に流した状態）。
+- 差の原因は切り分けていない。候補は (1) 非決定性（n が小さい）、(2) API の違い（スパイクは Interactions、本実装は streamGenerateContent。構造化出力の指定の方式も違う）。プロンプトの版（v2）、persona、入力の形は同じ。
+- コードの層（根拠の照合、撤回、根拠の消失、E2a の採番と遷移）はどの実行でも想定どおりに働いた。これは LLM の性能を示さない。

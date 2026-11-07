@@ -236,7 +236,7 @@ describe('CandidateTracker', () => {
   });
 
   it('何もなければ空の表示', () => {
-    expect(new CandidateTracker().summary()).toEqual({ decisions: [], state_changes: [], current: [], counts: {}, discarded: 0, aborted: 0 });
+    expect(new CandidateTracker().summary()).toEqual({ decisions: [], state_changes: [], current: [], counts: {}, discarded: 0, aborted: 0, rejected: 0, drops: [] });
     const html = renderToStaticMarkup(createElement(ResearchDashboard, { snapshot: new ResearchViewStore(WS).snapshot() }));
     expect(html).toContain('data-testid="candidates-empty"');
     expect(html).toContain('vap.state 未受信');

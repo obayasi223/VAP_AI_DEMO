@@ -1,7 +1,7 @@
 /**
  * 本物の部品との接続。
  *  - D の SpeechGeneratorImpl: 版が変わると旧版の PCM が実際に消え、旧版の再生は startChecked で拒否される。
- *  - S の InitiativeMonitor（変更しない）: asStore() で差し替えると、ID は E2a が振り、イベントは二重にならない。
+ *  - G の InitiativeMonitor: applyModelDecision 経由で、ID は E2a が振り、イベントは二重にならない。
  * LLM と TTS は test double で、LLM の判断は何も試していない。
  */
 import { describe, expect, it } from 'vitest';
@@ -99,69 +99,32 @@ describe('D の SpeechGeneratorImpl と', () => {
   });
 });
 
-describe('S の InitiativeMonitor（変更なし）と asStore()', () => {
-  it('ID は E2a が振り、撤回の遷移は表で確かめ、candidate.state_changed は monitor の1件だけ', async () => {
-    const ledgerSink = new MemoryEventSink();
-    const time = new ManualTimeSource();
-    const speech = new FakeSpeech();
-    const ledger = new CandidateLedger({
-      emitter: createEventEmitter({ time, session_id: 's', condition: () => 'initiative_no_cue', sink: ledgerSink }),
-      // asStore() は根拠を照合しない（monitor のゲートが照合済み）ので、安定テキストは読まれない。
-      stable: () => [],
-      speech,
-      settings: SETTINGS,
-    });
+describe('G の InitiativeMonitor（applyModelDecision 経由）', () => {
+  it('ID は E2a が振り、撤回の遷移は表で確かめ、candidate.state_changed は E2a の発行だけ（二重にならない）', async () => {
     const STABLE_TEXT = '予算は五十万円のままで進めます';
     const LATER = `${STABLE_TEXT}。でも部長が追加で出してもらえると言っていました`;
-    const parts = makeMonitor(
-      (_r, i) =>
-        i === 0
-          ? output({ decision: 'NEW', evidence_span: '五十万円', evidence_segment_ids: [0], proposed_utterance: '確認です', reason: 'r' })
-          : output({
-              decision: 'WITHDRAW',
-              target_candidate_id: 'c_0001',
-              withdraw_reason: '解消',
-              withdraw_evidence_span: '追加で出してもらえる',
-              withdraw_evidence_segment_ids: [0],
-            }),
-      { store: ledger.asStore() },
+    const parts = makeMonitor((_r, i) =>
+      i === 0
+        ? output({ decision: 'NEW', evidence_span: '五十万円', evidence_segment_ids: [0], proposed_utterance: '確認です', reason: 'r' })
+        : output({
+            decision: 'WITHDRAW',
+            target_candidate_id: 'c_0001',
+            withdraw_reason: '解消',
+            withdraw_evidence_span: '追加で出してもらえる',
+            withdraw_evidence_segment_ids: [0],
+          }),
     );
     parts.monitor.onStt(interim(STABLE_TEXT));
     await parts.monitor.whenIdle();
-    expect(ledger.get('c_0001')?.state).toBe('INTENT_READY');
+    expect(parts.ledger.get('c_0001')?.state).toBe('INTENT_READY');
     parts.monitor.onStt(interim(LATER));
     await parts.monitor.whenIdle();
 
-    expect(ledger.get('c_0001')?.state).toBe('WITHDRAWN');
-    expect(parts.sink.ofType('candidate.state_changed')).toHaveLength(1);
-    expect(ledgerSink.events).toHaveLength(0);
-    expect(speech.discards).toEqual([{ candidate_id: 'c_0001', reason: 'candidate_withdrawn', keep_version: undefined }]);
-  });
-
-  it('asStore() でも表にない遷移と旧い版の更新は拒否する', () => {
-    const ledger = new CandidateLedger({
-      emitter: createEventEmitter({ time: new ManualTimeSource(), session_id: 's', condition: () => 'reactive', sink: new MemoryEventSink() }),
-      stable: () => STABLE,
-      speech: new FakeSpeech(),
-      settings: SETTINGS,
-    });
-    const store = ledger.asStore();
-    const ref = store.register({
-      segment_id: 0,
-      transcript_revision: 10,
-      intent_type: 'X',
-      evidence_span: '五十万円',
-      proposed_utterance: 'u',
-      expiry_policy: 'p',
-      urgency: 'NORMAL',
-      evidence_segment_ids: [1],
-      decided_at: 1,
-    });
-    expect(ref).toEqual({ candidate_id: 'c_0001', candidate_version: 1 });
-    expect(() => store.setState('c_0001', 'SPOKEN', 2)).toThrow(/not in the table/);
-    expect(store.update('c_0001', 1, { proposed_utterance: 'v' }, 3)).toEqual({ candidate_id: 'c_0001', candidate_version: 2 });
-    expect(() => store.update('c_0001', 1, { proposed_utterance: 'w' }, 4)).toThrow(/expected version 1/);
-    store.setState('c_0001', 'WITHDRAWN', 5);
-    expect(() => store.setState('c_0001', 'INTENT_READY', 6)).toThrow();
+    expect(parts.ledger.get('c_0001')?.state).toBe('WITHDRAWN');
+    expect(parts.sink.ofType('candidate.state_changed').map((e) => [e.from, e.to])).toEqual([
+      [null, 'INTENT_READY'],
+      ['INTENT_READY', 'WITHDRAWN'],
+    ]);
+    expect(parts.speech.discards).toEqual([{ candidate_id: 'c_0001', reason: 'candidate_withdrawn', keep_version: undefined }]);
   });
 });

@@ -59,7 +59,7 @@ export type ModelDecision =
       target: CandidateRef;
       withdraw_evidence_span: string;
       withdraw_evidence_segment_ids: readonly number[];
-      withdraw_reason: ModelOutput<string>;
+      withdraw_reason: MaybeModelOutput<string>;
     } & DecisionMeta);
 
 /**
@@ -114,7 +114,7 @@ export type WithdrawRecord =
   | {
       source: 'model_decision';
       request_id: string;
-      withdraw_reason: ModelOutput<string>;
+      withdraw_reason: MaybeModelOutput<string>;
       evidence_segment_ids: Verified<number[]>;
     }
   | { source: 'code'; cause: CandidateCause };

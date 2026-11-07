@@ -40,14 +40,16 @@ if (origin === 'handwritten') {
 } else {
   out.push('実 ASR のリプレイ。下の「仮説との一致」は機械的な比較で、合否は人の評価（eval.csv の3列）で決める。', '');
 }
+const paths = [...new Set(runs.map((r) => r.meta.path ?? 'spike_monitor'))];
+out.push(`経路: ${paths.join(', ')}（production_wiring は本実装の InitiativeWiring と CandidateLedger、spike_monitor はスパイク）。`, '');
 out.push(`各行 n=1 回の実行。プロンプト版: ${[...new Set(runs.map((r) => r.meta.prompt_version))].join(', ')}。`, '');
-out.push('| 台本 | 種類 | モデル | 要求 | 判定の内訳 | NEW(話の途中) | NEW(話の後) | モデルの NEW のうちゲート棄却 | 撤回(モデル/コード) | 残った候補 | 仮説との一致 | 遅延 p50/max ms |');
-out.push('|---|---|---|---:|---|---:|---:|---:|---:|---:|---|---:|');
+out.push('| 台本 | 種類 | モデル | 要求 | 判定の内訳 | NEW(話の途中) | NEW(話の後) | 話の後の NEW の保留 | モデルの NEW のうちゲート棄却 | 撤回(モデル/コード) | 残った候補 | 仮説との一致 | 遅延 p50/max ms |');
+out.push('|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---|---:|');
 for (const r of runs) {
   const s = r.summary;
   const match = r.scenario ? matchesHypothesis(r.scenario.expected.outcome, s) : null;
   out.push(
-    `| ${r.meta.scenario} | ${r.scenario?.kind ?? ''} | ${r.meta.model}:${r.meta.thinking} | ${s.llm_requests} | ${Object.entries(s.counts).map(([k, v]) => `${k} ${v}`).join(', ')} | ${s.new_during_speech} | ${s.new_after_speech} | ${s.gate_rejected_new} | ${s.withdrawn_by_model}/${s.withdrawn_by_code} | ${s.active_at_end} | ${match === null ? '対象外' : match ? '一致' : '不一致'} | ${quantile(s.latency_ms, 0.5)}/${quantile(s.latency_ms, 1)} |`,
+    `| ${r.meta.scenario} | ${r.scenario?.kind ?? ''} | ${r.meta.model}:${r.meta.thinking} | ${s.llm_requests} | ${Object.entries(s.counts).map(([k, v]) => `${k} ${v}`).join(', ')} | ${s.new_during_speech} | ${s.new_after_speech} | ${s.new_held_post_turn ?? 0} | ${s.gate_rejected_new} | ${s.withdrawn_by_model}/${s.withdrawn_by_code} | ${s.active_at_end} | ${match === null ? '対象外' : match ? '一致' : '不一致'} | ${quantile(s.latency_ms, 0.5)}/${quantile(s.latency_ms, 1)} |`,
   );
 }
 const holds = runs.flatMap((r) => r.summary.hold.map((h) => ({ scenario: r.meta.scenario, model: r.meta.model, ...h })));

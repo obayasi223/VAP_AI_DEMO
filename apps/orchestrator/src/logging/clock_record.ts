@@ -4,11 +4,11 @@
  * mapping() は推定がなければ null を返す。そのときは補正していない時刻を入れないこと。
  */
 import type { EventEmitter, TimeMapping } from '@llm-vap/contracts';
-import { absent, present, type ClockSample } from '@llm-vap/contracts';
+import { absent, draftFromClockReport, present, type ClockSample } from '@llm-vap/contracts';
 
 /**
  * ブラウザの往復計測。ClockEstimator（apps/web/src/audio/clock_sync.ts）の推定を受ける。
- * 注意: 推定はブラウザの Worker の中にあり、Node へ届ける契約のメッセージが今はない（最終報告の契約の不足）。
+ * 推定はブラウザの Worker の中にあり、browser_rpc の clock.report で Node へ届く（session が record へ渡す）。
  */
 export class BrowserClockRecorder {
   private latest: ClockSample | null = null;
@@ -16,13 +16,8 @@ export class BrowserClockRecorder {
   constructor(private readonly emitter: EventEmitter) {}
 
   record(sample: ClockSample): void {
-    this.emitter.emit({
-      event: 'clock.sync',
-      source: 'browser_rtt',
-      offset_ms: sample.offset_ms,
-      error_ms: sample.uncertainty_ms,
-      rtt_ms: present(sample.rtt_ms),
-    });
+    // clock.report の変換は契約の draftFromClockReport の1か所（forwarding.ts）。
+    this.emitter.emit(draftFromClockReport(sample));
     if (Number.isFinite(sample.offset_ms) && Number.isFinite(sample.uncertainty_ms)) this.latest = sample;
   }
 

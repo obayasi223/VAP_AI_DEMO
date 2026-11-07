@@ -15,7 +15,7 @@ import {
   summarizeCost,
   type CostSummary,
   type LatencyReport,
-} from '../../../orchestrator/src/logging/analysis';
+} from '@llm-vap/analysis';
 import { CandidateTracker, type CandidateSummary } from './candidates_view';
 import type { FeedConnection, FeedSink, ResearchFeed } from './feed';
 import { OutcomeTracker, type InterruptStats, type PrepareStats } from './rates';

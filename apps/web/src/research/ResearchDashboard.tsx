@@ -4,7 +4,7 @@
  * I2 で p の時系列、候補のライブ表示、準備・割り込みの率、研究者のメモを足した（LivePanels.tsx）。
  * 録音、条件切替、WoZ は波4（E3、J）の範囲で、置き場だけある。
  */
-import type { CostSummary, LatencyRow } from '../../../orchestrator/src/logging/analysis';
+import type { CostSummary, LatencyRow } from '@llm-vap/analysis';
 import { CandidatePanel, NotePanel, OutcomePanel, TimelinePanel } from './LivePanels';
 import styles from './research.module.css';
 import type { CurrentState, ResearchSnapshot } from './view_store';

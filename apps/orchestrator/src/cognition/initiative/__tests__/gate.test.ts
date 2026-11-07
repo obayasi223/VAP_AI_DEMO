@@ -90,4 +90,8 @@ describe('checkWithdrawEvidence', () => {
     const r = checkWithdrawEvidence({ ...base, span: '来週の展示会', segment_ids: [1], candidate_evidence_span: '五十万円' });
     expect(r).toEqual({ ok: false, reasons: ['withdraw_evidence_not_after_candidate'] });
   });
+  it('候補の根拠が入力に見つからなければ、後ろかを確かめられないので棄却する', () => {
+    const r = checkWithdrawEvidence({ ...base, span: '進めようと思って', segment_ids: [2], candidate_evidence_span: '入力から落ちた古い区間' });
+    expect(r).toEqual({ ok: false, reasons: ['candidate_evidence_not_in_input'] });
+  });
 });

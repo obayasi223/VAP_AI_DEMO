@@ -97,12 +97,12 @@ export function checkWithdrawEvidence(check: WithdrawCheckInput): GateResult<{ s
   if (!base.ok) return base;
   const all = joined(check.input);
   const candidate = normalizeForMatch(check.candidate_evidence_span);
-  const start = all.indexOf(candidate);
-  if (start >= 0) {
-    const candidateEnd = start + candidate.length;
-    const span = normalizeForMatch(check.span);
-    const spanEnd = all.lastIndexOf(span) + span.length;
-    if (spanEnd <= candidateEnd) return { ok: false, reasons: ['withdraw_evidence_not_after_candidate'] };
-  }
+  const start = candidate.length > 0 ? all.indexOf(candidate) : -1;
+  // 候補の根拠が入力に見つからなければ、撤回の根拠が後ろかを確かめられない。確かめずに通さない。
+  if (start < 0) return { ok: false, reasons: ['candidate_evidence_not_in_input'] };
+  const candidateEnd = start + candidate.length;
+  const span = normalizeForMatch(check.span);
+  const spanEnd = all.lastIndexOf(span) + span.length;
+  if (spanEnd <= candidateEnd) return { ok: false, reasons: ['withdraw_evidence_not_after_candidate'] };
   return base;
 }

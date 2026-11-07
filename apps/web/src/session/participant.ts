@@ -2,6 +2,8 @@
  * 参加者画面のブラウザ側の配線（レーン J）。React に依存しない。
  *  - 音声: startBrowserAudio（レーン A）。「はじめる」のクリックの中で呼ぶ。
  *  - 口: 再生音（outputNode）に AnalyserNode をつなぎ、毎フレームの RMS を Avatar.setMouthLevel へ。
+ *    語時刻（Node の playback.alignment）と再生の報告（Worker の playback.started／position／ended）を
+ *    Avatar.onPlaybackAlignment／onPlaybackReport へ。
  *  - 視線: Node の gaze.command → Avatar.setGaze。描画の報告（onGazeReport）を gaze.report で返す。
  *  - 状態: server.hello、session.status、playback.begin／stop、リンクの状態。
  */
@@ -142,6 +144,10 @@ export class ParticipantController {
         onMessage: (message) => this.onMessage(message),
         // 再生の始まりと終わりは Worker が Node へ送る報告で知る（主スレッドには別に届かない）。
         onSent: (message) => {
+          // 口形（語時刻＋再生位置）。再生の報告は Worker が Node へ送ったものを主スレッドでも受ける。
+          if (message.type === 'playback.started' || message.type === 'playback.position' || message.type === 'playback.ended') {
+            this.options.avatar()?.onPlaybackReport(message);
+          }
           if (message.type === 'playback.started') this.playing.add(message.audio_playback_id);
           else if (message.type === 'playback.ended') this.playing.delete(message.audio_playback_id);
           else return;
@@ -207,6 +213,9 @@ export class ParticipantController {
 
   private onMessage(message: NodeToBrowser): void {
     switch (message.type) {
+      case 'playback.alignment':
+        this.options.avatar()?.onPlaybackAlignment(message);
+        break;
       case 'server.hello':
         this.update({ sessionId: message.session_id, isFake: message.is_fake });
         break;

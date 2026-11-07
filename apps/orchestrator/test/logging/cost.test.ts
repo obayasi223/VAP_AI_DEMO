@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EVIDENCED_RATES, REASON_RATE_NOT_IN_MATRIX, summarizeCost } from '../../src/logging';
+import { EVIDENCED_RATES, REASON_RATE_NOT_IN_MATRIX, summarizeCost } from '@llm-vap/analysis';
 import { costEvent, envelope, statusEvent } from './helpers';
 
 describe('summarizeCost', () => {

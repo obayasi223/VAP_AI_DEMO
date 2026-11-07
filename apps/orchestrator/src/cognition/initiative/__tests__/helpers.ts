@@ -1,7 +1,9 @@
 /** 試験の部品。LLM は ScriptedLlmProvider（test double）で、ここの結果は LLM の性能を何も示さない（計画 §4.5a）。 */
 import { ManualTimeSource, MemoryEventSink, absent, createEventEmitter, present, splitInterimParts } from '@llm-vap/contracts';
 import type { LlmRequest, SttPart } from '@llm-vap/contracts';
-import { InMemoryCandidateStore, ScriptedLlmProvider } from '@llm-vap/testkit';
+import { ScriptedLlmProvider } from '@llm-vap/testkit';
+import { CandidateLedger } from '../../../control/candidates';
+import type { CandidateLedgerSettings, CandidateSpeechPort } from '../../../control/candidates';
 import { InitiativeMonitor } from '../monitor';
 import type { InitiativeMonitorDeps } from '../monitor';
 import type { InitiativeModelOutput } from '../model_output';
@@ -95,11 +97,42 @@ export function output(partial: Partial<InitiativeModelOutput>): string {
 
 export type Responder = (request: LlmRequest, index: number) => string | Promise<string>;
 
-export function makeMonitor(responder: Responder, overrides: Partial<InitiativeMonitorDeps> = {}) {
+/** E2a の既定（話の後の判定は試験の時刻の進め方に依らないよう、人の発話の有無を伝えない限り働かない）。 */
+export const LEDGER_SETTINGS: CandidateLedgerSettings = {
+  max_active_candidates: 1,
+  candidate_expiry_ms: null,
+  candidate_expires_on_segment_change: null,
+  post_turn_silence_ms: 500,
+};
+
+/** D の discardCandidate の呼び出しを記録するだけの口。 */
+export class RecordingSpeech implements CandidateSpeechPort {
+  readonly discards: { candidate_id: string; reason: string; keep_version: number | undefined }[] = [];
+  startChecked() {
+    return { ok: false as const, reason: 'unknown_playback' as const };
+  }
+  discardCandidate(candidate_id: string, reason: string, keep_version?: number): number {
+    this.discards.push({ candidate_id, reason, keep_version });
+    return 0;
+  }
+}
+
+export function makeMonitor(
+  responder: Responder,
+  overrides: Partial<InitiativeMonitorDeps> = {},
+  ledgerSettings: Partial<CandidateLedgerSettings> = {},
+) {
   const time = new ManualTimeSource();
   const sink = new MemoryEventSink();
   const emitter = createEventEmitter({ time, session_id: 's', condition: () => 'initiative_no_cue', sink });
-  const store = new InMemoryCandidateStore();
+  const speech = new RecordingSpeech();
+  let monitorRef: InitiativeMonitor | null = null;
+  const ledger = new CandidateLedger({
+    emitter,
+    stable: () => monitorRef?.stableSnapshot() ?? [],
+    speech,
+    settings: { ...LEDGER_SETTINGS, ...ledgerSettings },
+  });
   let count = 0;
   const llm = new ScriptedLlmProvider({
     responder: (request) => responder(request, count++),
@@ -108,7 +141,7 @@ export function makeMonitor(responder: Responder, overrides: Partial<InitiativeM
   });
   const monitor = new InitiativeMonitor({
     llm,
-    store,
+    ledger,
     emitter,
     time,
     persona: PERSONA,
@@ -116,7 +149,8 @@ export function makeMonitor(responder: Responder, overrides: Partial<InitiativeM
     trigger: { min_new_stable_chars: 10, min_new_chars_at_boundary: 4 },
     ...overrides,
   });
-  return { monitor, llm, store, sink, time };
+  monitorRef = monitor;
+  return { monitor, llm, ledger, store: ledger, sink, time, speech };
 }
 
 export function deferred<T>() {

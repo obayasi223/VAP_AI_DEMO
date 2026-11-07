@@ -240,7 +240,8 @@ const InitiativeCandidateBody = {
   // モデル出力（判定に使わない。追補1）
   intent_type: ModelOutput(IntentType),
   evidence_span: ModelOutput(z.string()),
-  reason: ModelOutput(z.string()),
+  /** 空ならモデルが書かなかった（null と理由）。コードの値で埋めない。 */
+  reason: MaybeModelOutput(z.string()),
   why_now: MaybeModelOutput(z.string()),
   cost_of_waiting: MaybeModelOutput(z.string()),
   proposed_utterance: ModelOutput(z.string()),
@@ -291,7 +292,10 @@ export const InitiativeDecisionEvent = z.discriminatedUnion('decision', [
     candidate_version: CandidateVersion,
     decision: z.literal('WITHDRAW'),
     withdrawn_at: MonotonicMs,
-    withdraw_reason: ModelOutput(z.string()),
+    /** 空ならモデルが書かなかった（null と理由）。reason やコードの値で埋めない（追補2）。 */
+    withdraw_reason: MaybeModelOutput(z.string()),
+    /** モデルの判定全体の理由（withdraw_reason とは別の項目）。 */
+    reason: MaybeModelOutput(z.string()),
     /** 撤回の判断に使った後続区間の ID（追補2）。入力と照合した結果なので Verified。 */
     withdraw_evidence_segment_ids: Verified(z.array(AsrSegmentId).min(1)),
   }),
@@ -311,7 +315,7 @@ export const InitiativeAbortedEvent = eventSchema('initiative.aborted', Initiati
 
 /**
  * 候補の状態遷移。発行は E（候補の状態の正本）。
- * モデル由来の撤回は initiative.decision(WITHDRAW) が withdraw_reason を必ず持ち、ここからは
+ * モデル由来の撤回は initiative.decision(WITHDRAW) が withdraw_reason の項目を必ず持ち（空なら null と理由）、ここからは
  * request_id で指す。コード由来（期限切れ、根拠の消失など）はモデルの理由を持たないので cause で区別する。
  */
 export const CandidateStateChangedEvent = z.discriminatedUnion('cause_source', [
@@ -347,7 +351,7 @@ export const CandidateRejectedEvent = eventSchema('candidate.rejected', {
   candidate_id: Maybe(CandidateId),
   candidate_version: Maybe(CandidateVersion),
   source: z.enum(['model_decision', 'code']),
-  operation: z.enum(['NEW', 'KEEP', 'REVISE', 'WITHDRAW', 'transition', 'speech_start', 'held']),
+  operation: z.enum(['NONE', 'NEW', 'KEEP', 'REVISE', 'WITHDRAW', 'transition', 'speech_start', 'held']),
   /** 要求の時点の状態。候補がなければ null。 */
   current_state: CandidateState.nullable(),
   /** 要求された状態。KEEP など状態を変えない要求は null。 */
@@ -430,6 +434,10 @@ const SpeechFinishShape = {
   spoken_text: z.string(),
   spoken_text_precision: SpokenTextPrecision,
   samples_written: NonNegativeInt,
+  /**
+   * TTS へ実際に送った文。読みの変換（TTS_READING_MODE）で元の文と違うときだけ付く。spoken_text は元の文のまま。
+   */
+  tts_text: z.string().optional(),
 };
 export const SpeechStartedEvent = speechEvent('speech.started', SpeechShape);
 export const SpeechEndedEvent = speechEvent('speech.ended', {

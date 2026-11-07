@@ -150,7 +150,8 @@ export function CandidatePanel({ candidates }: { candidates: CandidateSummary })
       <p data-testid="candidate-counts">
         判断の回数:{' '}
         {counts.length === 0 ? <span className={styles.unmeasured}>initiative.decision 未受信</span> : counts.map(([k, n]) => `${k} ${n}`).join('、')}
-        {' / '}棄却 {candidates.discarded}・中断 {candidates.aborted}（initiative.discarded／aborted）
+        {' / '}棄却 {candidates.discarded}・中断 {candidates.aborted}（initiative.discarded／aborted。E2a の拒否の写しは除く）・E2a の拒否{' '}
+        {candidates.rejected}（candidate.rejected と active_candidate_exists）
       </p>
       {empty ? (
         <p className={styles.unmeasured} data-testid="candidates-empty">
@@ -169,6 +170,32 @@ export function CandidatePanel({ candidates }: { candidates: CandidateSummary })
             <DecisionCard key={row.key} row={row} />
           ))}
         </ul>
+      )}
+      {candidates.drops.length === 0 ? null : (
+        <table className={`${styles.table} ${styles.wrapTable}`} data-testid="candidate-drops">
+          <thead>
+            <tr>
+              <th className={styles.num}>時刻 ms</th>
+              <th>出所</th>
+              <th>候補</th>
+              <th>理由（コードの値）</th>
+            </tr>
+          </thead>
+          <tbody>
+            {candidates.drops.map((row) => (
+              <tr key={row.key}>
+                <td className={styles.num}>{ms(row.t_ms)}</td>
+                <td>{row.source === 'candidate.rejected' ? `E2a の拒否（${row.operation ?? '?'}）` : 'G の棄却'}</td>
+                <td>{row.candidate_id ?? '（未採番）'}</td>
+                <td>
+                  {row.reason}
+                  {row.held ? '（保留）' : ''}
+                  {row.details.length > 0 ? ` — ${row.details.join('、')}` : ''}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
       {candidates.state_changes.length === 0 ? null : (
         <table className={`${styles.table} ${styles.wrapTable}`}>

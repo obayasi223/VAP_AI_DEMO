@@ -306,7 +306,7 @@ const TAIL_STEPS: readonly Step[] = [
   [36000, {
     event: 'initiative.decision', decision: 'WITHDRAW', ...llmMeasured('fake_r5', 35300, 35980),
     candidate_id: CANDIDATE_2, candidate_version: 2, withdrawn_at: 36000,
-    withdraw_reason: modelOutput('偽: 利用者が自分で答えた'), withdraw_evidence_segment_ids: verified([4], 'fake'),
+    withdraw_reason: modelOutput('偽: 利用者が自分で答えた'), reason: modelOutput('偽: 本人が説明した'), withdraw_evidence_segment_ids: verified([4], 'fake'),
   }],
   [36010, candidateByModel(CANDIDATE_2, 2, 'INTENT_READY', 'WITHDRAWN', 'WITHDRAW', 'fake_r5')],
   [37000, prefetch('prefetch.started', 4)],
