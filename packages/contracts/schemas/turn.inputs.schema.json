@@ -1,0 +1,768 @@
+{
+  "$id": "turn.inputs.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "vap": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "object",
+              "properties": {
+                "t": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "audio_frame": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "model_variant": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "inference_ms": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "raw": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  }
+                },
+                "channel_layout": {
+                  "type": "string",
+                  "const": "2ch"
+                },
+                "p_now": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "p_future": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "vad": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "user_speaking": {
+                  "type": "boolean"
+                },
+                "system_speaking": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "t",
+                "audio_frame",
+                "model_variant",
+                "inference_ms",
+                "raw",
+                "channel_layout",
+                "p_now",
+                "p_future",
+                "vad",
+                "user_speaking",
+                "system_speaking"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "null"
+            },
+            "null_reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "null_reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "vap_received_at": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "null"
+            },
+            "null_reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "null_reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "received_audio_frame": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "vap_worker_started_at": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "null"
+            },
+            "null_reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "null_reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "fallback_energy": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "null"
+            },
+            "null_reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "null_reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "transcript": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "object",
+              "properties": {
+                "segment_id": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "asr_segment_id": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "asr_segment_frame_start": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "transcript_revision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "text": {
+                  "type": "string"
+                },
+                "stable_text": {
+                  "type": "string"
+                },
+                "unstable_text": {
+                  "type": "string"
+                },
+                "is_final": {
+                  "type": "boolean"
+                },
+                "stability": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "number",
+                          "exclusiveMinimum": 0,
+                          "maximum": 1
+                        }
+                      },
+                      "required": [
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "null"
+                        },
+                        "null_reason": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "value",
+                        "null_reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "stability_source": {
+                  "type": "string",
+                  "enum": [
+                    "provider",
+                    "derived"
+                  ]
+                },
+                "audio_frame_end": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                },
+                "timing_precision": {
+                  "type": "string",
+                  "enum": [
+                    "word_offset",
+                    "result_end_offset",
+                    "arrival_minus_rtt",
+                    "posthoc_alignment"
+                  ]
+                },
+                "words": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "text": {
+                                "type": "string"
+                              },
+                              "audio_frame_start": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 4294967295
+                              },
+                              "audio_frame_end": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 4294967295
+                              }
+                            },
+                            "required": [
+                              "text",
+                              "audio_frame_start",
+                              "audio_frame_end"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "null"
+                        },
+                        "null_reason": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "value",
+                        "null_reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "received_at": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "segment_id",
+                "asr_segment_id",
+                "asr_segment_frame_start",
+                "transcript_revision",
+                "text",
+                "stable_text",
+                "unstable_text",
+                "is_final",
+                "stability",
+                "stability_source",
+                "audio_frame_end",
+                "timing_precision",
+                "words",
+                "received_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "null"
+            },
+            "null_reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "null_reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "completion_p": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "null"
+            },
+            "null_reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "null_reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "completion_revision": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "null"
+            },
+            "null_reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "null_reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "similarity_to_prepared": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "null"
+            },
+            "null_reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "null_reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "prefetch": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "idle"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "preparing"
+            },
+            "audio_playback_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "segment_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "transcript_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "started_at": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "state",
+            "audio_playback_id",
+            "segment_id",
+            "transcript_revision",
+            "started_at"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "ready"
+            },
+            "audio_playback_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "segment_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "transcript_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "started_at": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "state",
+            "audio_playback_id",
+            "segment_id",
+            "transcript_revision",
+            "started_at"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "playback": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "idle"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "playing"
+            },
+            "audio_playback_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "samples_written": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "system_silence_ms": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "state",
+            "audio_playback_id",
+            "samples_written",
+            "system_silence_ms"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "woz": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "allow_turn",
+              "deny_turn",
+              "interrupt",
+              "force_gaze_user"
+            ]
+          },
+          "operator": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "action",
+          "operator"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "vap",
+    "vap_received_at",
+    "received_audio_frame",
+    "vap_worker_started_at",
+    "fallback_energy",
+    "transcript",
+    "completion_p",
+    "completion_revision",
+    "similarity_to_prepared",
+    "prefetch",
+    "playback",
+    "woz"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        }
+      ]
+    }
+  }
+}

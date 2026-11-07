@@ -1,0 +1,4 @@
+# ワーカーの試験用。requirements.lock に足して入れる。
+pytest==9.2.0
+iniconfig==2.3.1
+pluggy==1.7.0

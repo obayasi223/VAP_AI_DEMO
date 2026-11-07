@@ -1,0 +1,950 @@
+{
+ "name": "refinement",
+ "model_dir": "/tmp/claude-1000/-home-yuuto-projects-LLM-VAP-DEMO/decdc084-3db4-4dd0-b832-ab2a19777949/scratchpad/r3/weights/refinement",
+ "dtype": "float32",
+ "threshold": 0.073,
+ "criteria": {
+  "auc_question_vs_continues_min": 0.85,
+  "fire_rate_question_min": 0.7,
+  "fire_rate_continues_max": 0.3,
+  "median_order": "continues < complete_with_continuation",
+  "latency_p95_ms_max_4turn": 200
+ },
+ "load_seconds": 3.5,
+ "load_info": {
+  "missing_keys": [],
+  "unexpected_keys": []
+ },
+ "summary": {
+  "p_plain": {
+   "continues": {
+    "n": 15,
+    "median": 0.0476,
+    "min": 0.0004,
+    "max": 0.6173,
+    "fire_rate": 0.467
+   },
+   "complete_with_continuation": {
+    "n": 15,
+    "median": 0.5001,
+    "min": 0.254,
+    "max": 0.7164,
+    "fire_rate": 1.0
+   },
+   "question_end": {
+    "n": 15,
+    "median": 0.7094,
+    "min": 0.0792,
+    "max": 0.8402,
+    "fire_rate": 1.0
+   },
+   "statement_end": {
+    "n": 10,
+    "median": 0.5882,
+    "min": 0.3412,
+    "max": 0.7107,
+    "fire_rate": 1.0
+   },
+   "auc_question_vs_continues": 0.942,
+   "auc_statement_vs_continues": 0.947,
+   "auc_cwc_vs_continues": 0.924,
+   "auc_question_vs_cwc": 0.8
+  },
+  "p_punct": {
+   "continues": {
+    "n": 15,
+    "median": 0.1044,
+    "min": 0.0004,
+    "max": 0.2123,
+    "fire_rate": 0.667
+   },
+   "complete_with_continuation": {
+    "n": 15,
+    "median": 0.1059,
+    "min": 0.0004,
+    "max": 0.3261,
+    "fire_rate": 0.6
+   },
+   "question_end": {
+    "n": 15,
+    "median": 0.5703,
+    "min": 0.3351,
+    "max": 0.6935,
+    "fire_rate": 1.0
+   },
+   "statement_end": {
+    "n": 10,
+    "median": 0.2511,
+    "min": 0.1213,
+    "max": 0.3154,
+    "fire_rate": 1.0
+   },
+   "auc_question_vs_continues": 1.0,
+   "auc_statement_vs_continues": 0.94,
+   "auc_cwc_vs_continues": 0.498,
+   "auc_question_vs_cwc": 1.0
+  },
+  "p_ctx": {
+   "complete_with_continuation": {
+    "n": 5,
+    "median": 0.481,
+    "min": 0.3052,
+    "max": 0.5634,
+    "fire_rate": 1.0
+   },
+   "statement_end": {
+    "n": 7,
+    "median": 0.5888,
+    "min": 0.4244,
+    "max": 0.7647,
+    "fire_rate": 1.0
+   }
+  }
+ },
+ "latency": {
+  "threads4_1turn": {
+   "tokens": 6,
+   "p50_ms": 715.9,
+   "p95_ms": 791.4
+  },
+  "threads4_4turn": {
+   "tokens": 49,
+   "p50_ms": 1565.4,
+   "p95_ms": 1867.2
+  },
+  "threads8_1turn": {
+   "tokens": 6,
+   "p50_ms": 1094.1,
+   "p95_ms": 1433.8
+  },
+  "threads8_4turn": {
+   "tokens": 49,
+   "p50_ms": 1438.3,
+   "p95_ms": 2383.4
+  }
+ },
+ "peak_rss_gb": 5.35,
+ "trajectories": {
+  "昨日駅前の新しいカフェに行ったんだけどすごく混んでて入れませんでした": [
+   [
+    "昨日",
+    0.0106
+   ],
+   [
+    "昨日駅",
+    0.0006
+   ],
+   [
+    "昨日駅前の",
+    0.0033
+   ],
+   [
+    "昨日駅前の新しい",
+    0.0002
+   ],
+   [
+    "昨日駅前の新しいカフェ",
+    0.0013
+   ],
+   [
+    "昨日駅前の新しいカフェに行った",
+    0.0276
+   ],
+   [
+    "昨日駅前の新しいカフェに行ったんだけど",
+    0.4192
+   ],
+   [
+    "昨日駅前の新しいカフェに行ったんだけどすごく",
+    0.0003
+   ],
+   [
+    "昨日駅前の新しいカフェに行ったんだけどすごく混",
+    0.0
+   ],
+   [
+    "昨日駅前の新しいカフェに行ったんだけどすごく混んで",
+    0.0287
+   ],
+   [
+    "昨日駅前の新しいカフェに行ったんだけどすごく混んでて",
+    0.5269
+   ],
+   [
+    "昨日駅前の新しいカフェに行ったんだけどすごく混んでて入れ",
+    0.0
+   ],
+   [
+    "昨日駅前の新しいカフェに行ったんだけどすごく混んでて入れませんでした",
+    0.6483
+   ]
+  ],
+  "明日の会議は何時からですか": [
+   [
+    "明",
+    0.0001
+   ],
+   [
+    "明日の",
+    0.0007
+   ],
+   [
+    "明日の会議",
+    0.0211
+   ],
+   [
+    "明日の会議は何",
+    0.002
+   ],
+   [
+    "明日の会議は何時から",
+    0.2324
+   ],
+   [
+    "明日の会議は何時からですか",
+    0.7094
+   ]
+  ]
+ },
+ "rows": [
+  {
+   "id": "con_01",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "昨日駅前の新しいカフェに行ったんだけど",
+   "next_same_speaker": "すごく混んでてさ",
+   "cue": "connective_kedo",
+   "source": "self_authored",
+   "p_plain": 0.41918,
+   "p_punct": 0.10436,
+   "p_ctx": null
+  },
+  {
+   "id": "con_02",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "明日の会議なんですが",
+   "next_same_speaker": "場所が変わりました",
+   "cue": "topic_ga",
+   "source": "self_authored",
+   "p_plain": 0.32552,
+   "p_punct": 0.16087,
+   "p_ctx": null
+  },
+  {
+   "id": "con_03",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "雨が降っていたので",
+   "next_same_speaker": "家にいました",
+   "cue": "connective_node",
+   "source": "self_authored",
+   "p_plain": 0.23131,
+   "p_punct": 0.13623,
+   "p_ctx": null
+  },
+  {
+   "id": "con_04",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "もしその日に時間があれば",
+   "next_same_speaker": "手伝ってください",
+   "cue": "conditional",
+   "source": "self_authored",
+   "p_plain": 0.01744,
+   "p_punct": 0.13881,
+   "p_ctx": null
+  },
+  {
+   "id": "con_05",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "うちの子供がこの前学校で",
+   "next_same_speaker": "賞をもらったんです",
+   "cue": "incomplete_arg",
+   "source": "self_authored",
+   "p_plain": 0.0016,
+   "p_punct": 0.02879,
+   "p_ctx": null
+  },
+  {
+   "id": "con_06",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "それであのー友達に",
+   "next_same_speaker": "連絡してみたんです",
+   "cue": "incomplete_arg",
+   "source": "self_authored",
+   "p_plain": 0.00044,
+   "p_punct": 0.01129,
+   "p_ctx": null
+  },
+  {
+   "id": "con_07",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "最近仕事が忙しくて",
+   "next_same_speaker": "全然休めていません",
+   "cue": "te_form",
+   "source": "self_authored",
+   "p_plain": 0.16206,
+   "p_punct": 0.18726,
+   "p_ctx": null
+  },
+  {
+   "id": "con_08",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "駅から歩いて十分くらいの",
+   "next_same_speaker": "ところに住んでいます",
+   "cue": "adnominal",
+   "source": "self_authored",
+   "p_plain": 0.04755,
+   "p_punct": 0.17178,
+   "p_ctx": null
+  },
+  {
+   "id": "con_09",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "私はどちらかというと",
+   "next_same_speaker": "夏のほうが好きです",
+   "cue": "adverbial",
+   "source": "self_authored",
+   "p_plain": 0.01982,
+   "p_punct": 0.0622,
+   "p_ctx": null
+  },
+  {
+   "id": "con_10",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "お金はかかるけど",
+   "next_same_speaker": "行く価値はあります",
+   "cue": "connective_kedo",
+   "source": "self_authored",
+   "p_plain": 0.35158,
+   "p_punct": 0.21226,
+   "p_ctx": null
+  },
+  {
+   "id": "con_11",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "えっとまず最初に",
+   "next_same_speaker": "自己紹介をします",
+   "cue": "adverbial",
+   "source": "self_authored",
+   "p_plain": 0.00072,
+   "p_punct": 0.00037,
+   "p_ctx": null
+  },
+  {
+   "id": "con_12",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "先週の土曜日に家族と一緒に",
+   "next_same_speaker": "海へ行きました",
+   "cue": "incomplete_arg",
+   "source": "self_authored",
+   "p_plain": 0.02728,
+   "p_punct": 0.09454,
+   "p_ctx": null
+  },
+  {
+   "id": "con_13",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "その話を聞いたとき",
+   "next_same_speaker": "驚きました",
+   "cue": "temporal_clause",
+   "source": "self_authored",
+   "p_plain": 0.08307,
+   "p_punct": 0.08737,
+   "p_ctx": null
+  },
+  {
+   "id": "con_14",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "だからやっぱり",
+   "next_same_speaker": "やめておきます",
+   "cue": "adverbial",
+   "source": "self_authored",
+   "p_plain": 0.00065,
+   "p_punct": 0.00576,
+   "p_ctx": null
+  },
+  {
+   "id": "con_15",
+   "category": "continues",
+   "expected_yield": "low",
+   "history": [],
+   "partial": "行きたいとは思うんですけど",
+   "next_same_speaker": "その日は仕事なんです",
+   "cue": "hard_iisashi_kedo",
+   "source": "self_authored",
+   "p_plain": 0.6173,
+   "p_punct": 0.20998,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_01",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [],
+   "partial": "話が三つあります",
+   "next_same_speaker": "一つ目は予算です",
+   "cue": "enumeration_announced",
+   "source": "self_authored",
+   "p_plain": 0.40038,
+   "p_punct": 0.00946,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_02",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [],
+   "partial": "まず一つ目は予算の件です",
+   "next_same_speaker": "二つ目は日程です",
+   "cue": "enumeration_in_progress",
+   "source": "self_authored",
+   "p_plain": 0.42731,
+   "p_punct": 0.00042,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_03",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [],
+   "partial": "昨日すごいことがあったんです",
+   "next_same_speaker": "駅で昔の友達に会って",
+   "cue": "story_preface",
+   "source": "self_authored",
+   "p_plain": 0.56348,
+   "p_punct": 0.04676,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_04",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [],
+   "partial": "聞いてください",
+   "next_same_speaker": "うちの猫が脱走しました",
+   "cue": "story_preface",
+   "source": "self_authored",
+   "p_plain": 0.46651,
+   "p_punct": 0.26718,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_05",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [
+    "週末はどうでしたか"
+   ],
+   "partial": "週末に京都へ行きました",
+   "next_same_speaker": "それでお寺を回ってきました",
+   "cue": "none",
+   "source": "self_authored",
+   "p_plain": 0.57248,
+   "p_punct": 0.12698,
+   "p_ctx": 0.48102
+  },
+  {
+   "id": "cwc_06",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [],
+   "partial": "結論から言うと賛成です",
+   "next_same_speaker": "ただ条件が一つあります",
+   "cue": "discourse_marker",
+   "source": "self_authored",
+   "p_plain": 0.71636,
+   "p_punct": 0.10589,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_07",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [],
+   "partial": "理由は二つあります",
+   "next_same_speaker": "一つは費用です",
+   "cue": "enumeration_announced",
+   "source": "self_authored",
+   "p_plain": 0.35495,
+   "p_punct": 0.0033,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_08",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [
+    "卵焼きの作り方を教えてください"
+   ],
+   "partial": "最初に卵を割ります",
+   "next_same_speaker": "次に砂糖を入れます",
+   "cue": "procedure_in_progress",
+   "source": "self_authored",
+   "p_plain": 0.56854,
+   "p_punct": 0.04158,
+   "p_ctx": 0.45502
+  },
+  {
+   "id": "cwc_09",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [],
+   "partial": "実はお願いがあります",
+   "next_same_speaker": "車を貸してほしいんです",
+   "cue": "story_preface",
+   "source": "self_authored",
+   "p_plain": 0.46736,
+   "p_punct": 0.00402,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_10",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [],
+   "partial": "ちょっと相談があるんです",
+   "next_same_speaker": "転職を考えていて",
+   "cue": "story_preface",
+   "source": "self_authored",
+   "p_plain": 0.42101,
+   "p_punct": 0.10204,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_11",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [
+    "ご出身はどちらですか"
+   ],
+   "partial": "十年くらい東京に住んでいました",
+   "next_same_speaker": "そのあと大阪に移りました",
+   "cue": "none",
+   "source": "self_authored",
+   "p_plain": 0.50014,
+   "p_punct": 0.22063,
+   "p_ctx": 0.56344
+  },
+  {
+   "id": "cwc_12",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [],
+   "partial": "私は犬が好きです",
+   "next_same_speaker": "でも猫も飼ってみたいです",
+   "cue": "none",
+   "source": "self_authored",
+   "p_plain": 0.70893,
+   "p_punct": 0.17655,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_13",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [
+    "もう少し安ければ買うのにね"
+   ],
+   "partial": "それは確かにそうです",
+   "next_same_speaker": "ただ品質は落ちると思います",
+   "cue": "concession",
+   "source": "self_authored",
+   "p_plain": 0.25401,
+   "p_punct": 0.13352,
+   "p_ctx": 0.30516
+  },
+  {
+   "id": "cwc_14",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [],
+   "partial": "今日は天気がいいですね",
+   "next_same_speaker": "午後から散歩に行こうと思います",
+   "cue": "none",
+   "source": "self_authored",
+   "p_plain": 0.60676,
+   "p_punct": 0.16327,
+   "p_ctx": null
+  },
+  {
+   "id": "cwc_15",
+   "category": "complete_with_continuation",
+   "expected_yield": "ambiguous",
+   "history": [
+    "最近どうしてるの"
+   ],
+   "partial": "前の仕事は辞めました",
+   "next_same_speaker": "今は学校に通っています",
+   "cue": "none",
+   "source": "self_authored",
+   "p_plain": 0.63944,
+   "p_punct": 0.32612,
+   "p_ctx": 0.55466
+  },
+  {
+   "id": "qst_01",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "明日の会議は何時からですか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.70944,
+   "p_punct": 0.60688,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_02",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "週末はどこに行ったんですか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.80124,
+   "p_punct": 0.69103,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_03",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "これいくらですか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.58532,
+   "p_punct": 0.4017,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_04",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "どう思いますか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.69805,
+   "p_punct": 0.50462,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_05",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "コーヒーと紅茶どっちがいい",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.29913,
+   "p_punct": 0.56892,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_06",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "駅までの道を教えてもらえますか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.84022,
+   "p_punct": 0.57197,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_07",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "もう昼ご飯食べた",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.07924,
+   "p_punct": 0.63655,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_08",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "田中さんはご存知ですか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.73292,
+   "p_punct": 0.51429,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_09",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "なんでそう思ったの",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.66222,
+   "p_punct": 0.44518,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_10",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "一緒に行きませんか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.58799,
+   "p_punct": 0.4158,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_11",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "今何時かわかりますか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.75297,
+   "p_punct": 0.58204,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_12",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "東京のご出身なんですか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.81875,
+   "p_punct": 0.69355,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_13",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "最近忙しいですか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.73055,
+   "p_punct": 0.57033,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_14",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "何かおすすめはありますか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.80628,
+   "p_punct": 0.60497,
+   "p_ctx": null
+  },
+  {
+   "id": "qst_15",
+   "category": "question_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "次はいつ会えますか",
+   "next_same_speaker": null,
+   "cue": "question",
+   "source": "self_authored",
+   "p_plain": 0.63373,
+   "p_punct": 0.33513,
+   "p_ctx": null
+  },
+  {
+   "id": "stm_01",
+   "category": "statement_end",
+   "expected_yield": "high",
+   "history": [
+    "資料は机に置いておきました"
+   ],
+   "partial": "ありがとうございました",
+   "next_same_speaker": null,
+   "cue": "closing",
+   "source": "self_authored",
+   "p_plain": 0.66899,
+   "p_punct": 0.31544,
+   "p_ctx": 0.70349
+  },
+  {
+   "id": "stm_02",
+   "category": "statement_end",
+   "expected_yield": "high",
+   "history": [
+    "明日までに送ってもらえますか"
+   ],
+   "partial": "はいわかりました",
+   "next_same_speaker": null,
+   "cue": "acknowledge",
+   "source": "self_authored",
+   "p_plain": 0.51975,
+   "p_punct": 0.18984,
+   "p_ctx": 0.58878
+  },
+  {
+   "id": "stm_03",
+   "category": "statement_end",
+   "expected_yield": "high",
+   "history": [
+    "この案がいちばん現実的ですよね"
+   ],
+   "partial": "そうですね私もそう思います",
+   "next_same_speaker": null,
+   "cue": "agreement",
+   "source": "self_authored",
+   "p_plain": 0.498,
+   "p_punct": 0.12135,
+   "p_ctx": 0.42445
+  },
+  {
+   "id": "stm_04",
+   "category": "statement_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "今日はこれで以上です",
+   "next_same_speaker": null,
+   "cue": "closing",
+   "source": "self_authored",
+   "p_plain": 0.67618,
+   "p_punct": 0.25533,
+   "p_ctx": null
+  },
+  {
+   "id": "stm_05",
+   "category": "statement_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "お疲れ様でした",
+   "next_same_speaker": null,
+   "cue": "closing",
+   "source": "self_authored",
+   "p_plain": 0.65179,
+   "p_punct": 0.30613,
+   "p_ctx": null
+  },
+  {
+   "id": "stm_06",
+   "category": "statement_end",
+   "expected_yield": "high",
+   "history": [
+    "会議は何時からですか"
+   ],
+   "partial": "三時からです",
+   "next_same_speaker": null,
+   "cue": "answer",
+   "source": "self_authored",
+   "p_plain": 0.49082,
+   "p_punct": 0.2469,
+   "p_ctx": 0.51102
+  },
+  {
+   "id": "stm_07",
+   "category": "statement_end",
+   "expected_yield": "high",
+   "history": [
+    "北海道に行ったことはありますか"
+   ],
+   "partial": "いいえ行ったことはありません",
+   "next_same_speaker": null,
+   "cue": "answer",
+   "source": "self_authored",
+   "p_plain": 0.34124,
+   "p_punct": 0.23133,
+   "p_ctx": 0.43631
+  },
+  {
+   "id": "stm_08",
+   "category": "statement_end",
+   "expected_yield": "high",
+   "history": [],
+   "partial": "じゃあまた明日ね",
+   "next_same_speaker": null,
+   "cue": "closing",
+   "source": "self_authored",
+   "p_plain": 0.61322,
+   "p_punct": 0.23219,
+   "p_ctx": null
+  },
+  {
+   "id": "stm_09",
+   "category": "statement_end",
+   "expected_yield": "high",
+   "history": [
+    "場所は三階の会議室です"
+   ],
+   "partial": "了解です",
+   "next_same_speaker": null,
+   "cue": "acknowledge",
+   "source": "self_authored",
+   "p_plain": 0.71069,
+   "p_punct": 0.25948,
+   "p_ctx": 0.76471
+  },
+  {
+   "id": "stm_10",
+   "category": "statement_end",
+   "expected_yield": "high",
+   "history": [
+    "来週の発表ぜひ見に来てください"
+   ],
+   "partial": "楽しみにしています",
+   "next_same_speaker": null,
+   "cue": "closing",
+   "source": "self_authored",
+   "p_plain": 0.56318,
+   "p_punct": 0.28858,
+   "p_ctx": 0.68111
+  }
+ ]
+}

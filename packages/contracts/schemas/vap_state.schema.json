@@ -1,0 +1,248 @@
+{
+  "$id": "vap_state.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "number",
+          "minimum": 0
+        },
+        "audio_frame": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "model_variant": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inference_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "raw": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        "channel_layout": {
+          "type": "string",
+          "const": "2ch"
+        },
+        "p_now": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "p_future": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "vad": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "user_speaking": {
+          "type": "boolean"
+        },
+        "system_speaking": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "t",
+        "audio_frame",
+        "model_variant",
+        "inference_ms",
+        "raw",
+        "channel_layout",
+        "p_now",
+        "p_future",
+        "vad",
+        "user_speaking",
+        "system_speaking"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "number",
+          "minimum": 0
+        },
+        "audio_frame": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "model_variant": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inference_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "raw": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        "channel_layout": {
+          "type": "string",
+          "const": "1ch"
+        },
+        "p_now": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "p_future": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "vad": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "user_speaking": {
+          "type": "boolean"
+        },
+        "system_speaking": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "null_reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value",
+                "null_reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "t",
+        "audio_frame",
+        "model_variant",
+        "inference_ms",
+        "raw",
+        "channel_layout",
+        "p_now",
+        "p_future",
+        "vad",
+        "user_speaking",
+        "system_speaking"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        }
+      ]
+    }
+  }
+}

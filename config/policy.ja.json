@@ -1,0 +1,71 @@
+{
+  "$schema": "../packages/contracts/schemas/policy.ja.schema.json",
+  "policy_id": "ja",
+  "immutable": false,
+  "status": "template",
+  "note": "Template. turn.constants start as a copy of the HRI 2025 values and are uncalibrated for Japanese. null means uncalibrated: do not silently replace it. Owners: turn/gaze E, similarity/completion D, initiative G. vap direction is provisional until R2 measures it.",
+  "vap": {
+    "channel_layout": "2ch",
+    "p_ai_index": 1,
+    "direction_status": "provisional",
+    "speaking_threshold": 0.5
+  },
+  "turn": {
+    "constants": {
+      "TURNGPT_PREPARE_THRESHOLD": 0.2,
+      "ASR_PREPARE_TIMEOUT_MS": 200,
+      "SIMILARITY_PREPARE_THRESHOLD": 0.8,
+      "VAP_PNOW_INTERRUPT": 0.4,
+      "VAP_PFUT_INTERRUPT": 0.4,
+      "VAP_PNOW_YIELD": 0.5,
+      "VAP_PFUT_YIELD": 0.5,
+      "MIN_GAP_TIME_MS": 500,
+      "YIELD_TIMEOUTS_MS": {
+        "0.3": 500,
+        "0.2": 1000,
+        "0.1": 2000,
+        "0.0": 3000
+      }
+    },
+    "interpretation": {
+      "user_turn_end_updates_during_speech": true,
+      "stop_point": "word_boundary",
+      "apply_u_corrections": true
+    },
+    "tick_ms": 20,
+    "stop_boundary_max_ms": 200,
+    "vap_stale_ms": 500,
+    "vap_rewarm_ms": 10000,
+    "fallback_silence_max_ms": null,
+    "fallback_interrupt_min_words": null,
+    "user_speaking_min_ms": null
+  },
+  "gaze": {
+    "pause_min_ms": null,
+    "signal": null,
+    "p_threshold": null
+  },
+  "similarity": {
+    "method": "char_ngram_cosine",
+    "threshold": null
+  },
+  "completion": {
+    "estimator": null,
+    "thresholds": {}
+  },
+  "initiative": {
+    "max_new_stable_chars_since_input": null,
+    "max_result_age_ms": null,
+    "min_stability": 0.8,
+    "stable_prefix_revisions": 3,
+    "stable_prefix_min_age_ms": 300,
+    "candidate_expiry_ms": null,
+    "candidate_expires_on_segment_change": null,
+    "signal_cooldown_ms": null,
+    "max_active_candidates": 1,
+    "max_requests_per_session": null
+  },
+  "speech": {
+    "is_ready_buffer_ms": 200
+  }
+}

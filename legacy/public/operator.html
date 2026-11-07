@@ -1,0 +1,25 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BREATH — Experimenter Console</title><link rel="stylesheet" href="/styles.css"><style>
+.operator-page { max-width:720px; margin:4vh auto; padding:25px; }
+.operator-card { background:#1a2531; border:1px solid #364855; padding:30px; border-radius:10px; margin-top:35px; }
+.operator-card h1 { margin:5px 0 7px; font-size:26px; }
+.operator-card p { color:#a9bbc5; font-size:13px; line-height:2; }
+.operator-actions { display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px; }
+.operator-actions button { text-align:center; padding:18px; }
+.operator-actions .button-secondary { font-size:13px; }
+.operator-card textarea { margin:14px 0 8px; min-height:110px; }
+.operator-result { border-top:1px solid #354555; padding-top:20px; margin-top:25px; font-size:12px; color:#a8c9c5; min-height:38px; }
+</style></head><body>
+<div class="operator-page"><header class="brand"><div class="brand-symbol"><span></span><span></span><span></span></div> BREATH / OPERATOR</header>
+<div class="operator-card"><div class="small-caps">WIZARD-OF-OZ CONTROLLER</div><h1>実験者コントローラー</h1><p>参加者側の <a href="/" target="_blank">会話画面 ↗</a> を別タブで開いてください。操作コマンドは同じローカルサーバー経由で参加者画面に送られます。参加者画面でLLMモードを選んでいても、ここからの合図を優先して送れます。</p>
+<label class="field-label" for="phrase">AIが発言する内容（音声合成に使われます）</label>
+<textarea id="phrase">今の話、少し気になったことがあるんですが、一つ聞いてもいいですか？</textarea>
+<div class="operator-actions">
+<button class="button-primary" data-action="cue">① 吸気して発話希望を示す</button>
+<button class="button-secondary" data-action="speak">② 発話を始める</button>
+<button class="button-secondary" data-action="defer">③ 発話を延期</button>
+<button class="button-secondary" data-action="withdraw">④ 発話希望を撤回</button>
+</div>
+<div style="margin-top:20px"><button class="button-quiet" data-action="reset">セッションをリセット</button></div>
+<div id="result" class="operator-result">参加者画面との連携準備ができています。</div>
+</div><p style="color:#81909e;font-size:11px;line-height:2.2">デモのみならキー設定不要。音声入力のない状況でも吸気モーションを確認できます。実験で用いる際は、発話希望の発生時刻を手動操作したことを記録・明示してください。</p></div>
+<script type="module" src="/operator.js"></script></body></html>

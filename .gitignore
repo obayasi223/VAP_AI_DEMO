@@ -1,0 +1,16 @@
+.env
+node_modules/
+.DS_Store
+.venv/
+models/
+.env*
+!.env.example
+.next/
+recordings/
+sessions/
+*.tsbuildinfo
+.pytest_cache/
+__pycache__/
+next-env.d.ts
+*:Zone.Identifier
+tools/provider_probe/out/

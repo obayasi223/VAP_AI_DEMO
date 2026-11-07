@@ -1,0 +1,24 @@
+{
+  "name": "@llm-vap/testkit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Test doubles and fake servers. Results obtained with these never count as production verification.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "fakes": "tsx src/run_fakes.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@llm-vap/contracts": "0.1.0",
+    "ws": "8.22.1"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}

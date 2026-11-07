@@ -1,0 +1,13 @@
+{
+  "name": "breath-intent-avatar-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Research prototype: LLM-originated speech intention expressed through a visible inhalation motion",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

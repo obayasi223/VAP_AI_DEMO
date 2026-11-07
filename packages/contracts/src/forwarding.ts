@@ -1,0 +1,124 @@
+/**
+ * emit の経路: 本体は Node にある（emit.ts）。Browser と Python は emit を持たず、契約のメッセージを
+ * Node へ送り、Node がここの関数で下書きへ変換して emit する。配線は J。
+ *
+ * EVENT_ROUTES はイベントごとの発行場所の一覧。別プロセスの時刻は補正して EmitOptions.at で渡す。
+ */
+import type { AudioReport, SignalReport, SignalParameters } from './browser_rpc';
+import type { EmitOptions, EventDraft } from './emit';
+import type { ResearchEventName, TimeBasis } from './events';
+import type { MaaiVapStateMessage, MaaiWorkerStatus } from './maai_rpc';
+import { absent, present, type SystemChannelSource } from './common';
+
+export type EventRoute =
+  | { origin: 'node' }
+  | { origin: 'browser'; via: readonly string[] }
+  | { origin: 'worker'; via: readonly string[] };
+
+export const EVENT_ROUTES = {
+  'stt.interim': { origin: 'node' },
+  'stt.final': { origin: 'node' },
+  'llm.request': { origin: 'node' },
+  'llm.response': { origin: 'node' },
+  'vap.state': { origin: 'worker', via: ['VAP_STATE'] },
+  'prefetch.started': { origin: 'node' },
+  'prefetch.cancelled': { origin: 'node' },
+  'prefetch.ready': { origin: 'node' },
+  'initiative.decision': { origin: 'node' },
+  'initiative.discarded': { origin: 'node' },
+  'initiative.aborted': { origin: 'node' },
+  'candidate.state_changed': { origin: 'node' },
+  'signal.sent': { origin: 'node' },
+  'signal.started': { origin: 'browser', via: ['signal.report'] },
+  'signal.ended': { origin: 'browser', via: ['signal.report'] },
+  'turn.allowed': { origin: 'node' },
+  'speech.started': { origin: 'browser', via: ['playback.started'] },
+  'speech.ended': { origin: 'browser', via: ['playback.ended'] },
+  'speech.interrupted': { origin: 'browser', via: ['playback.ended'] },
+  'gaze.decision': { origin: 'node' },
+  'audio.health': { origin: 'browser', via: ['audio.report', 'WORKER_STATUS'] },
+  'provider.status': { origin: 'node' },
+  'cost.usage': { origin: 'node' },
+  'woz.override': { origin: 'node' },
+  'clock.sync': { origin: 'node' },
+} as const satisfies Record<ResearchEventName, EventRoute>;
+
+/** ローカル時刻を orchestrator の基準へ写す関数と、その由来。J が clock.sync の推定から作る。 */
+export interface TimeMapping {
+  toServerMs(localMs: number): number;
+  basis: TimeBasis;
+}
+
+export function atFromBrowser(clientMs: number, mapping: TimeMapping): EmitOptions {
+  return { at: { t_monotonic_ms: mapping.toServerMs(clientMs), time_basis: mapping.basis } };
+}
+
+export function draftFromAudioReport(report: AudioReport): EventDraft {
+  return {
+    event: 'audio.health',
+    reporter: 'browser',
+    audio_frame: report.audio_frame,
+    frames_lost: report.frames_lost,
+    underrun_count: report.underrun_count,
+    underrun_total_ms: report.underrun_total_ms,
+    stale_pcm_frames_dropped: report.stale_pcm_frames_dropped,
+    latency: report.latency,
+    track_settings: report.track_settings,
+    system_ch_source: report.system_ch_source,
+    audio_context_state: report.audio_context_state,
+    visibility: report.visibility,
+  };
+}
+
+/** parameters は signal.command を送った Node 側が覚えている値を渡す。 */
+export function draftFromSignalReport(
+  report: SignalReport,
+  parameters: SignalParameters,
+  mapping: TimeMapping,
+): EventDraft {
+  const common = { candidate_id: report.candidate_id, phase: report.phase, parameters };
+  const mapped = report.client_t_ms.value === null ? null : mapping.toServerMs(report.client_t_ms.value);
+  if (report.state === 'ended') {
+    return {
+      event: 'signal.ended',
+      ...common,
+      visible: report.visible,
+      ended_at:
+        mapped === null
+          ? absent('null_reason' in report.client_t_ms ? report.client_t_ms.null_reason : 'unknown')
+          : present(mapped),
+    };
+  }
+  if (report.visible && mapped !== null) {
+    return { event: 'signal.started', ...common, visible: true, started_at: mapped };
+  }
+  return {
+    event: 'signal.started',
+    ...common,
+    visible: false,
+    started_at: null,
+    null_reason:
+      'null_reason' in report.client_t_ms ? report.client_t_ms.null_reason : 'tab_not_visible',
+  };
+}
+
+export function draftFromVapMessage(message: MaaiVapStateMessage): EventDraft {
+  const { type: _type, ...rest } = message;
+  return { event: 'vap.state', ...rest };
+}
+
+export function draftFromWorkerStatus(
+  status: MaaiWorkerStatus,
+  system_ch_source: SystemChannelSource,
+): EventDraft {
+  return {
+    event: 'audio.health',
+    reporter: 'worker',
+    audio_frame: status.audio_frame,
+    frames_dropped_network: status.frames_dropped_network,
+    frames_dropped_overload: status.frames_dropped_overload,
+    queue_depth: status.queue_depth,
+    rtf: status.rtf,
+    system_ch_source,
+  };
+}

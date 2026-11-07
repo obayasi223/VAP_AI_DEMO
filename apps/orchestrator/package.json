@@ -1,0 +1,21 @@
+{
+  "name": "@llm-vap/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@llm-vap/contracts": "0.1.0",
+    "ws": "8.22.1"
+  },
+  "devDependencies": {
+    "@llm-vap/testkit": "0.1.0",
+    "@types/ws": "8.18.2"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}

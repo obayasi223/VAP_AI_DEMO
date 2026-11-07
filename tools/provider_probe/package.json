@@ -1,0 +1,21 @@
+{
+  "name": "provider-probe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "R4: measures real provider API behaviour. Needs your own credentials; never reads other projects or ~/.gemini.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "node check_env.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@google-cloud/speech": "8.2.1",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "@grpc/proto-loader": "0.8.0"
+  }
+}

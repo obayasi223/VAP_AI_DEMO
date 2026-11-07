@@ -1,0 +1,28 @@
+{
+  "$schema": "../packages/contracts/schemas/policy.hri2025.schema.json",
+  "policy_id": "hri2025",
+  "immutable": true,
+  "source": "Skantze & Irfan, HRI 2025, Appendix A",
+  "note": "English/Furhat pilot values kept for comparison. Not claimed to be optimal for Japanese.",
+  "constants": {
+    "TURNGPT_PREPARE_THRESHOLD": 0.2,
+    "ASR_PREPARE_TIMEOUT_MS": 200,
+    "SIMILARITY_PREPARE_THRESHOLD": 0.8,
+    "VAP_PNOW_INTERRUPT": 0.4,
+    "VAP_PFUT_INTERRUPT": 0.4,
+    "VAP_PNOW_YIELD": 0.5,
+    "VAP_PFUT_YIELD": 0.5,
+    "MIN_GAP_TIME_MS": 500,
+    "YIELD_TIMEOUTS_MS": {
+      "0.3": 500,
+      "0.2": 1000,
+      "0.1": 2000,
+      "0.0": 3000
+    }
+  },
+  "interpretation": {
+    "user_turn_end_updates_during_speech": false,
+    "stop_point": "immediate",
+    "apply_u_corrections": false
+  }
+}

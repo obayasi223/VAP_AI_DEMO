@@ -1,0 +1,275 @@
+{
+ "material": "jpn_mix_16k.wav 先頭 30 秒（公式 sample、MaAI commit 113efb7）",
+ "jp_kyoto_normal-ver2_12.5hz": {
+  "variant": "vap_mc",
+  "samples_per_frame": 1280,
+  "audio_frame_size_threshold": 1600,
+  "feeds_per_frame_at_320": 4.0,
+  "first_end_samples": [
+   2560,
+   3840,
+   5120,
+   6400
+  ],
+  "n_results": 374,
+  "all_intervals_equal_frame": true,
+  "ends_are_multiples_of_frame": true,
+  "x_echo_matches_input": true,
+  "rerun_after_reset_max_abs_diff_p_now": 0.0,
+  "chunk_sizes": {
+   "160": {
+    "divides_frame": true,
+    "n_results": 374,
+    "first_end_samples": [
+     2560,
+     3840,
+     5120
+    ],
+    "x1_lengths": [
+     1280
+    ],
+    "max_abs_diff_p_now_vs_320": 0.0
+   },
+   "320": {
+    "divides_frame": true,
+    "n_results": 374,
+    "first_end_samples": [
+     2560,
+     3840,
+     5120
+    ],
+    "x1_lengths": [
+     1280
+    ],
+    "max_abs_diff_p_now_vs_320": 0.0
+   },
+   "640": {
+    "divides_frame": true,
+    "n_results": 374,
+    "first_end_samples": [
+     2560,
+     3840,
+     5120
+    ],
+    "x1_lengths": [
+     1280
+    ],
+    "max_abs_diff_p_now_vs_320": 0.0
+   },
+   "1280": {
+    "divides_frame": true,
+    "n_results": 374,
+    "first_end_samples": [
+     2560,
+     3840,
+     5120
+    ],
+    "x1_lengths": [
+     1280
+    ],
+    "max_abs_diff_p_now_vs_320": 0.0
+   },
+   "480": {
+    "error": "ValueError: ONNX Mimi input shape mismatch: got (1, 1, 2160), expected (1, 1, 1920). Adjusted path was removed; please provide fixed-length chunks."
+   },
+   "512": {
+    "error": "ValueError: ONNX Mimi input shape mismatch: got (1, 1, 2304), expected (1, 1, 1920). Adjusted path was removed; please provide fixed-length chunks."
+   },
+   "1000": {
+    "error": "ValueError: ONNX Mimi input shape mismatch: got (1, 1, 3000), expected (1, 1, 1920). Adjusted path was removed; please provide fixed-length chunks."
+   }
+  },
+  "from_other_thread_max_abs_diff_p_now": 0.0,
+  "causality": [
+   {
+    "changed_from_sample": 160000,
+    "first_changed_result_end_sample": 161280,
+    "previous_result_end_sample": 160000,
+    "unchanged_before": true
+   },
+   {
+    "changed_from_sample": 240480,
+    "first_changed_result_end_sample": 240640,
+    "previous_result_end_sample": 239360,
+    "unchanged_before": true
+   },
+   {
+    "changed_from_sample": 321120,
+    "first_changed_result_end_sample": 321280,
+    "previous_result_end_sample": 320000,
+    "unchanged_before": true
+   }
+  ],
+  "misuse": {
+   "ch2_short_by_20_samples_once": {
+    "raised": true,
+    "error": "ValueError: ONNX Mimi input shape mismatch: got (1, 1, 1890), expected (1, 1, 1920). Adjusted path was removed; please provide fixed-length chunks."
+   },
+   "recovery": {
+    "next_call_after_error": "ValueError",
+    "after_reset_max_abs_diff_p_now": 0.0
+   },
+   "int16_without_conversion": {
+    "raised": false,
+    "vad_mean": [
+     0.6229,
+     0.7869
+    ],
+    "any_nan": false
+   }
+  },
+  "start_path": {
+   "n_results": 374,
+   "max_abs_diff_p_now": 0.0
+  }
+ },
+ "jp_kyoto_normal_10hz": {
+  "variant": "vap_mc",
+  "samples_per_frame": 1600,
+  "audio_frame_size_threshold": 1920,
+  "feeds_per_frame_at_320": 5.0,
+  "first_end_samples": [
+   1600,
+   3200,
+   4800,
+   6400
+  ],
+  "n_results": 300,
+  "all_intervals_equal_frame": true,
+  "ends_are_multiples_of_frame": true,
+  "x_echo_matches_input": true,
+  "rerun_after_reset_max_abs_diff_p_now": 0.0,
+  "chunk_sizes": {
+   "160": {
+    "divides_frame": true,
+    "n_results": 300,
+    "first_end_samples": [
+     1600,
+     3200,
+     4800
+    ],
+    "x1_lengths": [
+     1600
+    ],
+    "max_abs_diff_p_now_vs_320": 0.0
+   },
+   "320": {
+    "divides_frame": true,
+    "n_results": 300,
+    "first_end_samples": [
+     1600,
+     3200,
+     4800
+    ],
+    "x1_lengths": [
+     1600
+    ],
+    "max_abs_diff_p_now_vs_320": 0.0
+   },
+   "640": {
+    "divides_frame": false,
+    "n_results": 250,
+    "first_end_samples": [
+     1920,
+     3840,
+     5760
+    ],
+    "x1_lengths": [
+     1920
+    ]
+   },
+   "1600": {
+    "divides_frame": true,
+    "n_results": 300,
+    "first_end_samples": [
+     1600,
+     3200,
+     4800
+    ],
+    "x1_lengths": [
+     1600
+    ],
+    "max_abs_diff_p_now_vs_320": 0.0
+   },
+   "480": {
+    "divides_frame": false,
+    "n_results": 250,
+    "first_end_samples": [
+     1920,
+     3840,
+     5760
+    ],
+    "x1_lengths": [
+     1920
+    ]
+   },
+   "512": {
+    "divides_frame": false,
+    "n_results": 234,
+    "first_end_samples": [
+     2048,
+     4096,
+     6144
+    ],
+    "x1_lengths": [
+     2048
+    ]
+   },
+   "1000": {
+    "divides_frame": false,
+    "n_results": 240,
+    "first_end_samples": [
+     2000,
+     4000,
+     6000
+    ],
+    "x1_lengths": [
+     2000
+    ]
+   }
+  },
+  "from_other_thread_max_abs_diff_p_now": 0.0,
+  "causality": [
+   {
+    "changed_from_sample": 160000,
+    "first_changed_result_end_sample": 161600,
+    "previous_result_end_sample": 160000,
+    "unchanged_before": true
+   },
+   {
+    "changed_from_sample": 240480,
+    "first_changed_result_end_sample": 241600,
+    "previous_result_end_sample": 240000,
+    "unchanged_before": true
+   },
+   {
+    "changed_from_sample": 321120,
+    "first_changed_result_end_sample": 321600,
+    "previous_result_end_sample": 320000,
+    "unchanged_before": true
+   }
+  ],
+  "misuse": {
+   "ch2_short_by_20_samples_once": {
+    "raised": true,
+    "error": "RuntimeError: Calculated padded input size per channel: (9). Kernel size: (10). Kernel size can't be greater than actual input size"
+   },
+   "recovery": {
+    "next_call_after_error": "IndexError",
+    "after_reset_max_abs_diff_p_now": 0.0
+   },
+   "int16_without_conversion": {
+    "raised": false,
+    "vad_mean": [
+     0.6327,
+     0.0879
+    ],
+    "any_nan": false
+   }
+  },
+  "start_path": {
+   "n_results": 300,
+   "max_abs_diff_p_now": 0.0
+  }
+ }
+}

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="theme-color" content="#101622"/>
+  <title>BREATH — 発話意思を持つAIアバター</title>
+  <link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand"><div class="brand-symbol"><span></span><span></span><span></span></div><span>BREATH <span class="brand-sub">/ INTERACTION LAB</span></span></div>
+    <div class="top-status"><span class="status-dot" id="serverDot"></span><span id="modelStatus">接続を確認中…</span><span class="top-separator"></span><span>PROTOTYPE 01</span></div>
+  </header>
+  <main class="workspace">
+    <aside class="sidebar">
+      <div class="small-caps">EXPERIMENT SETUP</div>
+      <h1>言いたいことが、<br><em>生まれる瞬間。</em></h1>
+      <p class="intro">聞いているだけではないAI。会話の内容から発話希望が生まれると、アバターが息を吸い、あなたの反応を待ちます。</p>
+      <section class="settings-panel">
+        <label for="scenario" class="field-label">会話シーン</label>
+        <select id="scenario">
+          <option value="研究相談：人間が研究アイデアの背景や仮説を説明し、AIは考える共同研究者として重要な疑問や別の見方があれば発言したくなる">研究アイデアの相談</option>
+          <option value="日常会話：人間が今日あったことを話し、AIは興味を持つ同居人のように自然な質問や意見を持つ">日常の出来事を話す</option>
+          <option value="意見交換：人間が自分の意見を説明し、AIは同意だけせず内容に応じて独自の見方や疑問を持つ">意見の交換</option>
+          <option value="即興ロールプレイ：人間が物語を語り、AIは別の登場人物として展開上の疑問や提案を持つ">即興ロールプレイ</option>
+        </select>
+        <label for="initiative" class="field-label space-top">AIの積極性（発話意思の生まれやすさ）</label>
+        <select id="initiative"><option value="normal">標準 — 理由があるときに発言</option><option value="active">積極的 — 疑問や独自の視点を早めに示す</option><option value="quiet">控えめ — 重要な疑問があるときのみ</option></select>
+        <div class="field-label space-top">動作モード</div>
+        <div class="mode-switch" role="group" aria-label="モード選択">
+          <button id="modeLlm" class="mode-button active" type="button">LLM 自発</button>
+          <button id="modeManual" class="mode-button" type="button">操作デモ</button>
+        </div>
+        <p id="modeHint" class="hint">会話の途中から、LLMが発話意思を判断します。</p>
+        <label class="check-row"><input id="autoSpeak" type="checkbox" checked><span>間ができたら自然に話す <small>（簡易音量判定）</small></span></label>
+        <label class="check-row"><input id="soundOn" type="checkbox" checked><span>AIの音声を読み上げる</span></label>
+        <label class="check-row"><input id="debugToggle" type="checkbox"><span>LLMの判断理由を表示 <small>（研究者用）</small></span></label>
+      </section>
+      <div class="sidebar-footer">
+        <span class="tiny-line"></span>
+        <p>意図とタイミングは別々に扱います。<br>LLMは「何を言いたいか」を判断し、<br>発話時刻は簡易制御器が調整します。</p>
+        <a href="/operator" target="_blank" rel="noopener">実験者コントローラーを開く ↗</a><div style="margin-top:10px"><a href="/?participant=1" target="_blank" rel="noopener">参加者向け表示を開く ↗</a></div>
+      </div>
+    </aside>
+
+    <section class="stage-column">
+      <div class="stage">
+        <div class="stage-noise"></div>
+        <div class="stage-top"><span class="small-caps white-caption">LIVE INTERACTION</span><span class="stage-stamp">01 / AVATAR</span></div>
+        <div class="avatar-area">
+          <div class="orb orb-one"></div><div class="orb orb-two"></div>
+          <div class="presence" id="presence" data-state="idle" aria-label="AIアバター。現在は聴いています。">
+            <svg class="avatar-svg" width="380" height="460" viewBox="0 0 380 460" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="息を吸うと肩が上がり胸部が広がるアバター">
+              <defs>
+                <linearGradient id="bodyGrad" x1="132" y1="250" x2="260" y2="442" gradientUnits="userSpaceOnUse"><stop stop-color="#CEDCE8"/><stop offset="0.55" stop-color="#96ABB9"/><stop offset="1" stop-color="#637F94"/></linearGradient>
+                <linearGradient id="faceGrad" x1="135" y1="63" x2="264" y2="236" gradientUnits="userSpaceOnUse"><stop stop-color="#F1E9DE"/><stop offset="1" stop-color="#C2D1D7"/></linearGradient>
+                <linearGradient id="hairGrad" x1="157" y1="65" x2="230" y2="155" gradientUnits="userSpaceOnUse"><stop stop-color="#4D6477"/><stop offset="1" stop-color="#25374B"/></linearGradient>
+                <radialGradient id="breathGlow"><stop stop-color="#B0E4E3" stop-opacity=".34"/><stop offset="1" stop-color="#B0E4E3" stop-opacity="0"/></radialGradient>
+                <filter id="avatarShadow"><feGaussianBlur stdDeviation="14"/></filter>
+              </defs>
+              <ellipse cx="190" cy="428" rx="126" ry="17" fill="#03101F" opacity="0.34" filter="url(#avatarShadow)"/>
+              <!-- breathing signal: moving air beside face, no literal text on participant-facing avatar -->
+              <g class="breath-wisps" stroke="#C6F2F0" stroke-width="2.5" stroke-linecap="round">
+                <path class="wisp wisp1" d="M312 125 C298 134 283 143 259 151"/>
+                <path class="wisp wisp2" d="M315 155 C297 163 283 162 268 169"/>
+                <path class="wisp wisp3" d="M308 184 C291 177 278 175 262 178"/>
+              </g>
+              <g class="figure">
+                <g class="torso-group">
+                  <path d="M140 277 C111 277 91 300 82 336 L61 438 H319 L298 336 C291 298 267 277 241 277 Z" fill="url(#bodyGrad)"/>
+                  <path d="M120 284 C102 308 96 349 94 408" stroke="#E4ECF0" stroke-opacity=".39" stroke-width="3" stroke-linecap="round"/>
+                  <path d="M259 284 C278 312 285 360 286 409" stroke="#3B566C" stroke-opacity=".24" stroke-width="3" stroke-linecap="round"/>
+                  <path class="chest-highlight" d="M142 292 C166 306 211 306 239 292 C250 317 258 344 259 368 Q192 393 120 368 C123 341 130 312 142 292Z" fill="#B1CBD4" opacity=".20"/>
+                  <path d="M157 252 L158 282 C172 302 207 306 223 281 L224 252" fill="#C9D7DC"/>
+                  <path d="M156 276 Q191 300 225 275" stroke="#8DA7B7" stroke-width="2" opacity=".5"/>
+                  <path d="M70 438 H311" stroke="#B5DCE8" stroke-width="2" opacity=".12"/>
+                </g>
+                <g class="head-group">
+                  <ellipse cx="190" cy="162" rx="76" ry="93" fill="#A3B7C1" opacity=".08"/>
+                  <path d="M117 151 C114 95 138 54 190 53 C241 52 267 93 261 154 L251 193 C241 236 214 261 189 261 C161 261 134 234 123 195Z" fill="url(#faceGrad)"/>
+                  <path d="M117 153 C106 97 137 52 193 52 C239 52 261 81 263 129 C254 113 238 99 214 99 C188 109 163 108 144 100 C135 121 128 142 117 153Z" fill="url(#hairGrad)"/>
+                  <path d="M126 115 C127 78 162 53 199 57" stroke="#A3BAC9" stroke-width="4" stroke-opacity=".26" stroke-linecap="round"/>
+                  <ellipse cx="118" cy="177" rx="9" ry="19" fill="#CBD7D9"/><ellipse cx="262" cy="177" rx="9" ry="19" fill="#CBD7D9"/>
+                  <g class="eyes" fill="#324B5B">
+                    <ellipse cx="163" cy="172" rx="4" ry="5"/><ellipse cx="217" cy="172" rx="4" ry="5"/>
+                  </g>
+                  <g class="eyelids" stroke="#647F8B" stroke-width="2.5" stroke-linecap="round"><path d="M152 172H175"/><path d="M206 172H228"/></g>
+                  <path d="M190 179 C186 190 185 199 190 201" stroke="#93A6AD" stroke-width="2" stroke-linecap="round"/>
+                  <path class="mouth-idle" d="M178 221 Q190 226 202 221" stroke="#8D9091" stroke-width="2.3" stroke-linecap="round"/>
+                  <path class="mouth-open" d="M183 220 Q191 213 199 220 Q196 231 190 232 Q184 228 183 220Z" fill="#8F7476"/>
+                  <path d="M147 148 Q162 142 178 149" stroke="#59717C" stroke-width="3.5" stroke-linecap="round" opacity=".7"/>
+                  <path d="M203 149 Q219 142 234 148" stroke="#59717C" stroke-width="3.5" stroke-linecap="round" opacity=".7"/>
+                </g>
+              </g>
+              <ellipse class="breath-halo" cx="191" cy="282" rx="130" ry="124" fill="url(#breathGlow)"/>
+            </svg>
+          </div>
+          <div class="subtle-grid"></div>
+        </div>
+        <div class="stage-bottom">
+          <div class="avatar-caption"><span class="avatar-name">A I &nbsp; P A R T N E R</span><span id="avatarState" class="avatar-description">あなたの話を聴いています</span></div>
+          <div class="sound-bars" id="soundBars" aria-label="音声インジケーター"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+      </div>
+      <div class="control-strip">
+        <button id="micBtn" class="button-primary" type="button"><span id="micIcon">◉</span> <span id="micLabel">マイクを開始</span></button>
+        <button id="yieldBtn" class="button-secondary" type="button" disabled>話していいよ <span>↗</span></button>
+        <button id="waitBtn" class="button-secondary" type="button" disabled>ちょっと待って</button>
+        <button id="stopBtn" class="button-quiet" type="button">リセット</button>
+      </div>
+      <p class="stage-footnote" id="audioStatus">マイクを開始すると、発話途中の文字起こしからLLMが発話希望を判断します。</p>
+    </section>
+
+    <aside class="right-panel">
+      <div class="panel-heading"><span class="small-caps">CONVERSATION</span><span id="elapsed">00:00</span></div>
+      <div class="subtitle">話しながら試してください</div>
+      <div class="transcript-box" id="transcriptBox"><p id="transcriptText" class="placeholder">例えば「今考えている研究アイデアは…」と、30秒ほど続けて説明してみてください。</p><span id="interimText" class="interim"></span></div>
+      <div class="input-heading"><span>音声が使えない場合</span><span class="muted">テキストでもLLM判定可</span></div>
+      <textarea id="textInput" rows="3" placeholder="説明の途中の発話を入力してください…"></textarea>
+      <button id="textAnalyzeBtn" type="button" class="button-outline">入力内容をLLMに判定させる <span>↗</span></button>
+      <div class="debug-panel hidden" id="debugPanel">
+        <div class="panel-heading"><span class="small-caps">RESEARCHER VIEW</span><span>PRIVATE</span></div>
+        <div class="debug-label">LLMの判断</div><div id="decisionView" class="debug-text">判定前</div>
+        <div class="debug-label">発話候補</div><div id="utteranceView" class="debug-text">—</div>
+      </div>
+      <div class="log-section">
+        <div class="panel-heading"><span class="small-caps">EVENT LOG</span><button type="button" class="link-btn" id="exportBtn">JSON出力 ↓</button></div>
+        <div id="eventLog" class="event-log"><div class="log-empty">イベントがここに記録されます。</div></div>
+      </div>
+      <div class="info-note"><span class="info-icon">i</span><span>これは研究用試作です。音声認識はブラウザ依存、発話タイミングは簡易判定です。MaAI/VAPは未接続です。</span></div>
+    </aside>
+  </main>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

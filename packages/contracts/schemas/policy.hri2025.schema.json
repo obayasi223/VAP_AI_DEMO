@@ -1,0 +1,135 @@
+{
+  "$id": "policy.hri2025.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "policy_id": {
+      "type": "string",
+      "const": "hri2025"
+    },
+    "immutable": {
+      "type": "boolean",
+      "const": true
+    },
+    "source": {
+      "type": "string",
+      "const": "Skantze & Irfan, HRI 2025, Appendix A"
+    },
+    "note": {
+      "type": "string",
+      "const": "English/Furhat pilot values kept for comparison. Not claimed to be optimal for Japanese."
+    },
+    "constants": {
+      "type": "object",
+      "properties": {
+        "TURNGPT_PREPARE_THRESHOLD": {
+          "type": "number",
+          "const": 0.2
+        },
+        "ASR_PREPARE_TIMEOUT_MS": {
+          "type": "number",
+          "const": 200
+        },
+        "SIMILARITY_PREPARE_THRESHOLD": {
+          "type": "number",
+          "const": 0.8
+        },
+        "VAP_PNOW_INTERRUPT": {
+          "type": "number",
+          "const": 0.4
+        },
+        "VAP_PFUT_INTERRUPT": {
+          "type": "number",
+          "const": 0.4
+        },
+        "VAP_PNOW_YIELD": {
+          "type": "number",
+          "const": 0.5
+        },
+        "VAP_PFUT_YIELD": {
+          "type": "number",
+          "const": 0.5
+        },
+        "MIN_GAP_TIME_MS": {
+          "type": "number",
+          "const": 500
+        },
+        "YIELD_TIMEOUTS_MS": {
+          "type": "object",
+          "properties": {
+            "0.3": {
+              "type": "number",
+              "const": 500
+            },
+            "0.2": {
+              "type": "number",
+              "const": 1000
+            },
+            "0.1": {
+              "type": "number",
+              "const": 2000
+            },
+            "0.0": {
+              "type": "number",
+              "const": 3000
+            }
+          },
+          "required": [
+            "0.3",
+            "0.2",
+            "0.1",
+            "0.0"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "TURNGPT_PREPARE_THRESHOLD",
+        "ASR_PREPARE_TIMEOUT_MS",
+        "SIMILARITY_PREPARE_THRESHOLD",
+        "VAP_PNOW_INTERRUPT",
+        "VAP_PFUT_INTERRUPT",
+        "VAP_PNOW_YIELD",
+        "VAP_PFUT_YIELD",
+        "MIN_GAP_TIME_MS",
+        "YIELD_TIMEOUTS_MS"
+      ],
+      "additionalProperties": false
+    },
+    "interpretation": {
+      "type": "object",
+      "properties": {
+        "user_turn_end_updates_during_speech": {
+          "type": "boolean",
+          "const": false
+        },
+        "stop_point": {
+          "type": "string",
+          "const": "immediate"
+        },
+        "apply_u_corrections": {
+          "type": "boolean",
+          "const": false
+        }
+      },
+      "required": [
+        "user_turn_end_updates_during_speech",
+        "stop_point",
+        "apply_u_corrections"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "policy_id",
+    "immutable",
+    "source",
+    "note",
+    "constants",
+    "interpretation"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,104 @@
+/**
+ * 候補ストアのインターフェース（本実装は E2a）。候補の状態の正本は E にある。
+ * candidate_id と版は register／update で E が採番する。LLM には生成させない（計画 §4.5）。
+ *
+ * 順序の約束: initiative.decision の NEW は register の戻り値を受けた後に emit する
+ * （イベントに candidate_id が必須なので、採番前に emit できない）。
+ * REVISE も同様に update の戻り値の版で emit する。
+ * G は list() で未解決の候補を受け取り、KEEP などの照合に使う。
+ */
+import { z } from 'zod';
+import type { CandidateRef } from './turn';
+
+/** 仕様§4 の遷移と計画 §4.6。 */
+export const CandidateState = z.enum([
+  'INTENT_READY',
+  'BREATH_INHALE',
+  'BREATH_HOLD_OR_READY',
+  'DEFERRED',
+  'SPEAKING',
+  'SPOKEN',
+  'WITHDRAWN',
+]);
+export type CandidateState = z.infer<typeof CandidateState>;
+
+/** コード由来の遷移の原因。モデルの判断（WITHDRAW など）はここに入れない。 */
+export const CandidateCause = z.enum([
+  'signal_gate_allowed',
+  'inhale_completed',
+  'user_continued',
+  'turn_allowed',
+  'invitation',
+  'expired',
+  'evidence_lost',
+  'stale_result',
+  /** 活動中の候補があるので棄却（合図のゲート、計画 §4.6）。 */
+  'active_candidate_exists',
+  'signal_cooldown',
+  'normal_response_started',
+  'speech_finished',
+  'speech_interrupted',
+  'woz',
+]);
+export type CandidateCause = z.infer<typeof CandidateCause>;
+
+export interface CandidateRegistration {
+  segment_id: number;
+  transcript_revision: number;
+  /** ここから下は LLM の出力の素の値。ログでは ModelOutput で包む。判定には使わない。 */
+  intent_type: string;
+  evidence_span: string;
+  proposed_utterance: string;
+  expiry_policy: string;
+  urgency: string;
+  /** コードが検証した ASR 区間 ID。 */
+  evidence_segment_ids: number[];
+  decided_at: number;
+}
+
+export interface CandidateRecord extends CandidateRegistration {
+  candidate_id: string;
+  candidate_version: number;
+  state: CandidateState;
+  updated_at: number;
+}
+
+export type CandidateContentPatch = Partial<
+  Pick<
+    CandidateRegistration,
+    | 'transcript_revision'
+    | 'intent_type'
+    | 'evidence_span'
+    | 'proposed_utterance'
+    | 'expiry_policy'
+    | 'urgency'
+    | 'evidence_segment_ids'
+  >
+>;
+
+export class CandidateConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CandidateConflictError';
+  }
+}
+
+export interface CandidateStore {
+  /** 採番して登録する。状態は INTENT_READY、版は 1。 */
+  register(input: CandidateRegistration): CandidateRef;
+  get(candidate_id: string): CandidateRecord | null;
+  /** 既定は未解決（SPOKEN、WITHDRAWN 以外）のみ。 */
+  list(options?: { include_resolved?: boolean }): readonly CandidateRecord[];
+  /**
+   * 内容の更新（REVISE）。版を1つ増やして返す。
+   * expected_version が古ければ CandidateConflictError（遅れて届いた結果の適用を防ぐ）。
+   */
+  update(
+    candidate_id: string,
+    expected_version: number,
+    patch: CandidateContentPatch,
+    updated_at: number,
+  ): CandidateRef;
+  /** 状態の更新。内容は変わらないので版は増えない。遷移の妥当性は E の状態機械が決める。 */
+  setState(candidate_id: string, state: CandidateState, updated_at: number): CandidateRecord;
+}

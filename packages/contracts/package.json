@@ -1,0 +1,23 @@
+{
+  "name": "@llm-vap/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared contracts: zod schemas, generated JSON Schema, binary frame codec, provider interfaces",
+  "exports": {
+    ".": "./src/index.ts",
+    "./binary": "./src/binary.ts",
+    "./clock": "./src/clock.ts",
+    "./schemas/*": "./schemas/*"
+  },
+  "scripts": {
+    "gen:schemas": "tsx scripts/gen_schemas.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}

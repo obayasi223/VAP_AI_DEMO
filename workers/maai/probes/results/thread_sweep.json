@@ -1,0 +1,116 @@
+[
+ {
+  "config": {
+   "lang": "jp_kyoto",
+   "mc": true,
+   "torch_threads": 8,
+   "mimi_onnx_cpu_intra_threads": 4,
+   "model_type": "normal-ver2",
+   "frame_rate": 12.5
+  },
+  "rtf_p50": 0.504,
+  "rtf_p95": 0.65,
+  "rtf_p99": 1.073,
+  "system_busy_cores_all_processes": 9.08,
+  "loadavg_end": [
+   "7.86",
+   "9.48",
+   "8.10"
+  ]
+ },
+ {
+  "config": {
+   "lang": "jp_kyoto",
+   "mc": true,
+   "torch_threads": 4,
+   "mimi_onnx_cpu_intra_threads": 4,
+   "model_type": "normal-ver2",
+   "frame_rate": 12.5
+  },
+  "rtf_p50": 0.462,
+  "rtf_p95": 0.561,
+  "rtf_p99": 0.615,
+  "system_busy_cores_all_processes": 6.67,
+  "loadavg_end": [
+   "6.90",
+   "8.99",
+   "8.00"
+  ]
+ },
+ {
+  "config": {
+   "lang": "jp_kyoto",
+   "mc": true,
+   "torch_threads": 2,
+   "mimi_onnx_cpu_intra_threads": 2,
+   "model_type": "normal-ver2",
+   "frame_rate": 12.5
+  },
+  "rtf_p50": 0.513,
+  "rtf_p95": 0.666,
+  "rtf_p99": 0.741,
+  "system_busy_cores_all_processes": 4.48,
+  "loadavg_end": [
+   "5.25",
+   "8.17",
+   "7.77"
+  ]
+ },
+ {
+  "config": {
+   "lang": "jp_kyoto",
+   "mc": true,
+   "torch_threads": 4,
+   "mimi_onnx_cpu_intra_threads": 2,
+   "model_type": "normal-ver2",
+   "frame_rate": 12.5
+  },
+  "rtf_p50": 0.534,
+  "rtf_p95": 0.712,
+  "rtf_p99": 0.81,
+  "system_busy_cores_all_processes": 5.63,
+  "loadavg_end": [
+   "4.99",
+   "7.58",
+   "7.59"
+  ]
+ },
+ {
+  "config": {
+   "lang": "jp_kyoto",
+   "mc": true,
+   "torch_threads": 2,
+   "mimi_onnx_cpu_intra_threads": 4,
+   "model_type": "normal-ver2",
+   "frame_rate": 12.5
+  },
+  "rtf_p50": 0.549,
+  "rtf_p95": 0.864,
+  "rtf_p99": 1.237,
+  "system_busy_cores_all_processes": 7.53,
+  "loadavg_end": [
+   "5.74",
+   "7.32",
+   "7.50"
+  ]
+ },
+ {
+  "config": {
+   "lang": "jp_kyoto",
+   "mc": true,
+   "torch_threads": 1,
+   "mimi_onnx_cpu_intra_threads": 1,
+   "model_type": "normal-ver2",
+   "frame_rate": 12.5
+  },
+  "rtf_p50": 0.626,
+  "rtf_p95": 0.832,
+  "rtf_p99": 1.007,
+  "system_busy_cores_all_processes": 2.28,
+  "loadavg_end": [
+   "4.45",
+   "6.58",
+   "7.23"
+  ]
+ }
+]
