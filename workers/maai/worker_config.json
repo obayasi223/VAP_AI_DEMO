@@ -1,0 +1,40 @@
+{
+  "status": "confirmed",
+  "source": "docs/maai_validation.md（R2、統括が確定）",
+  "provisional_fields": {
+    "engine.mc": "G1 で比較するまで暫定",
+    "runtime.max_backlog_ms": "未測定。実測の 90 秒の滞留を防ぐための暫定値",
+    "runtime.max_zero_fill_ms": "未測定。degradation.json の 2 秒の欠損に合わせた暫定値",
+    "runtime.max_consecutive_process_failures": "未測定の暫定値",
+    "runtime.status_interval_ms": "未測定の暫定値",
+    "runtime.degraded_hold_ms": "未測定の暫定値",
+    "runtime.process_stuck_ms": "未測定の暫定値",
+    "runtime.rtf_window": "未測定の暫定値"
+  },
+  "session_defaults": {
+    "lang": "jp_kyoto",
+    "model_type": "normal-ver2",
+    "frame_rate_hz": 12.5,
+    "frame_samples": 320,
+    "device": "cpu"
+  },
+  "engine": {
+    "mc": true,
+    "torch_threads": 4,
+    "mimi_onnx_cpu_intra_threads": 4,
+    "mimi_onnx_cpu_inter_threads": null,
+    "mimi_onnx_precision": "fp32",
+    "context_len_sec": 20,
+    "mimi_onnx_repo": "maai-kyoto/continuous-mimi-onnx",
+    "mimi_onnx_revision": "303ef4ec0c70e4c71b67ea166acd26dd0d96655c"
+  },
+  "runtime": {
+    "max_backlog_ms": 320,
+    "max_zero_fill_ms": 2000,
+    "max_consecutive_process_failures": 3,
+    "status_interval_ms": 1000,
+    "degraded_hold_ms": 5000,
+    "process_stuck_ms": 2000,
+    "rtf_window": 64
+  }
+}

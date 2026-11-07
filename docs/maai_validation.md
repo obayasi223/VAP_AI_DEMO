@@ -333,3 +333,10 @@ $PY probe_soak.py --minutes 5.5 --torch-threads 4 --ort-threads 4 --tag alone --
 # 描画あり: 別端末で先に起動。playwright と three は別途用意
 node load_page/run_load_page.mjs --pw <dir> --three <dir>/node_modules/three --model <file.vrm> --seconds 350 --out results/browser_load.json
 ```
+
+## 追記（統括、11-08）: 競合した測定
+
+レーン B の実 MaAI の実行が、次の時間帯に R2 の連続運転と重なった。この時間帯の結果は競合下の値として扱い、性能の根拠にしない。
+
+- 05:08:50〜05:10: `soak_with_browser_pinned.json`（05:08〜05:14 の実行）。前半の p95 2.166 と後半の 1.683 の差に影響した可能性がある。
+- 05:32:46〜05:34: `--torch-threads 2` の連続運転。
