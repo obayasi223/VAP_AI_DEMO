@@ -41,13 +41,13 @@
     "user_speaking_min_ms": null
   },
   "gaze": {
-    "pause_min_ms": null,
-    "signal": null,
-    "p_threshold": null
+    "pause_min_ms": 200,
+    "signal": "p_now",
+    "p_threshold": 0.5
   },
   "similarity": {
     "method": "char_ngram_cosine",
-    "threshold": null
+    "threshold": 0.9
   },
   "completion": {
     "estimator": "ja_rules_v1",

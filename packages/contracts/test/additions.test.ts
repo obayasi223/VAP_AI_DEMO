@@ -117,8 +117,8 @@ describe('準備の閾値の正本', () => {
     const ja = PolicyJa.parse(readPolicy('policy.ja.json'));
     expect(prepareThresholds(ja)).toEqual({
       completion_prepare_threshold: ja.completion.thresholds['ja_rules_v1']?.prepare_threshold,
-      // 未校正は null のまま。原著の 0.8 へ置き換えない。
-      similarity_prepare_threshold: null,
+      // similarity の節の値をそのまま読む。原著の 0.8 へ置き換えない。
+      similarity_prepare_threshold: ja.similarity.threshold,
     });
     const moved = {
       ...ja,

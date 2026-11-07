@@ -91,9 +91,8 @@ describe('視線の条件', () => {
 });
 
 describe('設定が未校正', () => {
-  it('ja の config は null のままで、逸らさず、gaze の決定も出さない', () => {
-    expect(ja().gaze).toEqual({ pause_min_ms: null, signal: null, p_threshold: null });
-    const d = new Driver(ja());
+  it('ja で gaze が null なら、逸らさず、gaze の決定も出さない', () => {
+    const d = new Driver(ja((p) => { p.gaze = { pause_min_ms: null, signal: null, p_threshold: null }; }));
     expect(kinds(d.tick(T0, { p: [0.1, 0.1, false], ...pause(5000) }))).not.toContain('gaze');
     expect(d.state.gaze_target).toBe('user');
   });

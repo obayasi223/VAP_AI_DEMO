@@ -118,3 +118,11 @@
 | `YIELD_TIMEOUTS` の尺度 | ja でも TurnGPT の表をそのまま使う | 推定器ごとの表は `prepare_threshold` しかない。`ja_rules_v1` の p は別の尺度で、L74 の意味は原著と同じでない |
 | `final_transcript` の起動 | 使わない | Appendix A にない。final でも L46 の条件を待つ（最大 200ms 遅れる） |
 | WoZ の入力 | `inputs.woz` を読まない | E3 の範囲。**J が渡しても効かない** |
+
+## 8. 統括が入れた暫定の値（波1の配線のため。根拠なし、未校正）
+
+`config/policy.ja.json`:
+
+- `gaze`: `signal=p_now`、`p_threshold=0.5`、`pause_min_ms=200`。null のままだと視線が動かないため。人の評価も実対話での確認もしていない。
+- `similarity.threshold=0.9`。null だと実 ASR ログの再生で 376 秒に 669 回の準備になった（同じ文の連続読み上げで、人の会話の頻度ではない）。0.9 では 7 回。比較する文が累積なので、長い発話の末尾が応答に届かない危険がある。校正のときに確かめる。
+

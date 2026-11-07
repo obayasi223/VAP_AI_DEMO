@@ -12,28 +12,27 @@ function fireWith(policy: Parameters<typeof createTurnManager>[0], sim: number |
   return { d, fired: pick(decisions, 'prepare').length === 1 };
 }
 
-describe('L47: similarity.threshold が null（ja の現状）', () => {
-  it('config の ja は null のまま', () => {
-    expect(ja().similarity.threshold).toBeNull();
-  });
+const jaUncalibrated = () => ja((p) => { p.similarity.threshold = null; });
+
+describe('L47: similarity.threshold が null', () => {
   it.each([
     ['0.8 を流用しない: 0.8 で起動', 0.8, true],
     ['0.85 で起動', 0.85, true],
     ['0.999 で起動', 0.999, true],
     ['1（正規化後に同じ文）は起動しない', 1, false],
   ])('%s', (_title, sim, fired) => {
-    expect(fireWith(ja(), sim).fired).toBe(fired);
+    expect(fireWith(jaUncalibrated(), sim).fired).toBe(fired);
   });
   it('比較対象なしは起動', () => {
-    expect(fireWith(ja(), undefined).fired).toBe(true);
+    expect(fireWith(jaUncalibrated(), undefined).fired).toBe(true);
   });
   it('判定の根拠を状態に残す', () => {
-    expect(fireWith(ja(), 0.9).d.state.last_prepare_gate).toEqual({
+    expect(fireWith(jaUncalibrated(), 0.9).d.state.last_prepare_gate).toEqual({
       at: T0 + 200,
       fired: true,
       gate: { outcome: 'pass', basis: 'uncalibrated_text_differs', similarity: 0.9, threshold: null },
     });
-    expect(fireWith(ja(), 1).d.state.last_prepare_gate?.gate.basis).toBe('uncalibrated_same_text');
+    expect(fireWith(jaUncalibrated(), 1).d.state.last_prepare_gate?.gate.basis).toBe('uncalibrated_same_text');
   });
 });
 
@@ -61,6 +60,7 @@ describe('L47: 閾値がある方策', () => {
     const p = ja((x) => {
       x.turn.constants.SIMILARITY_PREPARE_THRESHOLD = 0.01;
       x.turn.constants.TURNGPT_PREPARE_THRESHOLD = 0.99;
+      x.similarity.threshold = null;
     });
     expect(fireWith(p, 0.9).fired).toBe(true);
     const d = new Driver(p);
