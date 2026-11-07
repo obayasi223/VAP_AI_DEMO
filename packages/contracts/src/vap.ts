@@ -6,7 +6,7 @@
  *  - 1ch (models/vap_mono.py): スカラーで、2者の配分ではなく自己発話活動の期待値。
  * 同じしきい値を流用できないように、TurnManager の入力は Vap2chState だけを受ける。
  *
- * p の向きと 2ch の出力の確定は R2 の実測待ち【未確認】。§4.1 の仮置きは
+ * p の向きは R2 で実測して確定（docs/maai_validation.md §1）。添字 i はチャネル i で、
  * ch1=user、ch2=AI、p_now_ai = p_now[1]。添字は policy の vap.p_ai_index で持つ。
  */
 import { z } from 'zod';

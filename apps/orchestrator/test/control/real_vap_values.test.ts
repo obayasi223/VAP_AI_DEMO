@@ -59,12 +59,12 @@ describe.skipIf(results === null).each(['timeline_inoue_on_ch1', 'timeline_sumid
 );
 
 describe('向きの設定', () => {
-  it('現状はどちらの方策も暫定で p_ai_index=1', () => {
-    expect(vapDirectionSettings(hri2025())).toEqual({ p_ai_index: 1, speaking_threshold: null, direction_status: 'provisional' });
-    expect(vapDirectionSettings(ja())).toEqual({ p_ai_index: 1, speaking_threshold: 0.5, direction_status: 'provisional' });
+  it('どちらの方策も実測で確定した p_ai_index=1', () => {
+    expect(vapDirectionSettings(hri2025())).toEqual({ p_ai_index: 1, speaking_threshold: null, direction_status: 'measured' });
+    expect(vapDirectionSettings(ja())).toEqual({ p_ai_index: 1, speaking_threshold: 0.5, direction_status: 'measured' });
   });
   it('ja は方策の添字に従う', () => {
-    const direction = { p_ai_index: 0 as const, speaking_threshold: 0.5, direction_status: 'provisional' as const };
+    const direction = { p_ai_index: 0 as const, speaking_threshold: 0.5, direction_status: 'measured' as const };
     expect(readVap(vapAt(0.9, 0.8, false), direction)).toMatchObject({ p_now_ai: expect.closeTo(0.1), p_future_ai: expect.closeTo(0.2) });
   });
   it('hri2025 はワーカーの user_speaking、ja は vad[0] と閾値', () => {

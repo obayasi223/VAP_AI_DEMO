@@ -1,7 +1,7 @@
 /**
  * p の向きの変換はこのファイルだけに置く（計画 §4.1）。他のファイルは p_now[...] を添字で読まない。
  *
- * 【暫定】統括が R2 の最終報告の後に確定する。今の根拠は次の実測（workers/maai/probes/results/、読むだけ）:
+ * R2 の最終報告で確定（docs/maai_validation.md §1）。根拠は次の実測（workers/maai/probes/results/、読むだけ）:
  *  - direction_jp_kyoto_normal-ver2_12.5hz_mc.json と direction_timeseries.png: ch1 のみの発話で p_now[0] が約 0.92〜0.96、
  *    ch2 のみの発話で p_now[1] が約 0.94〜0.97。話者を入れ替えても、素材の左右を反転しても添字はチャネルに従う。
  *    これは公式 sample から作った音声で、実対話の性能ではない。
@@ -26,7 +26,7 @@ export interface VapDirectionSettings {
 
 export function vapDirectionSettings(policy: Policy): VapDirectionSettings {
   if (policy.policy_id === 'hri2025') {
-    return { p_ai_index: HRI2025_P_AI_INDEX, speaking_threshold: null, direction_status: 'provisional' };
+    return { p_ai_index: HRI2025_P_AI_INDEX, speaking_threshold: null, direction_status: 'measured' };
   }
   return {
     p_ai_index: policy.vap.p_ai_index,

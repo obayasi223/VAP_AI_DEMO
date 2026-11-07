@@ -193,7 +193,7 @@ describe('policy files', () => {
   it('ja template validates and keeps its initiative section', () => {
     const parsed = PolicyJa.parse(ja);
     expect(parsed.status).toBe('template');
-    expect(parsed.vap.direction_status).toBe('provisional');
+    expect(parsed.vap.direction_status).toBe('measured');
     expect(Object.keys(parsed.initiative)).toEqual(
       expect.arrayContaining([
         'max_new_stable_chars_since_input',
