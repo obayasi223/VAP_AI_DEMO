@@ -4,7 +4,8 @@
  *
  * J の配線: orchestrator からこの画面向けの WS へ、イベントの JSON を 1 テキスト枠に 1 件（改行区切りも可）で流す。
  */
-import { createFakeEventScript } from './fake_events';
+import type { ResearchToNode } from '@llm-vap/contracts';
+import { createFakeEventScript, FAKE_RESEARCH_CONFIG } from './fake_events';
 
 export type FeedConnection = 'idle' | 'connecting' | 'open' | 'closed' | 'error';
 
@@ -23,6 +24,11 @@ export interface ResearchFeed {
   synthetic: boolean;
   /** 開始して、停止用の関数を返す。 */
   start(sink: FeedSink): () => void;
+  /**
+   * 研究者のメモなどを Node へ送る（I2）。送れる口だけが持つ。false は未接続で送れなかった。
+   * 結果は research.note.ack として sink.event に届く。
+   */
+  send?(message: ResearchToNode): boolean;
 }
 
 /** 改行区切りの本文を流す。空行は飛ばす。 */
@@ -52,8 +58,16 @@ export function createNoFeed(): ResearchFeed {
   };
 }
 
-/** 偽のイベント列。実データと混ざらないよう synthetic=true に固定し、session_id にも FAKE を含める。 */
+/** 偽の列の 1 刻みで進める時間（イベントの t_monotonic_ms の上で）。 */
+const FAKE_VIRTUAL_MS_PER_STEP = 150;
+
+/**
+ * 偽のイベント列。実データと混ざらないよう synthetic=true に固定し、session_id にも FAKE を含める。
+ * 刻みごとに、偽の時刻が FAKE_VIRTUAL_MS_PER_STEP 進んだ分を流す（最低 1 件）。既定の刻みでほぼ実時間。
+ * メモの送信は受けるが保存しない（偽の口なので「セッションなし」で返す）。
+ */
 export function createFakeFeed(options: { stepMs?: number } = {}): ResearchFeed {
+  let activeSink: FeedSink | null = null;
   return {
     kind: 'fake',
     label: '偽のイベント列（test double）',
@@ -61,18 +75,43 @@ export function createFakeFeed(options: { stepMs?: number } = {}): ResearchFeed 
     start(sink) {
       const script = createFakeEventScript();
       let index = 0;
+      let virtualMs = 0;
+      activeSink = sink;
       sink.connection('open', '偽のイベント列を再生中');
+      sink.event(FAKE_RESEARCH_CONFIG);
+      const timeOf = (value: unknown) => {
+        const t = (value as { t_monotonic_ms?: unknown } | null)?.t_monotonic_ms;
+        return typeof t === 'number' ? t : -Infinity;
+      };
       const timer = setInterval(() => {
-        const next = script[index];
-        index += 1;
-        if (next === undefined) {
+        virtualMs += FAKE_VIRTUAL_MS_PER_STEP;
+        if (index >= script.length) {
           clearInterval(timer);
           sink.connection('closed', '偽のイベント列の再生が終了');
           return;
         }
-        sink.event(next);
+        do {
+          sink.event(script[index]);
+          index += 1;
+        } while (index < script.length && timeOf(script[index]) <= virtualMs);
       }, options.stepMs ?? 150);
-      return () => clearInterval(timer);
+      return () => {
+        clearInterval(timer);
+        if (activeSink === sink) activeSink = null;
+      };
+    },
+    send(message) {
+      const sink = activeSink;
+      if (sink === null) return false;
+      setTimeout(() =>
+        sink.event({
+          type: 'research.note.ack',
+          note_id: message.note_id,
+          status: 'no_session',
+          detail: '偽データの口なので保存しません',
+        }),
+      );
+      return true;
     },
   };
 }
@@ -91,7 +130,7 @@ export function createJsonlFeed(text: string, name: string): ResearchFeed {
   };
 }
 
-type WebSocketLike = Pick<WebSocket, 'close' | 'addEventListener'>;
+type WebSocketLike = Pick<WebSocket, 'close' | 'addEventListener'> & Partial<Pick<WebSocket, 'send' | 'readyState'>>;
 
 export function createWsFeed(
   url: string,
@@ -99,10 +138,17 @@ export function createWsFeed(
 ): ResearchFeed {
   const connect = options.connect ?? ((u: string) => new WebSocket(u));
   const retryMs = options.retryMs ?? 2000;
+  /** いま開いている（または開こうとしている）接続。send はこれへ書く。 */
+  let current: WebSocketLike | null = null;
   return {
     kind: 'ws',
     label: `WS: ${url}`,
     synthetic: false,
+    send(message) {
+      if (current === null || current.readyState !== 1 || current.send === undefined) return false;
+      current.send(JSON.stringify(message));
+      return true;
+    },
     start(sink) {
       let stopped = false;
       let socket: WebSocketLike | null = null;
@@ -111,6 +157,7 @@ export function createWsFeed(
         if (stopped) return;
         sink.connection('connecting', url);
         socket = connect(url);
+        current = socket;
         socket.addEventListener('open', () => sink.connection('open', url));
         socket.addEventListener('message', (message) => {
           if (typeof message.data === 'string') deliverLines(message.data, sink);
@@ -127,6 +174,7 @@ export function createWsFeed(
       return () => {
         stopped = true;
         if (timer !== null) clearTimeout(timer);
+        if (current === socket) current = null;
         socket?.close();
       };
     },

@@ -40,6 +40,8 @@ const CLOCK_BURST = 6;
 const CLOCK_BURST_INTERVAL_MS = 100;
 const RECONNECT_MIN_MS = 250;
 const RECONNECT_MAX_MS = 5000;
+/** Node が「このセッションは別のタブで接続中」として新しい接続を断る close code（apps/orchestrator/src/ws/server.ts）。 */
+const SESSION_OPEN_ELSEWHERE_CODE = 4000;
 
 interface PlaybackInput {
   gen: number;
@@ -501,6 +503,12 @@ function connect(): void {
     inputs.clear();
     toWorklet({ t: 'input_lost' });
     if (shuttingDown) return;
+    if (event.code === SESSION_OPEN_ELSEWHERE_CODE) {
+      // 別のタブが会話中。張り直すと互いに閉じ合うので、このタブはつながない。
+      shuttingDown = true;
+      setLink('closed', `code=${event.code} session_open_elsewhere`);
+      return;
+    }
     counters.reconnects++;
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);

@@ -20,7 +20,7 @@ import type { ResearchEvent } from '@llm-vap/contracts';
 import { SystemTimeSource } from '@llm-vap/contracts';
 import { loadDotEnv, readConfig } from '../../src/app/config';
 import { DEFAULT_SCRIPTED_REPLY } from '../../src/app/scripted';
-import { MaaiWorkerClient, buildMaaiConfigure, loadMaaiSessionConfig, realMaaiLaunch } from '../../src/maai';
+import { createMaaiClient } from '../../src/app/maai_setup';
 import { OrchestratorServer, SwitchableTimeSource } from '../../src/ws/server';
 import type { Session } from '../../src/session/session';
 import { checkLog } from '../../../../tools/log_check/check';
@@ -174,6 +174,7 @@ async function main(): Promise<void> {
     SESSIONS_DIR: path.join(workDir, 'sessions'),
     ORCHESTRATOR_PORT: String(ORCH_PORT),
     ORCHESTRATOR_HOST: '127.0.0.1',
+    ALLOWED_ORIGINS: `http://127.0.0.1:${WEB_PORT}`,
     SESSION_RESUME_GRACE_MS: '20000',
     ...(REAL ? {} : { STT_PROVIDER_CLASS: 'test_double', TTS_PROVIDER_CLASS: 'test_double', LLM_PROVIDER_CLASS: 'test_double' }),
   };
@@ -181,11 +182,7 @@ async function main(): Promise<void> {
   results.providers = { stt: config.stt, tts: config.tts, llm: config.llm, maai: 'real (.venv)' };
 
   const maaiTime = new SwitchableTimeSource(new SystemTimeSource());
-  const maai = new MaaiWorkerClient({
-    launch: realMaaiLaunch({ env: { ...process.env, HF_HUB_OFFLINE: '1', MAAI_WORKER_URL: 'ws://127.0.0.1:0' }, port: 0 }),
-    configure: buildMaaiConfigure(loadMaaiSessionConfig(), config.policy.policy_id === 'ja' ? config.policy.vap : { channel_layout: '2ch', speaking_threshold: 0.5 }),
-    time: maaiTime,
-  });
+  const maai = createMaaiClient({ policy: config.policy, time: maaiTime, env: { ...process.env, MAAI_WORKER_URL: 'ws://127.0.0.1:0' }, port: 0 });
   const bootStart = Date.now();
   const firstOutcome = maai.start(`e2e-boot-${Date.now()}`);
   const server = new OrchestratorServer({ config, maai, maaiTime, env, log: (m) => console.log(`  [orch] ${m}`) });
@@ -247,16 +244,38 @@ async function main(): Promise<void> {
       disconnectDone = true;
       await sleep(300);
     }
+    const reattached = await waitFor('reattach', () => server.current() === session1 && session1.attached, 15_000);
+    check('切断試験: ブラウザが自動で再接続し、同じセッションへ戻った', reattached !== null, { session: session1.session_id });
+    // 切断では終わりを代行しない。ブラウザは受け取った分を流し切ってから、再接続後に本物の playback.ended を送る。
+    const settled = await waitFor('browser playback.ended after reattach', () => (session1.turnState.speaking.phase === 'silent' ? true : null), 20_000, 50);
     results.disconnect = {
       performed: disconnectDone,
       synthesized_endings: session1.counters.playback_ended_synthesized,
       history_before: historyBefore,
       history_after: session1.history.snapshot().length,
+      settled_by_browser_report: settled !== null,
     };
-    check('切断試験: 再生中に切断して、終わりを代行した', disconnectDone && session1.counters.playback_ended_synthesized >= 1, results.disconnect);
-    const reattached = await waitFor('reattach', () => server.current() === session1 && session1.attached, 15_000);
-    check('切断試験: ブラウザが自動で再接続し、同じセッションへ戻った', reattached !== null, { session: session1.session_id });
-    await sleep(8000);
+    check(
+      '切断試験: 再生中に切断しても代行せず、再接続後のブラウザの報告で終わり、話した分が履歴へ入った',
+      disconnectDone && settled !== null && session1.counters.playback_ended_synthesized === 0 && session1.history.snapshot().length > historyBefore,
+      results.disconnect,
+    );
+
+    // ---- 2b. 2つ目のタブ: 断られ、張り直さず、1つ目の会話は続く -------------------------------
+    const tab2 = await openParticipant(browser);
+    await tab2.click('#start');
+    let tab2Link = '';
+    for (const until = Date.now() + 20_000; Date.now() < until && tab2Link !== 'elsewhere'; await sleep(200)) {
+      tab2Link = await tab2.evaluate(() => window.__participant!.controller.current().link);
+    }
+    await sleep(1500);
+    check('2つ目のタブは断られ（elsewhere）、1つ目のセッションは接続のまま', tab2Link === 'elsewhere' && server.current() === session1 && session1.attached, {
+      tab2: tab2Link,
+      same_session: server.current() === session1,
+      attached: session1.attached,
+    });
+    await tab2.close();
+    await sleep(6000);
 
     // ---- 3. ページの再読み込み → 新しいセッション ------------------------------------------
     await page.close();
@@ -340,7 +359,7 @@ function analyse(events: ResearchEvent[], session: Session): void {
   if (!REAL) {
     const partial = history.filter((h) => h.role === 'assistant' && h.text.length < DEFAULT_SCRIPTED_REPLY.length);
     const prefixOk = partial.every((h) => DEFAULT_SCRIPTED_REPLY.startsWith(h.text));
-    check('割り込み／切断で止めた発話は、発話済みの接頭部だけが履歴へ', interrupted.length + session.counters.playback_ended_synthesized >= 1 && partial.length >= 1 && prefixOk, {
+    check('割り込み／切断で止めた発話は、発話済みの接頭部だけが履歴へ', partial.length >= 1 && prefixOk, {
       interrupted: interrupted.length,
       synthesized: session.counters.playback_ended_synthesized,
       partial: partial.map((h) => ({ chars: [...h.text].length, interrupted: h.role === 'assistant' ? h.interrupted : null })),

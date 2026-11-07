@@ -2,7 +2,13 @@
  * イベント列から研究者画面の表示内容を作る。React に依存しない。
  * 届いた値は必ずスキーマで検証し、不合格は数えて表示する（捨てても黙らない）。
  */
-import { FAKE_MODEL_VARIANT, ResearchEvent, type EventOf } from '@llm-vap/contracts';
+import {
+  FAKE_MODEL_VARIANT,
+  NodeToResearch,
+  ResearchEvent,
+  type EventOf,
+  type ResearchNoteMessage,
+} from '@llm-vap/contracts';
 import {
   computeLatencyReport,
   isLatencyRelevant,
@@ -10,7 +16,10 @@ import {
   type CostSummary,
   type LatencyReport,
 } from '../../../orchestrator/src/logging/analysis';
+import { CandidateTracker, type CandidateSummary } from './candidates_view';
 import type { FeedConnection, FeedSink, ResearchFeed } from './feed';
+import { OutcomeTracker, type InterruptStats, type PrepareStats } from './rates';
+import { TimelineBuffer, type AiIndex, type TimelineView } from './timeline';
 
 export interface ProviderRow {
   provider: string;
@@ -54,6 +63,38 @@ export interface CurrentState {
   } | null;
 }
 
+/** p の向き。orchestrator の research.config が正本。届くまでは仮定であることを画面に出す。 */
+export interface DirectionInfo {
+  p_ai_index: AiIndex;
+  source: 'orchestrator' | 'fake' | 'assumed';
+  policy_id: string | null;
+  direction_status: string | null;
+}
+
+/** 計画 §5 の G0 判定で実測した向き（i=1 が ch2=AI）。research.config が届くまでの仮定。 */
+export const ASSUMED_P_AI_INDEX: AiIndex = 1;
+
+export interface NoteRow {
+  note_id: string;
+  text: string;
+  client_wall_clock: string;
+  /** logged はログに書かれた（ack か research.note イベントを受けた）。 */
+  status: 'sending' | 'logged' | 'no_session' | 'invalid' | 'not_sent';
+  detail: string | null;
+  session_id: string | null;
+  /** research.note イベントの t_monotonic_ms（Node の受信時刻）。 */
+  logged_at_ms: number | null;
+}
+
+/** I2 の表示。セッションが変わったら作り直す（前のセッションの値を混ぜない）。 */
+export interface LiveSnapshot {
+  session_id: string | null;
+  timeline: TimelineView;
+  prepare: PrepareStats;
+  interrupts: InterruptStats;
+  candidates: CandidateSummary;
+}
+
 export interface ResearchSnapshot {
   feed: { kind: ResearchFeed['kind']; label: string; synthetic: boolean };
   connection: { state: FeedConnection; detail: string | null };
@@ -71,6 +112,32 @@ export interface ResearchSnapshot {
   latency: LatencyReport;
   /** 実データの口でも test double などが混ざっていれば理由を出す（計画 §4.8）。 */
   not_evidence_reasons: string[];
+  direction: DirectionInfo;
+  live: LiveSnapshot;
+  notes: NoteRow[];
+  /** 研究者のメモを送れる口か（WS のときだけ）。 */
+  can_send_notes: boolean;
+}
+
+class LiveState {
+  readonly timeline = new TimelineBuffer();
+  readonly outcomes = new OutcomeTracker();
+  readonly candidates = new CandidateTracker();
+  constructor(readonly session_id: string | null) {}
+  add(event: ResearchEvent): void {
+    this.timeline.add(event);
+    this.outcomes.add(event);
+    this.candidates.add(event);
+  }
+  snapshot(): LiveSnapshot {
+    return {
+      session_id: this.session_id,
+      timeline: this.timeline.view(),
+      prepare: this.outcomes.prepareStats(),
+      interrupts: this.outcomes.interruptStats(),
+      candidates: this.candidates.summary(),
+    };
+  }
 }
 
 type VapEvent = EventOf<'vap.state'>;
@@ -91,8 +158,57 @@ export class ResearchViewStore implements FeedSink {
   private fakeVap = false;
   private connectionState: FeedConnection = 'idle';
   private connectionDetail: string | null = null;
+  private live = new LiveState(null);
+  private direction: DirectionInfo;
+  private readonly notes = new Map<string, NoteRow>();
 
-  constructor(private readonly feed: Pick<ResearchFeed, 'kind' | 'label' | 'synthetic'>) {}
+  constructor(private readonly feed: Pick<ResearchFeed, 'kind' | 'label' | 'synthetic'> & { send?: unknown }) {
+    this.direction = {
+      p_ai_index: ASSUMED_P_AI_INDEX,
+      source: 'assumed',
+      policy_id: null,
+      direction_status: null,
+    };
+  }
+
+  /** 画面から送ったメモ。sent=false は送れなかった（未接続）。 */
+  noteSubmitted(message: ResearchNoteMessage, sent: boolean): void {
+    this.notes.set(message.note_id, {
+      note_id: message.note_id,
+      text: message.text,
+      client_wall_clock: message.client_wall_clock,
+      status: sent ? 'sending' : 'not_sent',
+      detail: sent ? null : 'WS が接続されていません',
+      session_id: null,
+      logged_at_ms: null,
+    });
+  }
+
+  private control(message: NodeToResearch): void {
+    if (message.type === 'research.config') {
+      this.direction = {
+        p_ai_index: message.p_ai_index,
+        source: this.feed.synthetic ? 'fake' : 'orchestrator',
+        policy_id: message.policy_id,
+        direction_status: message.direction_status,
+      };
+      return;
+    }
+    if (message.note_id === null) {
+      this.lastInvalid = `メモの送信が契約に合わない: ${message.status === 'logged' ? '' : message.detail}`;
+      return;
+    }
+    const row = this.notes.get(message.note_id);
+    if (row === undefined || row.status === 'logged') return;
+    if (message.status === 'logged') {
+      row.status = 'logged';
+      row.session_id = message.session_id;
+      row.detail = null;
+    } else {
+      row.status = message.status;
+      row.detail = message.detail;
+    }
+  }
 
   connection(state: FeedConnection, detail: string | null): void {
     this.connectionState = state;
@@ -105,6 +221,15 @@ export class ResearchViewStore implements FeedSink {
   }
 
   event(value: unknown): void {
+    if (typeof value === 'object' && value !== null && 'type' in value && !('event' in value)) {
+      const control = NodeToResearch.safeParse(value);
+      if (control.success) this.control(control.data);
+      else {
+        this.invalid += 1;
+        this.lastInvalid = `制御メッセージが契約に合わない: ${String((value as { type: unknown }).type)}`;
+      }
+      return;
+    }
     const parsed = ResearchEvent.safeParse(value);
     if (!parsed.success) {
       this.invalid += 1;
@@ -125,7 +250,22 @@ export class ResearchViewStore implements FeedSink {
     if (event.event === 'cost.usage') this.costEvents.push(event);
     if (isLatencyRelevant(event)) this.latencyEvents.push(event);
     const at_ms = event.t_monotonic_ms;
+    if (this.live.session_id !== event.session_id) this.live = new LiveState(event.session_id);
+    this.live.add(event);
     switch (event.event) {
+      case 'research.note': {
+        const row = this.notes.get(event.note_id);
+        this.notes.set(event.note_id, {
+          note_id: event.note_id,
+          text: event.text,
+          client_wall_clock: event.client_wall_clock,
+          status: 'logged',
+          detail: row === undefined ? '別の画面から' : null,
+          session_id: event.session_id,
+          logged_at_ms: at_ms,
+        });
+        break;
+      }
       case 'provider.status':
         this.providers.set(event.provider, {
           provider: event.provider,
@@ -213,6 +353,10 @@ export class ResearchViewStore implements FeedSink {
       cost: summarizeCost(this.costEvents),
       latency: computeLatencyReport(this.latencyEvents),
       not_evidence_reasons: reasons,
+      direction: { ...this.direction },
+      live: this.live.snapshot(),
+      notes: [...this.notes.values()].reverse().map((n) => ({ ...n })),
+      can_send_notes: typeof this.feed.send === 'function',
     };
   }
 }

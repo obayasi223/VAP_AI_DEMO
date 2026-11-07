@@ -50,8 +50,9 @@ describe('E1 の範囲', () => {
   });
   it('p の添字を読むのは vap_direction.ts だけ', () => {
     const dir = join(import.meta.dirname, '..', '..', 'src', 'control');
-    const offenders = readdirSync(dir)
-      .filter((name) => name !== 'vap_direction.ts')
+    // サブディレクトリ（candidates/ など）も含めて調べる。
+    const offenders = (readdirSync(dir, { recursive: true }) as string[])
+      .filter((name) => name.endsWith('.ts') && name !== 'vap_direction.ts')
       .filter((name) => /\b(p_now|p_future|vad)\[/.test(readFileSync(join(dir, name), 'utf8')));
     expect(offenders).toEqual([]);
   });

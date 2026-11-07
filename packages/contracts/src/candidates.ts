@@ -42,6 +42,36 @@ export const CandidateCause = z.enum([
 ]);
 export type CandidateCause = z.infer<typeof CandidateCause>;
 
+/**
+ * E2a が受け付けなかった要求の理由（candidate.rejected）。E2a の追加。
+ * G の決定的なゲートでの棄却は従来どおり initiative.discarded に残し、ここには E2a 自身の判断だけを入れる。
+ */
+export const CandidateRejectReason = z.enum([
+  'unknown_candidate',
+  /** 要求の版が候補の現在の版と違う（遅れて届いた結果）。 */
+  'version_mismatch',
+  /** すでに適用した判定より古い transcript_revision の入力から出た判定。 */
+  'stale_transcript_revision',
+  /** 現在より前の segment_id（AI の発話開始より前）の入力から出た判定。 */
+  'stale_segment',
+  /** 遷移表にない from → to。 */
+  'invalid_transition',
+  /** 遷移は表にあるが、その原因では許していない。 */
+  'cause_not_allowed',
+  /** その状態では判定（KEEP／REVISE／WITHDRAW）を適用しない。 */
+  'state_not_applicable',
+  'evidence_invalid',
+  'withdraw_evidence_invalid',
+  'proposed_utterance_empty',
+  /** 人が話し終えた後に届いた NEW。候補にせず保留した（held=true）。 */
+  'post_turn_new_held',
+  /** 保留していた NEW を棄てた（人の再開、通常応答の開始、期限など）。 */
+  'held_dropped',
+  /** D の startChecked が開始を拒否した。details に D の理由。 */
+  'speech_start_refused',
+]);
+export type CandidateRejectReason = z.infer<typeof CandidateRejectReason>;
+
 export interface CandidateRegistration {
   segment_id: number;
   transcript_revision: number;

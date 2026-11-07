@@ -1,9 +1,11 @@
 /**
  * 研究者向けの最小の状態表示（I1）。表示だけで、データの取得は feed.ts の口に任せる。
  * 規則: 未計測は 0 と書かず「未計測」、推定は「推定」と書く。偽データの間は常に明示する。
- * p の時系列、候補のライブ表示、条件切替、WoZ は I2 以降の範囲。
+ * I2 で p の時系列、候補のライブ表示、準備・割り込みの率、研究者のメモを足した（LivePanels.tsx）。
+ * 録音、条件切替、WoZ は波4（E3、J）の範囲で、置き場だけある。
  */
 import type { CostSummary, LatencyRow } from '../../../orchestrator/src/logging/analysis';
+import { CandidatePanel, NotePanel, OutcomePanel, TimelinePanel } from './LivePanels';
 import styles from './research.module.css';
 import type { CurrentState, ResearchSnapshot } from './view_store';
 
@@ -215,7 +217,13 @@ function LatencyTable({ rows }: { rows: LatencyRow[] }) {
   );
 }
 
-export function ResearchDashboard({ snapshot }: { snapshot: ResearchSnapshot }) {
+export function ResearchDashboard({
+  snapshot,
+  onSendNote,
+}: {
+  snapshot: ResearchSnapshot;
+  onSendNote?: (text: string) => { ok: true } | { ok: false; reason: string };
+}) {
   const synthetic = snapshot.feed.synthetic;
   const health = snapshot.connection;
   return (
@@ -231,6 +239,24 @@ export function ResearchDashboard({ snapshot }: { snapshot: ResearchSnapshot }) 
         </div>
       ) : null}
       <h1 className={styles.title}>研究者画面</h1>
+
+      <Section title="p の時系列" synthetic={synthetic}>
+        <TimelinePanel live={snapshot.live} direction={snapshot.direction} />
+      </Section>
+
+      <div className={styles.columns}>
+        <Section title="発話希望の候補" synthetic={synthetic}>
+          <CandidatePanel candidates={snapshot.live.candidates} />
+        </Section>
+        <div>
+          <Section title="準備の取消・空振り、割り込み" synthetic={synthetic}>
+            <OutcomePanel prepare={snapshot.live.prepare} interrupts={snapshot.live.interrupts} />
+          </Section>
+          <Section title="研究者のメモ" synthetic={synthetic}>
+            <NotePanel notes={snapshot.notes} canSend={snapshot.can_send_notes && onSendNote !== undefined} {...(onSendNote ? { onSend: onSendNote } : {})} />
+          </Section>
+        </div>
+      </div>
 
       <Section title="接続" synthetic={synthetic}>
         <p>
@@ -299,6 +325,11 @@ export function ResearchDashboard({ snapshot }: { snapshot: ResearchSnapshot }) 
       <Section title="遅延の分位点（ms）" synthetic={synthetic}>
         <LatencyTable rows={snapshot.latency.rows} />
       </Section>
+
+      <section className={`${styles.card} ${styles.placeholder}`} data-testid="wave4-placeholder">
+        <h2 className={styles.heading}>録音・条件の切替・WoZ</h2>
+        <p className={styles.unmeasured}>まだありません。波4（E3 と J）でここに追加します。</p>
+      </section>
     </main>
   );
 }

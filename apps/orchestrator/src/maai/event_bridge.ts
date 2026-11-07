@@ -50,8 +50,15 @@ export function maaiProviderStatusDraft(availability: MaaiAvailability, provider
 /** 外すときは返り値を呼ぶ。 */
 export function attachMaaiEventBridge(client: MaaiWorkerClient, options: MaaiEventBridgeOptions): () => void {
   const { emitter, clock, systemChannelSource } = options;
+  // READY の前の VAP_STATE は前の CONFIGURE（前のセッションの番号）の結果なので、このセッションのログに書かない。
+  // session.ts も同じ条件で TurnManager へ渡さない。
+  let ready = false;
   const listeners: MaaiClientListeners = {
+    onReady() {
+      ready = true;
+    },
     onVapState(message, receivedAtMs) {
+      if (!ready) return;
       clock.observe(message.t, receivedAtMs);
       const mapping = clock.mapping();
       if (mapping === null) throw new Error('WorkerClockRecorder has no mapping right after observe');
@@ -66,9 +73,11 @@ export function attachMaaiEventBridge(client: MaaiWorkerClient, options: MaaiEve
       emitter.emit(draftFromWorkerStatus(message, systemChannelSource));
     },
     onAvailability(availability) {
+      if (!availability.vap_available) ready = false;
       emitter.emit(maaiProviderStatusDraft(availability, client.providerClass));
     },
     onClockReset() {
+      ready = false;
       clock.reset();
     },
   };

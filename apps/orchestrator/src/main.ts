@@ -8,7 +8,8 @@
  */
 import { SystemTimeSource } from '@llm-vap/contracts';
 import { loadDotEnv, readConfig } from './app/config';
-import { MaaiWorkerClient, buildMaaiConfigure, loadMaaiSessionConfig, realMaaiLaunch } from './maai';
+import type { MaaiWorkerClient } from './maai';
+import { createMaaiClient } from './app/maai_setup';
 import { OrchestratorServer, SwitchableTimeSource } from './ws/server';
 
 export async function main(): Promise<OrchestratorServer> {
@@ -23,18 +24,8 @@ export async function main(): Promise<OrchestratorServer> {
   let maaiUnavailableReason: string | undefined;
   if (config.maai_enabled) {
     try {
-      const sessionConfig = loadMaaiSessionConfig();
-      maai = new MaaiWorkerClient({
-        // 重みは取得済みのキャッシュから読む。版は worker_config.json で固定。
-        // MAAI_WORKER_URL が無ければ空いているポート（0）で起動し、ワーカーが知らせるポートへつなぐ。
-        launch: realMaaiLaunch({ env: { ...process.env, HF_HUB_OFFLINE: '1' }, ...(process.env.MAAI_WORKER_URL ? {} : { port: 0 }) }),
-        configure: buildMaaiConfigure(
-          sessionConfig,
-          // hri2025 には vap の節がない。ワーカーの判定の閾値は 0.5（ja の方策と同じ値）で、TurnManager は使わない。
-          config.policy.policy_id === 'ja' ? config.policy.vap : { channel_layout: '2ch', speaking_threshold: 0.5 },
-        ),
-        time: maaiTime,
-      });
+      // MAAI_WORKER_URL が無ければ空いているポート（0）で起動し、ワーカーが知らせるポートへつなぐ。
+      maai = createMaaiClient({ policy: config.policy, time: maaiTime, ...(process.env.MAAI_WORKER_URL ? {} : { port: 0 }) });
       maai.subscribe({
         onAvailability: (a) => say(`MaAI worker: ${a.state}${a.reason ? ` (${a.reason})` : ''}`),
       });

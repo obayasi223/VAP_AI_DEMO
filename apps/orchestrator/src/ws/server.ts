@@ -5,9 +5,14 @@
  *   /health    状態の JSON（キーの値は含めない）。
  *
  * セッションの規則:
- *   - client.hello の session_id が今のセッションで、切断から resume_grace_ms 以内なら同じセッションへ戻す。
- *   - それ以外の hello は新しいセッション。前のセッションは閉じる（参加者は1人）。
- *   - 切断したら再生中の音声の終わりを代行し（発話済みのみ履歴へ）、猶予の後に閉じる。
+ *   - hello は届いた順に1つずつ処理する（同時に届いてもセッションを2つ作らない）。
+ *   - client.hello の session_id が今のセッションなら同じセッションへ戻す（切断から resume_grace_ms 以内）。
+ *     古い接続がまだ開いて見えても、同じ Worker の張り直しなので新しい接続を採る。
+ *   - 別のセッションを求める hello は、今のセッションが接続中なら新しい側を拒否する（code 4000）。
+ *     参加者の会話を、誤って開いた2つ目のタブが奪わないため。Worker は 4000 では張り直さない。
+ *   - 今のセッションが切断中なら、それを閉じて新しいセッションを始める（参加者は1人）。
+ *   - 切断しても再生中の音声の終わりは代行しない（再接続後のブラウザの報告を正とする）。猶予の後に閉じ、
+ *     そのとき代行する（発話済みのみ履歴へ）。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -19,6 +24,7 @@ import type { MaaiWorkerClient } from '../maai';
 import type { OrchestratorConfig } from '../app/config';
 import { createSessionProviders } from '../app/providers';
 import { Session, type BrowserLink } from '../session/session';
+import { handleResearchMessage, researchConfigMessage, type NoteTarget } from './research_channel';
 
 /** MaAI クライアントはプロセスに1つなので、時刻源をセッションの時計へ切り替える。 */
 export class SwitchableTimeSource implements TimeSource {
@@ -61,8 +67,11 @@ export class OrchestratorServer {
   private session: Session | null = null;
   private sessionSocket: WebSocket | null = null;
   private graceTimer: NodeJS.Timeout | null = null;
-  private starting: Promise<void> | null = null;
+  /** hello の処理の列。届いた時点で同期的につなぐ。 */
+  private helloQueue: Promise<void> = Promise.resolve();
   private readonly backlog: string[] = [];
+  /** 研究者のメモの書き先（I2）。this.session と session_id が一致するときだけ使う。 */
+  private noteTarget: NoteTarget | null = null;
   private readonly log: (message: string) => void;
   /** 試験が閉じたセッションも調べられるように残す。 */
   readonly pastSessions: Session[] = [];
@@ -102,12 +111,24 @@ export class OrchestratorServer {
     return this.session;
   }
 
-  /** Origin のないクライアント（Node、試験）は通す。ブラウザは localhost の画面からだけ。 */
+  /**
+   * ブラウザは許可リストの Origin（既定は localhost:3000 の画面）からだけ。Origin のない接続（Node、試験）は
+   * 合言葉（ORCHESTRATOR_CLIENT_TOKEN）を明示したときだけ通す。/research は認識文を含むので同じ規則にする。
+   */
   private originAllowed(req: IncomingMessage): boolean {
     const origin = req.headers.origin;
-    if (origin === undefined) return true;
+    if (origin === undefined) {
+      const token = this.options.config.client_token;
+      if (token === null) return false;
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      return url.searchParams.get('token') === token || req.headers['x-orchestrator-token'] === token;
+    }
+    return this.allowedOrigin(origin);
+  }
+
+  private allowedOrigin(origin: string): boolean {
     try {
-      return this.options.config.allowed_origin_hosts.includes(new URL(origin).hostname);
+      return this.options.config.allowed_origins.includes(new URL(origin).origin);
     } catch {
       return false;
     }
@@ -131,7 +152,12 @@ export class OrchestratorServer {
               },
         providers: { stt: this.options.config.stt, tts: this.options.config.tts, llm: this.options.config.llm },
       };
-      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' });
+      const origin = req.headers.origin;
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        // 許可した画面にだけ CORS を返す（* にしない）。
+        ...(origin !== undefined && this.allowedOrigin(origin) ? { 'access-control-allow-origin': origin, vary: 'origin' } : {}),
+      });
       res.end(JSON.stringify(body));
       return;
     }
@@ -142,7 +168,13 @@ export class OrchestratorServer {
   // ---- 研究者画面 ----------------------------------------------------------------
 
   private onResearch(ws: WebSocket): void {
+    ws.send(JSON.stringify(researchConfigMessage(this.options.config.policy, this.options.config.condition)));
     for (const line of this.backlog) ws.send(line);
+    ws.on('message', (data: RawData, isBinary: boolean) => {
+      if (isBinary) return;
+      const target = this.noteTarget?.session_id === this.session?.session_id ? this.noteTarget : null;
+      ws.send(JSON.stringify(handleResearchMessage(Buffer.from(toBytes(data)).toString('utf8'), target)));
+    });
   }
 
   private broadcast(event: ResearchEvent): void {
@@ -184,9 +216,13 @@ export class OrchestratorServer {
       }
       const message = parsed.data;
       if (message.type === 'client.hello') {
-        void this.onHello(ws, link, message).then((s) => {
-          session = s;
-        });
+        // 届いた時点で列につなぐ。await の間に別の hello が割り込まない。
+        this.helloQueue = this.helloQueue
+          .then(() => this.onHello(ws, link, message))
+          .then((s) => {
+            session = s;
+          })
+          .catch((error: unknown) => this.log(`hello failed: ${error instanceof Error ? error.message : String(error)}`));
         return;
       }
       if (session !== null && this.sessionSocket === ws) session.handleJson(message);
@@ -197,27 +233,35 @@ export class OrchestratorServer {
       const current = this.session;
       if (current === null) return;
       current.detach('ws_closed');
-      this.log(`browser disconnected; keeping ${current.session_id} for ${this.options.config.resume_grace_ms} ms`);
-      this.graceTimer = setTimeout(() => {
-        this.graceTimer = null;
-        if (this.session === current && !current.attached) void this.endSession('resume_grace_expired');
-      }, this.options.config.resume_grace_ms);
+      this.scheduleGrace(current);
     });
   }
 
+  /** 切断中のセッションを猶予の後に閉じる。どの経路で切れても（開始の途中を含む）ここを通す。 */
+  private scheduleGrace(session: Session): void {
+    if (this.graceTimer !== null) clearTimeout(this.graceTimer);
+    this.log(`browser disconnected; keeping ${session.session_id} for ${this.options.config.resume_grace_ms} ms`);
+    this.graceTimer = setTimeout(() => {
+      this.graceTimer = null;
+      if (this.session === session && !session.attached) void this.endSession('resume_grace_expired');
+    }, this.options.config.resume_grace_ms);
+  }
+
   private async onHello(ws: WebSocket, link: BrowserLink, hello: ClientHello): Promise<Session | null> {
-    // 前の hello の処理（セッションの準備）を待つ。
-    while (this.starting !== null) await this.starting;
-    const previousSocket = this.sessionSocket;
-    if (previousSocket !== null && previousSocket !== ws) {
-      // 参加者は1人。新しい画面が来たら古い接続を閉じる。
-      this.sessionSocket = null;
-      this.session?.detach('replaced_by_new_connection');
-      previousSocket.close(4000, 'replaced by a new connection');
-    }
+    // 列で待つ間に閉じた接続は扱わない。
+    if (ws.readyState !== WebSocket.OPEN) return null;
     const wanted = hello.session_id.value;
     const current = this.session;
-    if (current !== null && wanted === current.session_id && !current.attached) {
+    const previousSocket = this.sessionSocket;
+    const otherOpen = previousSocket !== null && previousSocket !== ws && previousSocket.readyState === WebSocket.OPEN;
+
+    if (current !== null && wanted === current.session_id) {
+      if (previousSocket !== null && previousSocket !== ws) {
+        // 同じ Worker の張り直し（古い接続の close がまだ届いていない）。古い方を外す。
+        this.sessionSocket = null;
+        current.detach('superseded_by_reconnect');
+        previousSocket.close(4001, 'superseded by a reconnect of the same session');
+      }
       if (this.graceTimer !== null) clearTimeout(this.graceTimer);
       this.graceTimer = null;
       this.sessionSocket = ws;
@@ -225,27 +269,33 @@ export class OrchestratorServer {
       this.log(`browser reattached to ${current.session_id}`);
       return current;
     }
+    if (current !== null && current.attached && otherOpen) {
+      // 2つ目のタブ。今の会話を守り、新しい側を断る。
+      this.log(`refused a second participant connection while ${current.session_id} is attached`);
+      ws.close(4000, 'session is open in another tab');
+      return null;
+    }
     if (current !== null) await this.endSession('new_client_session');
-    let resolveStarting!: () => void;
-    this.starting = new Promise((resolve) => (resolveStarting = resolve));
+    let session: Session | null = null;
     try {
-      const session = await this.createSession();
+      session = await this.createSession();
       this.session = session;
       this.sessionSocket = ws;
       await session.start(link, hello);
       this.log(`session ${session.session_id} started (stt=${this.options.config.stt} tts=${this.options.config.tts} llm=${this.options.config.llm})`);
-      if (ws.readyState !== WebSocket.OPEN) {
-        this.sessionSocket = null;
+      if (ws.readyState !== WebSocket.OPEN && this.session === session && session.attached) {
+        // 開始の途中で閉じた。close のハンドラは sessionSocket が決まる前だと何もしないので、ここで猶予を立てる。
+        if (this.sessionSocket === ws) this.sessionSocket = null;
         session.detach('closed_during_start');
+        this.scheduleGrace(session);
       }
       return session;
     } catch (error) {
       this.log(`session start failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (this.sessionSocket === ws) this.sessionSocket = null;
+      if (session !== null && this.session === session) await this.endSession('start_failed');
       ws.close(1011, 'session start failed');
       return null;
-    } finally {
-      this.starting = null;
-      resolveStarting();
     }
   }
 
@@ -258,7 +308,8 @@ export class OrchestratorServer {
       session_id,
       time,
       condition: () => config.condition,
-      provider_class: 'production',
+      // 台本のプロバイダが1つでもあれば、このセッションのログは test_double（受け入れの証拠に数えない）。
+      provider_class: [config.stt, config.tts, config.llm].includes('test_double') ? 'test_double' : 'production',
     });
     const inner = logging.emitter;
     const emitter: EventEmitter = {
@@ -269,6 +320,7 @@ export class OrchestratorServer {
       },
     };
     this.backlog.length = 0;
+    this.noteTarget = { session_id, emitter };
     this.options.maaiTime?.use(time);
     const providers = await createSessionProviders({ config, time, emitter, ...(this.options.env ? { env: this.options.env } : {}) });
     return new Session({

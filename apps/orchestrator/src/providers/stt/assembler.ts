@@ -96,8 +96,8 @@ export class TranscriptAssembler {
         continue;
       }
       const text = joinParts(parts);
-      const common = commonNormPrefix(this.pendingText, text);
-      if (normalizeTranscript(text).length === common) {
+      const common = this.oldSegmentNormChars(this.pendingText, text, input.kind === 'final' ? words : absent('interim'), boundary.frame);
+      if (normalizeTranscript(text).length <= common) {
         // 境界の後に新しい文字がない。今の本文はまだ旧 segment のもの。
         if (input.kind === 'interim') {
           out.push(this.makeInterim(input, parts, boundary.frame));
@@ -135,6 +135,31 @@ export class TranscriptAssembler {
       out.push(this.makeInterim(input, parts, end));
     }
     return out;
+  }
+
+  /**
+   * 境界をまたいだ本文のうち、旧 segment（境界より前の音声）に属する正規化文字数。
+   *  - final の語時刻が本文と一致すれば、境界より前に終わった語の文字数（音声位置で決まる）。
+   *  - それ以外は、境界より前の revision（pendingText）の長さまでを旧 segment とする。境界の後に届いた
+   *    書き直し（「あいうえお」→「あいうかお」）は旧い音声の修正で、新しい発話ではない。共通接頭部で
+   *    分けると書き直された語尾が新 segment の利用者発話になり、AI の発話の後にその断片へもう一度応答する。
+   *    長さが伸びた分だけを新しい音声とみなす。語時刻のない場合の近似（docs/known_gaps.md §7）。
+   */
+  private oldSegmentNormChars(pending: string, text: string, words: Maybe<TimedWord[]>, frame: number): number {
+    const textNorm = normalizeTranscript(text).length;
+    if (words.value !== null && words.value.length > 0) {
+      const all = normalizeTranscript(words.value.map((w) => w.text).join(''));
+      if (all === normalizeTranscript(text)) {
+        return normalizeTranscript(
+          words.value
+            .filter((w) => w.audio_frame_end <= frame)
+            .map((w) => w.text)
+            .join(''),
+        ).length;
+      }
+    }
+    const common = commonNormPrefix(pending, text);
+    return Math.max(common, Math.min(normalizeTranscript(pending).length, textNorm));
   }
 
   private makeFinal(

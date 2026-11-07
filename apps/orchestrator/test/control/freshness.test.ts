@@ -43,6 +43,18 @@ describe('degraded: AI 待機中', () => {
     expect(kinds(d.tick(T0 + 20, stale(T0 + 20)))).not.toContain('set_degraded');
     expect(pick(d.tick(T0 + 40), 'set_degraded')[0]).toMatchObject({ degraded: false });
   });
+  it('degraded のまま理由の種類が変わったら（down → 助走 → down）set_degraded を出し直す', () => {
+    const d = new Driver(ja());
+    const down = { vap_worker_started_at: absent('worker_not_ready') } as const;
+    expect(pick(d.tick(T0, down), 'set_degraded')[0]?.reason).toContain('worker_not_started');
+    const warming = pick(d.tick(T0 + 20, { vap_worker_started_at: present(T0) }), 'set_degraded')[0];
+    expect(warming).toMatchObject({ degraded: true });
+    expect(warming?.reason).toContain('rewarm');
+    // 助走の残り時間が変わるだけでは出さない。
+    expect(kinds(d.tick(T0 + 40, { vap_worker_started_at: present(T0) }))).not.toContain('set_degraded');
+    const again = pick(d.tick(T0 + 60, down), 'set_degraded')[0];
+    expect(again?.reason).toContain('worker_not_started');
+  });
   it('VAP の値が譲渡を示していても使わない。L74 も使わない', () => {
     const d = new Driver(ja());
     const decisions = d.tick(T0, stale(T0, { prefetch: ready() }));
@@ -59,7 +71,7 @@ describe('degraded: AI 待機中', () => {
     });
   });
   it('未校正（無音の上限 null）では無音で開始しない', () => {
-    const d = new Driver(ja(), { fallback_energy_silence_threshold: 0.01 });
+    const d = new Driver(ja((p) => { p.turn.fallback_silence_max_ms = null; }), { fallback_energy_silence_threshold: 0.01 });
     d.tick(T0, stale(T0));
     expect(kinds(d.tick(T0 + 60000, stale(T0 + 60000, { prefetch: ready() })))).not.toContain('start_speech');
   });
@@ -126,7 +138,7 @@ describe('degraded: AI 発話中', () => {
     expect(kinds(d.tick(T0, voiced(T0, { text: '明日の会議は三時です', fallback_energy: present(0.001) })))).not.toContain('interrupt_speech');
   });
   it('未校正（語数の下限 null）では止めない', () => {
-    const d = new Driver(ja(), options);
+    const d = new Driver(ja((p) => { p.turn.fallback_interrupt_min_words = null; }), options);
     expect(kinds(d.tick(T0, voiced(T0, { text: '明日の会議は三時です' })))).not.toContain('interrupt_speech');
   });
 });

@@ -56,16 +56,12 @@
 - 間のない読み上げの音声での結果で、人の会話で同じ頻度かは未確認。
 - 当方で直す手段がない。発話の根拠の検証（`evidence_span`）は認識文に対して行うので、欠けた語は根拠にならないだけで誤動作はしない。
 
-## 5. 契約にあるが、まだ発行していない項目
+## 5. 契約にあるが、まだ置き換えていない項目
 
-後方互換の追加なので、発行側は未変更でも動く。下の項目はログに現れない。
+`clock.report`、`audio.report` の任意4項目、`TrackSettings.latency`、`prefetch.started.trigger`、`prefetch.cancelled.discarded_*` は波1bで発行するようになった（E2E で確認）。残りは次の1つ。
 
-| 項目 | 発行するはずの場所 | 状態 |
+| 項目 | 場所 | 状態 |
 |---|---|---|
-| `clock.report` | `apps/web/src/audio/transport.worker.ts`（A） | 未送信。受ける側の配線も J 待ち。`draftFromClockReport` は用意済み。これが入るまで `browser_rtt` の `clock.sync` は作れない |
-| `audio.report` の `reconnects`、`orphan_pcm_frames`、`pcm_seq_gaps`、`render_lag_ms` | 同上 | Worker は値を持つが送っていない |
-| `TrackSettings.latency` | `apps/web/src/audio/`（A） | 未送信 |
-| `prefetch.started.trigger`、`prefetch.cancelled.discarded_chunks`／`discarded_samples` | `apps/orchestrator/src/cognition/prefetch/index.ts`（D） | 未発行。`discarded_*` は `SpeechStateChange` から個数を渡す変更も要る |
 | `capabilities.ts` の型 | C | 契約と同じ形の型が残っている（`implements TtsConnection` の型検査で一致を確認）。契約の型へ置き換えられる |
 
 ## 6. 準備の閾値が null のときの扱い（E1 の判断）
@@ -103,14 +99,18 @@
 
 | 項目 | 現状 | 理由、残る問題 |
 |---|---|---|
-| p の向き | **暫定。** `p_ai = p[1]`。変換は `control/vap_direction.ts` の1か所 | R2 の実測は「添字 i はチャネル i の話者」まで。AI を ch2 に置く配線は契約上の前提で、B と J の実物は未確認 |
+| p の向き | `p_ai = p[1]`（`policy.ja.json` の `direction_status` は `measured`）。変換は `control/vap_direction.ts` の1か所 | R2 の実測で「添字 i はチャネル i の話者」。AI を ch2（sys）に置く配線は E2E で確認（AI の再生中に `vad[1]` が上がる） |
 | 視線の設定 | `policy.ja.json` の `gaze` が null の間は逸らさない | 原著に数値がない。null を別の値へ置き換えない。**値が入るまで視線は動かない** |
 | 視線の判定の向き | `p_ai < p_threshold` のポーズで逸らす | V-D。閾値ちょうどは逸らさない。同じポーズの中では向きを保つ（原著にない、行き来を防ぐため） |
 | 発話開始前に視線を逸らす動作 | 入れない | 根拠が Fig. 1 の読み取りのみ。V-D に記述がなく、IV-B はベースラインの説明 |
 | 鮮度切れの定義 | `audio_frame` の遅れ（計画）に加えて受信時刻の遅れも見る | 音声そのものが止まると frame の差が開かず、古い p を fresh と扱うため |
 | hri2025 の鮮度と助走 | ja と同じ 500ms と 10 秒をコードで持つ | 方策に項目がなく、原著にもない。原著再現の根拠にしない |
 | 復帰時の計時 | fresh に戻ったら L57 と L71 の時計を現在時刻にする | VAP がなかった間の値で L74 が即時に真になるのを防ぐ。原著にない |
-| degraded 中の開始と割り込み | `fallback_silence_max_ms`、`fallback_interrupt_min_words` が null の間は、招待以外で開始せず、割り込みもしない | **未校正のまま VAP が止まると AI は止められない。** `fallback_energy` の単位と無音の閾値も契約にない（`createTurnManager` の引数で渡す。未指定なら使わない） |
+| degraded 中の開始と割り込み | `fallback_silence_max_ms`、`fallback_interrupt_min_words`、`fallback_energy_silence_dbfs` のどれかが null なら、招待以外で開始せず、割り込みもしない。ja は §8 の暫定値で有効 | `fallback_energy` は mic の RMS（dBFS、session が計算）。閾値は方策の `turn.fallback_energy_silence_dbfs` を session が `createTurnManager` へ渡す。値は未校正 |
+| 再生を始められないとき | `TurnInputs.start_blocked_reason`（切断中、別の音声がまだ終わっていない）がある間は L78 を偽にし、segment を進めない。両方の方策 | 原著の `is_ready` に「出力できる」を含めた解釈。入力で止められなかった拒否は session が前進を取り消す（`start_rolled_back`） |
+| `set_degraded` の出し直し | degraded のまま理由の種類（down／warming_up／stale）が変わったときも出す | 画面の「助走中」と、助走後の down を正しく出すため。原著にない |
+| 境界の後に届いた旧い発話の書き直し | final の語時刻が本文と合えば、境界より前に終わった語を旧 segment へ。なければ境界より前の revision の長さまでを旧 segment とし、伸びた分だけを新 segment へ（`providers/stt/assembler.ts`） | 共通接頭部で分けると、書き直された語尾が新しい利用者発話になり、AI の発話の後に2回目の応答が出る。語時刻のない interim では近似で、境界の直前の語尾が遅れて認識されると新 segment に入りうる。TurnManager（Appendix A）は変えていない |
+| ブラウザの再生の報告の期限 | 開始 3000ms、停止は猶予＋2000ms、再接続後は残りの長さ＋3000ms【暫定】。接続中だけ数え、過ぎたら終わりを代行（`speech_generator.ts` の `REPORT_TIMEOUTS_MS`） | 方策に項目がない。切断では代行せず、再接続後のブラウザの報告を正とする |
 | `start_speech` 後の待ち | 再生の報告を 1000ms 待つ【暫定】（`START_ACK_TIMEOUT_MS`） | 方策に項目がない。報告が遅いと重ならないが、それ以上遅れると U-1 の防止が切れる |
 | 準備の喪失 | ja のみ、準備が再生に入らず消えたら同じ文で1回だけ再試行 | L45 が偽のままになり、応答が永久に準備されないため。`hri2025_mapping.md` にない追加 |
 | AI の発話が自然に終わった後の相槌 | 発話中の「うん」も次の入力として準備し、許可が出れば応答する | U-2 は割り込み後の再開だけを決めている。相槌に応答しうる。G1 の観察で見直す |
@@ -124,5 +124,6 @@
 `config/policy.ja.json`:
 
 - `gaze`: `signal=p_now`、`p_threshold=0.5`、`pause_min_ms=200`。null のままだと視線が動かないため。人の評価も実対話での確認もしていない。
+- `turn.fallback_silence_max_ms=1500`、`turn.fallback_interrupt_min_words=3`、`turn.fallback_energy_silence_dbfs=-45`。VAP の鮮度切れのときの代替（計画 §4.1 の表）。null のままだと MaAI が落ちたとき AI は割り込まれても止まらず、待機中は招待以外で話し始めない。-45 dBFS は有線ヘッドセットの近接マイクを想定した値で、実機の雑音の大きさは測っていない。語数は `Intl.Segmenter` の語で数え、「うん」「はい」（1語）の相槌では止めない。
 - `similarity.threshold=0.9`。null だと実 ASR ログの再生で 376 秒に 669 回の準備になった（同じ文の連続読み上げで、人の会話の頻度ではない）。0.9 では 7 回。比較する文が累積なので、長い発話の末尾が応答に届かない危険がある。校正のときに確かめる。
 

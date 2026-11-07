@@ -3,12 +3,14 @@
 /**
  * アバターの確認ページ（レーン H1）。参加者には見せない。
  * クエリ: ?model=/models/xxx.vrm（既定は /models/Sendagaya_Shino.vrm）、?framing=face
+ *   ?render=h1（H1 の描画設定で比較）、?render={"springBones":false}（描画設定の JSON の一部）
  * モデルが配信されていないときは、ローカルのファイルを選んでも読める。
  * 実ブラウザ確認（src/avatar/browser_check）は window.__avatarDev を使う。
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { GazeReport, GazeTarget } from '@llm-vap/contracts';
-import type { Avatar, AvatarModelInfo, AvatarTelemetry, Framing } from '../../../src/avatar';
+import type { Avatar, AvatarModelInfo, AvatarTelemetry, Framing, RenderSettings } from '../../../src/avatar';
+import { kanaToMorae } from '../../../src/avatar/lipsync';
 
 const DEFAULT_MODEL = '/models/Sendagaya_Shino.vrm';
 /** 音量の送り間隔。実際の再生の PCM 枠に近い 20ms。 */
@@ -21,6 +23,11 @@ interface AvatarDevHandle {
   setManualRms(rms: number | null): void;
   /** 模擬の音声包絡を PCM で流す。実音声ではない。 */
   setSyntheticSpeech(on: boolean): void;
+  /**
+   * 模擬の発話: 語時刻（playback.alignment）、再生位置の報告、音量を、参加者画面の配線と同じ口で流す。
+   * 音は鳴らさない。終わるまでの ms を返す。
+   */
+  speakKana(words?: string[], moraMs?: number): number;
   gazeReports: GazeReport[];
   error(): string | null;
 }
@@ -53,6 +60,56 @@ function createSyntheticSpeech() {
   };
 }
 
+/** ?render= の値。壊れた JSON は無視する（確認ページなので既定で描く）。 */
+function parseRenderQuery(value: string | null): Partial<RenderSettings> | 'h1' | undefined {
+  if (!value) return undefined;
+  if (value === 'h1') return 'h1';
+  try {
+    return JSON.parse(value) as Partial<RenderSettings>;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 模擬の発話の既定（漢字の語を1つ入れて、音量だけへ戻る区間も見る）。 */
+const DEMO_WORDS = ['こんにちは', '、', 'きょうは', 'いい', '天気', 'ですね', '。', 'まいにち', 'さむい', 'ですか', '？'];
+
+interface DemoUtterance {
+  items: { text: string; start_ms: number; end_ms: number; granularity: 'word' }[];
+  /** 位置（ms）→ RMS。母音ごとに山を作り、促音と句読点で下げる。実音声ではない。 */
+  rmsAt(positionMs: number): number;
+  durationMs: number;
+}
+
+function buildDemoUtterance(words: string[], moraMs: number): DemoUtterance {
+  const items: DemoUtterance['items'] = [];
+  const peaks: { start: number; end: number; level: number }[] = [];
+  let t = 0;
+  for (const word of words) {
+    const morae = kanaToMorae(word);
+    // 漢字の語は2文字=4モーラ程度とみなす。句読点はポーズ。
+    const count = morae === null ? word.length * 2 : morae.length;
+    const duration = count === 0 ? moraMs * 2.5 : count * moraMs;
+    items.push({ text: word, start_ms: t, end_ms: t + duration, granularity: 'word' });
+    for (let i = 0; i < count; i += 1) {
+      const kind = morae?.[i]?.kind;
+      const level = kind === 'Q' ? 0 : kind === 'N' ? 0.05 : 0.09 + 0.05 * Math.sin(i * 1.7 + t / 97);
+      peaks.push({ start: t + i * moraMs, end: t + (i + 1) * moraMs, level });
+    }
+    t += duration;
+  }
+  return {
+    items,
+    durationMs: t,
+    rmsAt(position) {
+      const peak = peaks.find((p) => position >= p.start && position < p.end);
+      if (!peak) return 0;
+      const phase = (position - peak.start) / (peak.end - peak.start);
+      return peak.level * Math.pow(Math.sin(Math.PI * phase), 0.5);
+    },
+  };
+}
+
 function rmsFromDb(db: number): number {
   return Math.pow(10, db / 20);
 }
@@ -62,6 +119,8 @@ export default function DevAvatarPage() {
   const avatarRef = useRef<Avatar | null>(null);
   const manualRmsRef = useRef<number | null>(null);
   const syntheticRef = useRef(false);
+  const demoRef = useRef<{ utterance: DemoUtterance; startedAt: number; id: number; lastReport: number } | null>(null);
+  const demoIdRef = useRef(1000);
   const gazeReportsRef = useRef<GazeReport[]>([]);
   const errorRef = useRef<string | null>(null);
 
@@ -77,6 +136,8 @@ export default function DevAvatarPage() {
   const [gaze, setGaze] = useState<GazeTarget>('user');
   const [autoBlink, setAutoBlink] = useState(true);
   const [idle, setIdle] = useState(1);
+  const [saccades, setSaccades] = useState(true);
+  const [expressionIntensity, setExpressionIntensity] = useState(1);
 
   // クエリの読み取りはクライアントだけで行う。
   useEffect(() => {
@@ -103,6 +164,7 @@ export default function DevAvatarPage() {
           container,
           modelUrl,
           framing,
+          render: parseRenderQuery(new URLSearchParams(window.location.search).get('render')),
           onProgress: (loaded, total) => {
             if (!cancelled) setStatus(`読み込み中: ${Math.round(loaded / 1e6)} / ${Math.round(total / 1e6)} MB`);
           },
@@ -143,7 +205,28 @@ export default function DevAvatarPage() {
     const timer = setInterval(() => {
       const avatar = avatarRef.current;
       if (!avatar) return;
-      if (syntheticRef.current) avatar.pushPcm(speech(FEED_MS));
+      const demo = demoRef.current;
+      if (demo) {
+        // 参加者画面の配線と同じ順: 音量（AnalyserNode の代わり）と、100ms ごとの再生位置。
+        const now = performance.now();
+        const position = now - demo.startedAt;
+        if (position >= demo.utterance.durationMs) {
+          avatar.onPlaybackReport({ type: 'playback.ended', audio_playback_id: demo.id, generation: 0 });
+          demoRef.current = null;
+        } else {
+          avatar.setMouthLevel(demo.utterance.rmsAt(position));
+          if (now - demo.lastReport >= 100) {
+            demo.lastReport = now;
+            avatar.onPlaybackReport({
+              type: 'playback.position',
+              audio_playback_id: demo.id,
+              generation: 0,
+              samples_written: Math.round(position * 16),
+              client_t_ms: now,
+            });
+          }
+        }
+      } else if (syntheticRef.current) avatar.pushPcm(speech(FEED_MS));
       else if (manualRmsRef.current !== null) avatar.setMouthLevel(manualRmsRef.current);
     }, FEED_MS);
     return () => clearInterval(timer);
@@ -165,6 +248,7 @@ export default function DevAvatarPage() {
       setSyntheticSpeech: (on) => {
         syntheticRef.current = on;
       },
+      speakKana: (words = DEMO_WORDS, moraMs = 120) => startDemo(words, moraMs),
       gazeReports: gazeReportsRef.current,
       error: () => errorRef.current,
     };
@@ -176,6 +260,18 @@ export default function DevAvatarPage() {
   const applyManual = useCallback((on: boolean, nextDb: number) => {
     manualRmsRef.current = on ? rmsFromDb(nextDb) : null;
   }, []);
+
+  function startDemo(words: string[], moraMs: number): number {
+    const avatar = avatarRef.current;
+    if (!avatar) return 0;
+    const utterance = buildDemoUtterance(words, moraMs);
+    const id = (demoIdRef.current += 1);
+    avatar.onPlaybackAlignment({ audio_playback_id: id, generation: 0, items: utterance.items });
+    const now = performance.now();
+    avatar.onPlaybackReport({ type: 'playback.started', audio_playback_id: id, generation: 0, client_t_ms: now });
+    demoRef.current = { utterance, startedAt: now, id, lastReport: now };
+    return utterance.durationMs;
+  }
 
   const chooseGaze = (target: GazeTarget) => {
     setGaze(target);
@@ -249,9 +345,13 @@ export default function DevAvatarPage() {
             />
             模擬の音声包絡（実音声ではない）
           </label>
+          <button type="button" onClick={() => startDemo(DEMO_WORDS, 120)}>
+            模擬の発話（かなの語時刻＋包絡、音なし）
+          </button>
           <button
             type="button"
             onClick={() => {
+              demoRef.current = null;
               setManualOn(false);
               setSynthetic(false);
               manualRmsRef.current = null;
@@ -306,6 +406,32 @@ export default function DevAvatarPage() {
             />
             揺れ {idle.toFixed(2)}
           </label>
+          <label style={styles.row}>
+            <input
+              type="checkbox"
+              checked={saccades}
+              onChange={(e) => {
+                setSaccades(e.target.checked);
+                avatarRef.current?.setSaccades(e.target.checked);
+              }}
+            />
+            小さな視線移動（両目・口元）
+          </label>
+          <label style={styles.row}>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={expressionIntensity}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setExpressionIntensity(next);
+                avatarRef.current?.setExpressionIntensity(next);
+              }}
+            />
+            表情（待機の表情・眉・発話中の頭） {expressionIntensity.toFixed(2)}
+          </label>
         </fieldset>
 
         <label style={styles.row}>
@@ -322,8 +448,12 @@ export default function DevAvatarPage() {
           {telemetry
             ? [
                 `fps ${telemetry.fps.toFixed(1)}  frame ${telemetry.frame}`,
-                `mouth.open ${telemetry.mouth.open.toFixed(3)}  aa ${telemetry.mouth.appliedAa.toFixed(3)}`,
-                `blink ${telemetry.blink.weight.toFixed(2)}  count ${telemetry.blink.count}`,
+                `mouth.open ${telemetry.mouth.open.toFixed(3)}  aa ${telemetry.mouth.appliedAa.toFixed(3)}  mode ${telemetry.mouth.mode}`,
+                `  shape ${(['aa', 'ih', 'ou', 'ee', 'oh'] as const).map((k) => `${k} ${telemetry.mouth.shape[k].toFixed(2)}`).join(' ')}`,
+                `  playback ${telemetry.mouth.playbackPositionMs === null ? '-' : telemetry.mouth.playbackPositionMs.toFixed(0)} ms`,
+                `blink ${telemetry.blink.weight.toFixed(2)}  count ${telemetry.blink.count}  (gaze ${telemetry.blink.gazeCount})`,
+                `saccade ${telemetry.saccade.count}  yaw ${telemetry.saccade.yawDeg.toFixed(1)}  pitch ${telemetry.saccade.pitchDeg.toFixed(1)}`,
+                `speech ${telemetry.speech.speaking.toFixed(2)}  emphasis ${telemetry.speech.emphasis.toFixed(2)}`,
                 `gaze ${telemetry.gaze.target}  away ${telemetry.gaze.awayAmount.toFixed(2)}  settled ${telemetry.gaze.settled}`,
                 `eye(L) yaw ${telemetry.gaze.leftEyeYawDeg.toFixed(2)}  pitch ${telemetry.gaze.leftEyePitchDeg.toFixed(2)}`,
                 `eye(R) yaw ${telemetry.gaze.rightEyeYawDeg.toFixed(2)}  pitch ${telemetry.gaze.rightEyePitchDeg.toFixed(2)}`,

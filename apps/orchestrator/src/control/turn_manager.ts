@@ -109,9 +109,10 @@ function isAiSpeaking(s: TurnState): boolean {
 function applyFreshness(s: TurnState, tick: Tick, freshness: TurnState['vap_freshness']): void {
   const { now, decisions } = tick;
   const degraded = freshness !== 'fresh';
-  if (degraded !== s.degraded) {
+  // 理由の種類（down／warming_up／stale）が変わったときも出す。助走の表示と、助走後の down を画面へ反映するため。
+  if (degraded !== s.degraded || (degraded && freshness !== s.vap_freshness)) {
     decisions.push({ kind: 'set_degraded', degraded, reason: tick.freshnessReason });
-    if (degraded) s.fallback_last_voiced_at = now;
+    if (degraded && !s.degraded) s.fallback_last_voiced_at = now;
   }
   if (!degraded && s.vap_freshness !== 'fresh') {
     s.user_speak_end_time = now;
@@ -432,7 +433,9 @@ function step(settings: ControlSettings, previous: TurnState, inputs: TurnInputs
       : { kind: 'none' };
   s.want_to_speak = usable;
 
-  const starting = s.permitted_to_speak && usable.kind !== 'none'; // L78
+  // L78。再生を始められない間（切断中など）は is_ready と同じく偽にする。segment を進めず、応答を失わない。
+  const startBlocked = inputs.start_blocked_reason ?? null;
+  const starting = s.permitted_to_speak && usable.kind !== 'none' && startBlocked === null;
   const key = `${permission.allowed}:${permission.source}`;
   if (key !== s.last_turn_allowed_key || starting) {
     decisions.push({ kind: 'turn_allowed', payload: buildTurnAllowed(s, tick, permission) });

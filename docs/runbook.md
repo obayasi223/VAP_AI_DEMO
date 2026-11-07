@@ -5,6 +5,26 @@
 
 ## 0. 準備するもの
 
+### 0.1 最初に1回だけ（WSL）
+
+リポジトリ直下で行います。
+
+```bash
+cd ~/projects/LLM_VAP_DEMO
+source ~/.nvm/nvm.sh && nvm use      # .nvmrc の Node 24
+npm ci
+python3 -m venv .venv                # Python 3.12（DEPENDENCIES_LOCK.md）
+.venv/bin/pip install --no-deps -r workers/maai/requirements.lock
+.venv/bin/pip install --no-deps -r workers/maai/requirements-dev.lock   # 試験（npm run test:py）を回すときだけ
+```
+
+- **MaAI の重み**は Hugging Face のキャッシュ（`~/.cache/huggingface/hub/models--maai-kyoto--*`）から読みます。リポジトリには入っていません。
+  - 起動時は `HF_HUB_OFFLINE=1` でネットに出ないので、キャッシュが空だと MaAI が起動しません（画面に「話者交替の予測が動いていません」）。
+  - 版は `workers/maai/worker_config.json`（`continuous-mimi-onnx` の revision）と `DEPENDENCIES_LOCK.md` で固定しています。空のキャッシュから取得する手順はまだ文書にありません（未整備）。この機械のキャッシュには取得済みです（`docs/maai_validation.md`）。
+- **アバターの VRM** は `apps/web/public/models/Sendagaya_Shino.vrm` に置きます（既定）。別のモデルは同じ場所に置き、`?model=/models/<ファイル名>.vrm` で開きます。ライセンスは `THIRD_PARTY_NOTICES.md`。
+
+### 0.2 機器と鍵
+
 - **有線のヘッドセット**（マイク付き）。スピーカーや Bluetooth の機器は使わないでください。
   - スピーカーだと AI の声をマイクが拾ってしまいます。この試作はエコーキャンセルを切って動かします。
   - Bluetooth は遅延が大きく、通話モードに切り替わると音質も落ちます。
@@ -27,6 +47,9 @@
 - `CONDITION`：既定は `reactive`。
 - `*_PROVIDER_CLASS`：`test_double` にすると台本の偽物になります。
 - `ELEVENLABS_LANGUAGE_NORMALIZATION`：既定は 0。11-08 の実測では、1 にしても読みは変わりませんでした。
+- `ORCHESTRATOR_HOST`：既定は `127.0.0.1`。
+- `ALLOWED_ORIGINS`：WS と `/health` を使える画面。既定は `http://localhost:3000,http://127.0.0.1:3000`。画面を別のポートで開くときに足します。
+- `ORCHESTRATOR_CLIENT_TOKEN`：Origin のない接続（Node のスクリプトなど）を通す合言葉。既定はなし（断る）。使うときは `ws://localhost:8787/research?token=<値>`。
 
 ## 1. 起動（WSL のターミナルを2つ使う）
 
@@ -45,7 +68,7 @@ npm run dev:orchestrator
 
 次の2行が出れば準備完了です。
 
-- `listening on 0.0.0.0:8787`
+- `listening on 127.0.0.1:8787`（WSL の外の LAN には公開しません。Windows の Chrome からは WSL2 の localhost 転送で届きます）
 - `MaAI worker: ready`（数秒かかります）
 
 `providers: STT=production TTS=production LLM=production` の行で、実 API を使っていることを確認できます。
@@ -78,13 +101,37 @@ npm run dev:web
 
 http://localhost:3000/research?source=ws&url=ws://localhost:8787/research
 
+### 研究者画面の見方
+
+- **p の時系列**：直近 60 秒です。右端は受け取った最新のイベントの時刻です。
+  - 上から p_now、p_future、vad の3段です。**AI は青の実線、利用者はオレンジの破線**です。
+  - どちらの添字が AI かは、図の上の1行に出ます（orchestrator の方策の `policy.vap.p_ai_index`）。
+    - 黄色の字で「仮定して描いています」と出たら、orchestrator から向きを受け取れていません。
+  - 下の帯は、AI の発話、利用者の発話（VAP の判定）、発話の許可（turn.allowed）、出来事です。
+    - 出来事の印：紫の丸は視線、黄色のひし形は発話希望、赤の縦線は割り込みで止まった所。
+  - 図にポインタを置くと、その時刻の値が下に出ます。
+  - 更新は 0.5 秒ごとです。タブが見えていない間は止まります（MaAI の計算を邪魔しないため）。
+- **発話希望の候補**：LLM の判断と候補の状態の変化です。
+  - 左の欄は実測の時刻とコードの検証結果です。
+  - 右の「LLM 生成」の欄は、モデルが書いた文です。判定には使っていません。事実として扱わないでください。
+- **準備の取消・空振り、割り込み**：今のセッションの累計です。
+  - 取消率：取り消した準備 ÷（取消 ＋ 再生した準備）。
+  - 空振り率：音声まで作ったのに使わなかった準備 ÷ 音声まで作って決着した準備。
+  - データがない間は「未計測」と出ます（0% ではありません）。
+- **研究者のメモ**：書いて「記録する」（Ctrl+Enter）を押すと、今のセッションの `events.jsonl` に `research.note` として残ります。
+  - 「ログに記録済み」と出たら保存されています。
+  - 「記録されていません（セッションなし）」は、参加者のセッションが始まっていません。
+- 「録音・条件の切替・WoZ」の欄はまだ空です（後の段階で追加します）。
+- 表示の確認だけなら `http://localhost:3000/research?source=fake` で偽のデータを流せます。
+  - 赤い帯の「偽データの表示です」が出ている間の値は、すべて作り物です。
+
 ## 3. ログ
 
 - セッションごとに `sessions/<session_id>/` ができます。
   - `session_id` は画面右下に小さく出ています。
 - フォルダの中身です。
   - `events.jsonl`：すべてのイベント
-  - `manifest.json`：条件、プロバイダ、版
+  - `manifest.json`：条件（`condition`）、方策（`policy_id`）、プロバイダごとの区分（`providers`、`production`／`test_double`／`unavailable`）、版、終了の状態。`log:check` はこの区分を必ず見て、`production` 以外が1つでもあれば受け入れの証拠に数えません。
   - `quarantine.jsonl`：契約に合わなかったもの。空が正常です。
 - 記録が契約どおりかを調べ、遅延の内訳を出すコマンドです。
 
@@ -111,6 +158,7 @@ npm run log:check -- sessions/<session_id>
 | 「マイクが見つかりません」 | ヘッドセットを挿し直し、Windows の既定の入力を確認 → 再読み込み |
 | 「マイクを開けませんでした」 | Teams や Zoom などがマイクを掴んでいないか |
 | 「切断（自動で再接続します）」のまま | ターミナル1が動いているか。`curl http://localhost:8787/health` |
+| 「この会話は別のタブで開かれています」 | 参加者画面を2つのタブで開いています。使わないほうのタブを閉じる（断られたタブは再接続しません。使うなら再読み込み） |
 | AI がまったく話さない | ターミナル1に `stt_unavailable` / `llm_unavailable` / `tts_unavailable` が出ていないか（`.env` の値） |
 | 画面に「話者交替の予測が動いていません」 | ターミナル1の `MaAI worker:` の行。起動し直す |
 | ターミナル1や `/health` に `rtf_above_1` / `recent_overload_drop` | MaAI（CPU）の推論が実時間に追いついていない。ほかの重い処理（推論、ビルド、ブラウザのタブ）を止める |

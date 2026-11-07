@@ -36,8 +36,9 @@
     "stop_boundary_max_ms": 200,
     "vap_stale_ms": 500,
     "vap_rewarm_ms": 10000,
-    "fallback_silence_max_ms": null,
-    "fallback_interrupt_min_words": null,
+    "fallback_silence_max_ms": 1500,
+    "fallback_interrupt_min_words": 3,
+    "fallback_energy_silence_dbfs": -45,
     "user_speaking_min_ms": null
   },
   "gaze": {

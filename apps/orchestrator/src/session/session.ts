@@ -31,11 +31,9 @@ import type {
   LlmProvider,
   Maybe,
   NodeToBrowser,
-  PlaybackEnded,
   Policy,
   SttResult,
   SttSession,
-  TimeMapping,
   TimeSource,
   TranscriptSnapshot,
   TtsConnection,
@@ -47,12 +45,13 @@ import type {
 import { ResponsePrefetch } from '../cognition/prefetch';
 import { createTurnManager, userTextFor } from '../control';
 import type { TurnState } from '../control';
-import type { SessionLog } from '../logging';
+import type { SessionLog, SessionManifestDetails } from '../logging';
 import { BrowserClockRecorder, WorkerClockRecorder } from '../logging';
 import { attachMaaiEventBridge } from '../maai';
 import type { MaaiWorkerClient } from '../maai';
 import { SpeechGeneratorImpl, createResponsePromptBuilder } from '../speech';
 import type { SessionProviders } from '../app/providers';
+import { isReadyBufferMs } from '../app/maai_setup';
 import { FALLBACK_ENERGY_FLOOR_DBFS, PlaybackTracker, rmsDbfs } from './audio_state';
 import { SessionHistory, UserUtterances } from './history';
 
@@ -74,6 +73,8 @@ export interface SessionOptions {
   maaiUnavailableReason?: string;
   /** 画面の状態が変わったとき。 */
   onStatusChange?: (status: SessionStatusView) => void;
+  /** false なら tick のタイマーを動かさない（試験が tick() を直接呼ぶ）。既定は true。 */
+  tickTimer?: boolean;
 }
 
 export interface SessionStatusView {
@@ -86,10 +87,15 @@ export interface SessionCounters {
   bad_uplink_frames: number;
   start_refused: Record<string, number>;
   audio_reports_before_clock: number;
+  /** 時計差の推定の前に届いて記録しなかった gaze.report。 */
+  gaze_reports_before_clock: number;
   signal_reports_ignored: number;
   decisions: Record<string, number>;
   tick_errors: number;
+  /** ブラウザの代わりに playback.ended を作った回数（猶予切れ、終了、報告の期限切れ）。 */
   playback_ended_synthesized: number;
+  /** start_speech の後に開始を取り消した回数（拒否されたので segment の前進を戻した）。 */
+  start_rolled_back: number;
 }
 
 const TTS_SAMPLE_RATE_HZ = 24000;
@@ -107,10 +113,12 @@ export class Session {
     bad_uplink_frames: 0,
     start_refused: {},
     audio_reports_before_clock: 0,
+    gaze_reports_before_clock: 0,
     signal_reports_ignored: 0,
     decisions: {},
     tick_errors: 0,
     playback_ended_synthesized: 0,
+    start_rolled_back: 0,
   };
   /** E2E と研究者画面向け。TurnManager の最新の状態。 */
   turnState: TurnState;
@@ -145,12 +153,18 @@ export class Session {
   private degradedReason: string | null = 'starting';
   private readonly fixedReasons: string[] = [];
   private lastStatusKey = '';
+  /** 再生を始めた segment（履歴の並び）。 */
+  private readonly startedInSegment = new Map<number, number>();
 
   constructor(private readonly options: SessionOptions) {
     this.session_id = options.session_id;
     this.time = options.time;
     this.emitter = options.emitter;
-    this.turnManager = createTurnManager(options.policy);
+    // fallback_energy は mic の RMS（dBFS）。尺度を決めているのは session なので閾値もここから渡す（settings.ts）。
+    this.turnManager = createTurnManager(options.policy, {
+      fallback_energy_silence_threshold:
+        options.policy.policy_id === 'ja' ? (options.policy.turn.fallback_energy_silence_dbfs ?? null) : null,
+    });
     this.turnState = this.turnManager.initialState();
     this.browserClock = new BrowserClockRecorder(this.emitter);
     this.workerClock = new WorkerClockRecorder(this.emitter);
@@ -193,28 +207,95 @@ export class Session {
       if (!providers.llm.ok) this.fixedReasons.push(`llm_unavailable:${providers.llm.reason}`);
     }
 
+    if (providers.completion_error !== null) this.fixedReasons.push(`completion_unavailable:${providers.completion_error}`);
+
     this.attachMaai();
-    this.tickTimer = setInterval(() => this.tick(), this.turnManager.settings.tick_ms);
+    this.recordProviders();
+    if (this.options.tickTimer !== false) {
+      this.tickTimer = setInterval(() => this.tick(), this.turnManager.settings.tick_ms);
+    }
     this.send({
       type: 'server.hello',
       protocol_version: 1,
       session_id: this.session_id,
       condition: this.options.condition,
-      is_fake: Object.values(providers.classes).some((c) => c !== 'production'),
+      is_fake: this.isFake(),
     });
     this.pushStatus(true);
+  }
+
+  /** 台本のプロバイダを使っている（受け入れの証拠に数えない）。開けなかったプロバイダは別の理由で出す。 */
+  private isFake(): boolean {
+    return Object.values(this.options.providers.classes).some((c) => c === 'test_double');
+  }
+
+  /**
+   * 各プロバイダの区分と可否を provider.status と manifest に残す（log_check が受け入れの証拠かを判定する）。
+   * 台本のプロバイダは自分では provider.status を出さないので、ここで必ず出す。
+   */
+  private recordProviders(): void {
+    const { providers } = this.options;
+    const manifest: SessionManifestDetails['providers'] = {};
+    for (const kind of ['stt', 'tts', 'llm'] as const) {
+      const cls = providers.classes[kind];
+      const reason = this.fixedReasons.find((r) => r.startsWith(`${kind}_unavailable:`)) ?? null;
+      const provider = providers.names[kind] === 'unavailable' ? `${kind}_unavailable` : providers.names[kind];
+      manifest[kind] = { provider, provider_class: reason === null ? cls : 'unavailable', reason };
+      this.emitter.emit({
+        event: 'provider.status',
+        provider,
+        provider_class: cls === 'unavailable' ? providers.requested[kind] : cls,
+        status: reason === null ? 'ok' : 'down',
+        reason: reason === null ? absent('opened_at_session_start') : present(reason.slice(0, 300)),
+        retry_attempt: 0,
+        next_retry_ms: absent(reason === null ? 'not_retrying' : 'not_retried_in_this_session'),
+      });
+    }
+    const completion = providers.completion_name;
+    manifest.completion = {
+      provider: completion,
+      provider_class: providers.completion_error === null ? 'production' : 'unavailable',
+      reason: providers.completion_error,
+    };
+    this.emitter.emit({
+      event: 'provider.status',
+      provider: `completion:${completion}`,
+      provider_class: providers.classes.llm === 'test_double' && completion === 'llm_completion_v1' ? 'test_double' : 'production',
+      status: providers.completion_error === null ? 'ok' : 'down',
+      reason: providers.completion_error === null ? absent('created_at_session_start') : present(providers.completion_error.slice(0, 300)),
+      retry_attempt: 0,
+      next_retry_ms: absent('not_retrying'),
+    });
+    const maai = this.options.maai;
+    manifest.vap = {
+      provider: 'maai_worker',
+      provider_class: maai === null ? 'unavailable' : maai.providerClass,
+      reason: maai === null ? (this.options.maaiUnavailableReason ?? 'maai_disabled') : null,
+    };
+    void this.options.log.describe({ condition: this.options.condition, policy_id: this.options.policy.policy_id, providers: manifest });
   }
 
   /** 切断後に同じセッションへ戻ってきた。 */
   reattach(link: BrowserLink, hello: ClientHello): void {
     this.link = link;
     this.recordClient(hello, 'reattached');
+    // 切断の間はブラウザが報告できなかった。ここから数え直す（届いた PCM を流し切った後に ended が来る）。
+    this.speech?.rearmReportDeadlines();
+    this.emitter.emit({
+      event: 'provider.status',
+      provider: 'browser_link',
+      provider_class: 'production',
+      status: 'ok',
+      reason: absent('reattached'),
+      retry_attempt: 0,
+      next_retry_ms: absent('not_retrying'),
+    });
     this.send({
       type: 'server.hello',
       protocol_version: 1,
       session_id: this.session_id,
       condition: this.options.condition,
-      is_fake: Object.values(this.options.providers.classes).some((c) => c !== 'production'),
+      is_fake: this.isFake(),
     });
     this.pushStatus(true);
   }
@@ -224,32 +305,28 @@ export class Session {
   }
 
   /**
-   * ブラウザとの接続が切れた。再生中の音声は届いた位置までで終わったものとして代行する
-   * （ブラウザが playback.ended を返せないため。発話済みの部分だけが履歴に入る）。
+   * ブラウザとの接続が切れた。再生中の音声の終わりはここでは代行しない。ブラウザは受け取った PCM を
+   * 流し続け、再接続後に本物の playback.ended を送る（その報告を正とする）。代行するのは猶予が切れて
+   * セッションを閉じるとき（close）と、接続中に報告の期限を過ぎたときだけ。
    */
   detach(reason: string): void {
     if (this.link === null) return;
     this.link = null;
-    this.endPlaybackOnBehalf(`browser_disconnected:${reason}`);
+    this.emitter.emit({
+      event: 'provider.status',
+      provider: 'browser_link',
+      provider_class: 'production',
+      status: 'down',
+      reason: present(reason),
+      retry_attempt: 0,
+      next_retry_ms: absent('browser_reconnects_by_itself'),
+    });
   }
 
   private endPlaybackOnBehalf(reason: string): void {
-    const playing = this.tracker.current();
-    if (playing !== null && this.speech) {
-      const message: PlaybackEnded = {
-        type: 'playback.ended',
-        audio_playback_id: playing.audio_playback_id,
-        generation: playing.generation,
-        reason: 'error',
-        samples_written: playing.samples_written,
-        samples_discarded: 0,
-        audio_frame: this.receivedAudioFrame,
-        client_t_ms: 0,
-        output_latency_ms: absent(reason),
-      };
+    for (const id of this.speech?.endActiveOnBehalf(reason, this.receivedAudioFrame) ?? []) {
       this.counters.playback_ended_synthesized += 1;
-      this.speech.handlePlaybackEnded(message, this.time.monotonicMs());
-      this.tracker.ended(playing.audio_playback_id);
+      this.tracker.ended(id);
     }
   }
 
@@ -269,19 +346,24 @@ export class Session {
       },
       time: this.time,
       emitter: this.emitter,
-      is_ready_buffer_ms: policy.policy_id === 'ja' ? policy.speech.is_ready_buffer_ms : 200,
+      is_ready_buffer_ms: isReadyBufferMs(policy),
     });
     this.speech = speech;
     this.prefetch = new ResponsePrefetch({ speech, time: this.time, emitter: this.emitter });
     this.unsubscribe.push(
       speech.onFinished((finished) => {
-        this.history.commitAssistantSpoken({
-          text: finished.spoken_text,
-          audio_playback_id: finished.audio_playback_id,
-          spoken_text_precision: finished.spoken_text_precision,
-          interrupted: finished.interrupted,
-          origin: finished.origin,
-        });
+        const segment = this.startedInSegment.get(finished.audio_playback_id);
+        this.startedInSegment.delete(finished.audio_playback_id);
+        this.history.commitAssistantSpoken(
+          {
+            text: finished.spoken_text,
+            audio_playback_id: finished.audio_playback_id,
+            spoken_text_precision: finished.spoken_text_precision,
+            interrupted: finished.interrupted,
+            origin: finished.origin,
+          },
+          segment,
+        );
       }),
     );
   }
@@ -315,7 +397,8 @@ export class Session {
         },
       }),
     );
-    // ブラウザは audio_frame を 0 から振り直すので、ワーカーにも新しい CONFIGURE を送る。
+    // 前のセッションの番号と結果を混ぜないよう、ワーカーにも新しい CONFIGURE を送る。
+    // ブラウザの audio_frame は同じページの中では 0 に戻らない（猶予切れの後に同じタブから来た場合など）。
     void maai.reconfigure(this.session_id);
   }
 
@@ -400,17 +483,14 @@ export class Session {
         return;
       }
       case 'gaze.report': {
+        // 時計差の推定がないと描画の時刻（rendered_at）を orchestrator の基準へ写せない。受信時刻で代えない。
         const mapping = this.browserClock.mapping();
-        const fallback: TimeMapping = {
-          toServerMs: () => this.time.monotonicMs(),
-          basis: { source: 'orchestrator', uncertainty_ms: present(0) },
-        };
-        const use = mapping ?? fallback;
-        const draft = draftFromGazeReport(message, use);
-        const at =
-          mapping !== null && message.client_t_ms.value !== null
-            ? atFromBrowser(message.client_t_ms.value, mapping)
-            : undefined;
+        if (mapping === null) {
+          this.counters.gaze_reports_before_clock += 1;
+          return;
+        }
+        const draft = draftFromGazeReport(message, mapping);
+        const at = message.client_t_ms.value !== null ? atFromBrowser(message.client_t_ms.value, mapping) : undefined;
         this.emitter.emit(draft, at);
         return;
       }
@@ -480,6 +560,7 @@ export class Session {
     return {
       vap: this.vap === null ? absent('no_vap_state_since_ready') : present(this.vap),
       vap_received_at: this.vapReceivedAt === null ? absent('no_vap_state_since_ready') : present(this.vapReceivedAt),
+      start_blocked_reason: this.startBlockedReason(),
       received_audio_frame: this.receivedAudioFrame,
       vap_worker_started_at:
         this.workerReadyAt === null ? absent(this.options.maai === null ? 'maai_disabled' : 'worker_not_ready') : present(this.workerReadyAt),
@@ -499,13 +580,40 @@ export class Session {
     };
   }
 
-  private tick(): void {
+  /** 再生を今は始められない理由。TurnManager は許可が出ても segment を進めない。 */
+  private startBlockedReason(): string | null {
+    if (this.speech === null) return 'speech_unavailable';
+    // 切断中は再生できない（ブラウザが音を出せず、発話済みを測れない）。
+    if (this.link === null) return 'browser_detached';
+    const active = this.speech.activePlayback();
+    if (active !== null) return `another_playback_active:${active}`;
+    return null;
+  }
+
+  /** 固定周期の1回。試験（tickTimer: false）は直接呼ぶ。 */
+  tick(): void {
     if (this.closed) return;
     try {
       const now = this.time.monotonicMs();
-      const { state, decisions } = this.turnManager.step(this.turnState, this.inputs(), now);
+      if (this.link !== null && this.speech !== null) {
+        // 接続中に報告の期限を過ぎた音声（begin が届かなかった、ended が失われた）の終わりを代行する。
+        for (const id of this.speech.expireOverdueReports(this.receivedAudioFrame)) {
+          this.counters.playback_ended_synthesized += 1;
+          this.tracker.ended(id);
+        }
+      }
+      const previous = this.turnState;
+      const { state, decisions } = this.turnManager.step(previous, this.inputs(), now);
       this.turnState = state;
-      for (const decision of decisions) this.dispatch(decision);
+      for (const decision of decisions) {
+        if (decision.kind === 'start_speech' && !this.startSpeech(decision.audio_playback_id)) {
+          // 入力で止められなかった拒否。前進を取り消し、segment も STT も進めない（応答を失わない）。
+          this.counters.start_rolled_back += 1;
+          this.turnState = previous;
+          break;
+        }
+        this.dispatch(decision);
+      }
     } catch (error) {
       this.counters.tick_errors += 1;
       if (this.counters.tick_errors <= 5) console.error(`[session ${this.session_id}] tick failed:`, error);
@@ -519,13 +627,8 @@ export class Session {
       case 'cancel_prepare':
         this.prefetch?.execute(decision);
         return;
-      case 'start_speech': {
-        if (this.speech === null) return;
-        // 切断中は再生できない（ブラウザが音を出せず、発話済みを測れない）。
-        const result = this.link === null ? { ok: false as const, reason: 'browser_detached' } : this.speech.startChecked(decision.audio_playback_id);
-        if (!result.ok) this.counters.start_refused[result.reason] = (this.counters.start_refused[result.reason] ?? 0) + 1;
-        return;
-      }
+      case 'start_speech':
+        return; // tick の中で startSpeech が扱う
       case 'interrupt_speech':
         this.speech?.stop(decision.audio_playback_id, decision.reason, {
           stop_point: decision.stop_point,
@@ -545,9 +648,38 @@ export class Session {
         return;
       case 'set_degraded':
         this.degradedReason = decision.degraded ? decision.reason : null;
+        this.recordVapFreshness(decision.degraded, decision.reason);
         this.pushStatus(false);
         return;
     }
+  }
+
+  /** start_speech の実行。拒否されたら false（理由を数える）。 */
+  private startSpeech(audio_playback_id: number): boolean {
+    if (this.speech === null) return false;
+    const result =
+      this.link === null ? { ok: false as const, reason: 'browser_detached' } : this.speech.startChecked(audio_playback_id);
+    if (!result.ok) {
+      this.counters.start_refused[result.reason] = (this.counters.start_refused[result.reason] ?? 0) + 1;
+      return false;
+    }
+    // TurnManager は start と同じ tick で segment を進めている。その値が AI の発話の segment。
+    this.startedInSegment.set(audio_playback_id, this.turnState.segment_id);
+    return true;
+  }
+
+  /** VAP の鮮度の切替をログへ（画面だけでなく記録に残す）。VAP ではなく TurnManager の判断。 */
+  private recordVapFreshness(degraded: boolean, reason: string): void {
+    const freshness = this.turnState.vap_freshness;
+    this.emitter.emit({
+      event: 'provider.status',
+      provider: 'vap_freshness',
+      provider_class: this.options.maai?.providerClass ?? 'production',
+      status: !degraded ? 'ok' : freshness === 'down' ? 'down' : 'degraded',
+      reason: degraded ? present(reason.slice(0, 300)) : absent('fresh'),
+      retry_attempt: 0,
+      next_retry_ms: absent('not_retrying'),
+    });
   }
 
   // ---- 状態 --------------------------------------------------------------------

@@ -221,6 +221,15 @@ export class MaaiWorkerClient {
     this.sessionId = session_id;
     this.refusedSamples = 0;
     const attempt = this.attempt;
+    if (attempt === null && this.retryTimer === null && this.availability.gave_up) {
+      // 前のセッションで再起動を諦めた。新しいセッションでは回数を数え直して、もう一度起動を試みる。
+      this.restartCount = 0;
+      return new Promise((resolve) => {
+        this.settleFirst();
+        this.firstOutcome = resolve;
+        this.launch();
+      });
+    }
     const socket = attempt?.socket ?? null;
     if (attempt === null || socket === null || socket.readyState !== WebSocket.OPEN || attempt.startedReadyAt === null) {
       return Promise.resolve(this.availability);

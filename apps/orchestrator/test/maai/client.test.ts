@@ -131,6 +131,17 @@ describe('startup', () => {
     expect(history.filter((h) => h.state === 'starting')).toHaveLength(3);
   });
 
+  it('諦めた後の新しいセッション（reconfigure）では、回数を数え直してもう一度起動を試みる', async () => {
+    const launch = { ...scriptedLaunch(), args: ['-c', 'import sys; sys.exit(7)'] };
+    const client = scriptedClient({ launch });
+    const { history } = track(client);
+    expect(await client.start('s1')).toMatchObject({ gave_up: true });
+    const startsBefore = history.filter((h) => h.state === 'starting').length;
+    const again = await client.reconfigure('s2');
+    expect(again).toMatchObject({ state: 'down', gave_up: true, restart_attempt: 2 });
+    expect(history.filter((h) => h.state === 'starting').length).toBe(startsBefore + 3);
+  });
+
   it('refuses a READY that does not match the request', async () => {
     const client = scriptedClient({ launch: stubWorker(READY_WRONG_RATE) });
     track(client);

@@ -129,6 +129,11 @@ export const PolicyJa = z.strictObject({
     /** VAP の鮮度切れ時の代替（計画 §4.1 の表）。VAP ではない。 */
     fallback_silence_max_ms: Uncalibrated(NonNegativeMs),
     fallback_interrupt_min_words: Uncalibrated(z.number().int().min(1)),
+    /**
+     * fallback_energy（mic の RMS、dBFS）がこれ以上なら声があるとみなす。VAP ではない。
+     * 省略と null は未校正で、fallback_energy による開始と割り込みをしない。
+     */
+    fallback_energy_silence_dbfs: Uncalibrated(z.number().max(0)).optional(),
   }),
   gaze: z.strictObject({
     /** 原著に数値の閾値はない（計画 §4.2）。 */

@@ -13,7 +13,7 @@ import {
   TrackSettings,
   VisibilityName,
 } from './browser_rpc';
-import { CandidateCause, CandidateState } from './candidates';
+import { CandidateCause, CandidateRejectReason, CandidateState } from './candidates';
 import {
   AsrSegmentId,
   AudioFrameIndex,
@@ -337,6 +337,34 @@ export const CandidateStateChangedEvent = z.discriminatedUnion('cause_source', [
   }),
 ]);
 
+/**
+ * E2a が受け付けなかった要求（計画 §5 E2a の「不正な遷移は拒否して理由を残す」）。発行は E。
+ * source=model_decision は G から渡された判定、code は制御器（E2、E3、J）からの遷移の要求。
+ * held=true は棄てずに保留したもの（話の後に届いた NEW。E3 で調停する）。
+ */
+export const CandidateRejectedEvent = eventSchema('candidate.rejected', {
+  /** 採番の前に棄てた NEW は null と理由。 */
+  candidate_id: Maybe(CandidateId),
+  candidate_version: Maybe(CandidateVersion),
+  source: z.enum(['model_decision', 'code']),
+  operation: z.enum(['NEW', 'KEEP', 'REVISE', 'WITHDRAW', 'transition', 'speech_start', 'held']),
+  /** 要求の時点の状態。候補がなければ null。 */
+  current_state: CandidateState.nullable(),
+  /** 要求された状態。KEEP など状態を変えない要求は null。 */
+  requested_state: CandidateState.nullable(),
+  /** code の要求の原因。model_decision では null。 */
+  cause: CandidateCause.nullable(),
+  /** model_decision の元の request_id。 */
+  request_id: Maybe(NonEmptyString),
+  reason: CandidateRejectReason,
+  /** 検証の内訳（gate の理由、D の拒否理由など）。コードの値で、モデルの説明文は入れない。 */
+  details: z.array(NonEmptyString),
+  held: z.boolean(),
+  input_transcript_revision: Maybe(TranscriptRevision),
+  /** すでに適用した判定の最大の transcript_revision。 */
+  applied_transcript_revision: Maybe(TranscriptRevision),
+});
+
 // ---- 合図 ------------------------------------------------------------------
 
 const SignalShape = {
@@ -514,6 +542,19 @@ export const GazeRenderedEvent = z.discriminatedUnion('visible', [
   }),
 ]);
 
+// ---- 研究者のメモ（I2 が追加） ------------------------------------------------
+
+/**
+ * 研究者画面の自由回答の欄から送ったメモ（research_rpc.ts の research.note）。
+ * 時刻は Node が受けた時刻。研究者のブラウザの時計は補正していないので、client_wall_clock は参考値。
+ * 本文は人が書いたもので、モデル出力でも実測でもない。
+ */
+export const ResearchNoteEvent = eventSchema('research.note', {
+  note_id: NonEmptyString,
+  text: z.string().min(1).max(4000),
+  client_wall_clock: WallClock,
+});
+
 // ---- 全体 ------------------------------------------------------------------
 
 export const ResearchEvent = z.discriminatedUnion('event', [
@@ -530,6 +571,7 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   InitiativeDiscardedEvent,
   InitiativeAbortedEvent,
   CandidateStateChangedEvent,
+  CandidateRejectedEvent,
   SignalSentEvent,
   SignalStartedEvent,
   SignalEndedEvent,
@@ -545,6 +587,7 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   ClockSyncEvent,
   SessionClientEvent,
   GazeRenderedEvent,
+  ResearchNoteEvent,
 ]);
 export type ResearchEvent = z.infer<typeof ResearchEvent>;
 export type ResearchEventName = ResearchEvent['event'];
@@ -579,6 +622,8 @@ export const EVENT_NAMES = [
   'clock.sync',
   'session.client',
   'gaze.rendered',
+  'research.note',
+  'candidate.rejected',
 ] as const satisfies readonly ResearchEventName[];
 
 export type EventOf<N extends ResearchEventName> = Extract<ResearchEvent, { event: N }>;

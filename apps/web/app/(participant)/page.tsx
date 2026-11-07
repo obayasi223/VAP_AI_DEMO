@@ -38,6 +38,7 @@ function describeReason(reason: string): string | null {
   if (reason.startsWith('stt_unavailable')) return '音声認識に接続できません。';
   if (reason.startsWith('tts_unavailable')) return '音声合成に接続できません。';
   if (reason.startsWith('llm_unavailable')) return '応答生成に接続できません。';
+  if (reason.startsWith('completion_unavailable')) return '発話の終わりの推定が使えません。AI の返事が遅れることがあります。';
   if (reason.startsWith('test_double')) return null; // 下の「試験用」の表示で出す
   return reason;
 }
@@ -48,6 +49,7 @@ const LINK_TEXT: Record<ParticipantView['link'], string> = {
   open: '接続中…',
   ready: '接続済み',
   closed: '切断（自動で再接続します）',
+  elsewhere: '別のタブで接続中のため、つないでいません',
 };
 
 export default function ParticipantPage() {

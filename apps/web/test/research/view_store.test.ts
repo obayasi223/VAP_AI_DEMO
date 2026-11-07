@@ -89,8 +89,9 @@ describe('偽のイベント列', () => {
     expect(snapshot.invalid).toBe(1);
     expect(snapshot.clocks.map((c) => c.source).sort()).toEqual(['browser_rtt', 'worker_audio_frame']);
     expect(snapshot.current.vap?.model_variant).toBe('FAKE_NOT_MAAI');
-    expect(snapshot.current.turn?.allowed).toBe(true);
-    expect(snapshot.current.speech?.state).toBe('speaking');
+    // 偽の列の最後は AI の発話の終わりと、その後の不許可（I2 の時系列の素材）。
+    expect(snapshot.current.turn?.allowed).toBe(false);
+    expect(snapshot.current.speech?.state).toBe('ended');
     expect(snapshot.current.gaze?.target).toBe('user');
     expect(snapshot.current.audio?.context).toBe('running');
     expect(snapshot.cost.status).toBe('partial');

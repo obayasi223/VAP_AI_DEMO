@@ -165,6 +165,11 @@ export const TurnInputs = z.strictObject({
   prefetch: PrefetchInput,
   playback: PlaybackInput,
   woz: z.array(WozInput),
+  /**
+   * 再生を今は始められない理由（ブラウザの切断中、別の音声がまだ終わっていない、など）。始められるなら null。
+   * 許可が出ても start_speech を出さず、segment も進めない（応答を失わない）。省略は null と同じ（以前のログ）。
+   */
+  start_blocked_reason: NonEmptyString.nullable().optional(),
 });
 export type TurnInputs = z.infer<typeof TurnInputs>;
 

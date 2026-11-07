@@ -225,6 +225,17 @@
               "type": "null"
             }
           ]
+        },
+        "fallback_energy_silence_dbfs": {
+          "anyOf": [
+            {
+              "type": "number",
+              "maximum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

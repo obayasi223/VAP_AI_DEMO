@@ -25,8 +25,13 @@ export interface OrchestratorConfig {
   maai_enabled: boolean;
   /** 切断から再接続を待つ時間。過ぎたらセッションを閉じる。 */
   resume_grace_ms: number;
-  /** WS の Origin として受け入れるホスト名。 */
-  allowed_origin_hosts: string[];
+  /** WS と /health で受け入れる Origin（scheme://host:port）。既定は画面（Next.js）の localhost:3000。 */
+  allowed_origins: string[];
+  /**
+   * Origin のない接続（Node のクライアント、試験）を受け入れる合言葉。null なら Origin のない接続は断る。
+   * WS の URL の ?token= か、x-orchestrator-token ヘッダで渡す。
+   */
+  client_token: string | null;
   /** 台本の TTS が使う WAV。 */
   scripted_tts_wav: string;
   elevenlabs_language_normalization: boolean;
@@ -54,7 +59,9 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
   const policyFile = path.resolve(REPO_ROOT, env.POLICY_FILE || 'config/policy.ja.json');
   const policy = Policy.parse(JSON.parse(readFileSync(policyFile, 'utf-8')));
   return {
-    host: env.ORCHESTRATOR_HOST || '0.0.0.0',
+    // WSL2 の localhost 転送は 127.0.0.1 の待ち受けにも届く（Windows の curl.exe で確認、2026-11-08）。
+    // LAN へ公開しないため既定は 127.0.0.1。
+    host: env.ORCHESTRATOR_HOST || '127.0.0.1',
     port: Number(env.ORCHESTRATOR_PORT || 8787),
     policy,
     policy_file: policyFile,
@@ -65,7 +72,11 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
     llm: mode('LLM_PROVIDER_CLASS', env),
     maai_enabled: flag(env.MAAI_ENABLED, true),
     resume_grace_ms: Number(env.SESSION_RESUME_GRACE_MS || 20000),
-    allowed_origin_hosts: (env.ALLOWED_ORIGIN_HOSTS || 'localhost,127.0.0.1,[::1]').split(',').map((h) => h.trim()),
+    allowed_origins: (env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
+      .split(',')
+      .map((h) => h.trim())
+      .filter((h) => h !== ''),
+    client_token: env.ORCHESTRATOR_CLIENT_TOKEN || null,
     scripted_tts_wav: path.resolve(REPO_ROOT, env.SCRIPTED_TTS_WAV || 'models/ja.wav'),
     elevenlabs_language_normalization: flag(env.ELEVENLABS_LANGUAGE_NORMALIZATION, false),
   };

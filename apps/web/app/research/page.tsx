@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * 研究者向けの最小の状態表示（I1）。データ源はクエリで選ぶ。
+ * 研究者画面（I1 の状態表示＋I2 のライブ表示）。データ源はクエリで選ぶ。
  *   /research                       データ源なし
  *   /research?source=fake           偽のイベント列（画面に偽データと表示する）
  *   /research?source=ws&url=ws://…  WS（配線は J）
@@ -20,10 +20,10 @@ export default function ResearchPage() {
   useEffect(() => {
     setFeed(feedFromQuery(window.location.search));
   }, []);
-  const snapshot = useResearchFeed(feed);
+  const { snapshot, sendNote } = useResearchFeed(feed);
   return (
     <>
-      <ResearchDashboard snapshot={snapshot} />
+      <ResearchDashboard snapshot={snapshot} onSendNote={sendNote} />
       <div className={styles.controls}>
         <label>
           JSONL を読む:{' '}

@@ -21,8 +21,18 @@ describe('checkLog', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  async function session(events = [statusEvent(1), costEvent('elevenlabs', 'characters', 1000, 0.04, 'x', 2)]) {
+  const PRODUCTION_MANIFEST = {
+    condition: 'reactive' as const,
+    policy_id: 'ja',
+    providers: { stt: { provider: 'p', provider_class: 'production' as const, reason: null } },
+  };
+
+  async function session(
+    events = [statusEvent(1), costEvent('elevenlabs', 'characters', 1000, 0.04, 'x', 2)],
+    details: Parameters<SessionLog['describe']>[0] | null = PRODUCTION_MANIFEST,
+  ) {
     const log = await SessionLog.open({ dir, session_id: SESSION, reporter: quiet });
+    if (details !== null) await log.describe(details);
     for (const event of events) log.write(event);
     const report = await log.close();
     return report.paths;
@@ -138,9 +148,41 @@ describe('checkLog', () => {
   });
 
   it('test double を含むセッションは受け入れの証拠に数えない', async () => {
-    const paths = await session([statusEvent(1, 'scripted_stt', 'test_double')]);
+    const paths = await session([statusEvent(1, 'scripted_stt', 'test_double')], {
+      ...PRODUCTION_MANIFEST,
+      providers: { stt: { provider: 'scripted_stt', provider_class: 'test_double', reason: null } },
+    });
     const report = await checkLog(paths.dir);
-    expect(report.acceptance_evidence).toEqual({ eligible: false, reasons: ['scripted_stt は test_double'] });
+    expect(report.acceptance_evidence).toEqual({
+      eligible: false,
+      reasons: ['manifest の stt（scripted_stt）は test_double', 'scripted_stt は test_double'],
+    });
+  });
+
+  it('manifest にプロバイダの区分がなければ、provider.status が production でも証拠に数えない', async () => {
+    const paths = await session(undefined, null);
+    const report = await checkLog(paths.dir);
+    expect(report.acceptance_evidence).toEqual({
+      eligible: false,
+      reasons: ['manifest にプロバイダの区分がない', 'manifest に条件がない'],
+    });
+  });
+
+  it('台本のプロバイダが provider.status を出さなくても、manifest の区分で証拠から外す', async () => {
+    const paths = await session([statusEvent(1, 'session_log', 'production')], {
+      ...PRODUCTION_MANIFEST,
+      providers: {
+        stt: { provider: 'scripted_stt_energy', provider_class: 'test_double', reason: null },
+        tts: { provider: 'tts_unavailable', provider_class: 'unavailable', reason: 'tts_unavailable:no key' },
+      },
+    });
+    const report = await checkLog(paths.dir);
+    expect(report.acceptance_evidence.eligible).toBe(false);
+    expect(report.acceptance_evidence.reasons).toEqual([
+      'manifest の stt（scripted_stt_energy）は test_double',
+      'manifest の tts（tts_unavailable）は unavailable: tts_unavailable:no key',
+    ]);
+    expect(report.manifest).toMatchObject({ condition: 'reactive', policy_id: 'ja' });
   });
 
   it('provider.status がなければ証拠に数えない', async () => {

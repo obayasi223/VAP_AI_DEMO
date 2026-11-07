@@ -334,7 +334,7 @@ describe('segment_id は音声位置で決まる', () => {
     ]);
   });
 
-  it('本文が書き直されたら共通接頭部までを旧へ入れる', async () => {
+  it('本文が書き直されて伸びたら、境界より前の revision の長さまでを旧へ入れる', async () => {
     const transport = new FakeGoogleSttTransport({
       script: [
         { at_audio_ms: 100, transcript: 'あいう', stability: 0.9 },
@@ -346,8 +346,51 @@ describe('segment_id は音声位置で決まる', () => {
     pump(session, null, 0, 320);
     expect(results.map((r) => [r.kind, r.segment_id, r.text])).toEqual([
       ['interim', 0, 'あいう'],
-      ['final', 0, 'あい'],
-      ['final', 1, 'XYZ'],
+      ['final', 0, 'あいX'],
+      ['final', 1, 'YZ'],
+    ]);
+  });
+
+  it('境界の後に届いた旧い発話の書き直し（長さが同じ）は旧 segment の修正で、新しい発話にしない', async () => {
+    const transport = new FakeGoogleSttTransport({
+      script: [
+        { at_audio_ms: 100, transcript: 'あいうえお', stability: 0.9 },
+        { at_audio_ms: 300, transcript: 'あいうかお', is_final: true },
+        { at_audio_ms: 500, transcript: 'つぎ', stability: 0.9 },
+      ],
+    });
+    const { session, results } = await setup(transport);
+    session.advanceSegment(1, 200 * SR);
+    pump(session, null, 0, 520);
+    expect(results.map((r) => [r.kind, r.segment_id, r.text])).toEqual([
+      ['interim', 0, 'あいうえお'],
+      ['final', 0, 'あいうかお'],
+      ['interim', 1, 'つぎ'],
+    ]);
+  });
+
+  it('final の語時刻があれば、境界より前に終わった語を旧 segment へ入れる', async () => {
+    const transport = new FakeGoogleSttTransport({
+      script: [
+        { at_audio_ms: 100, transcript: 'あの', stability: 0.9 },
+        {
+          at_audio_ms: 300,
+          transcript: 'あのねそれは',
+          is_final: true,
+          words: [
+            { word: 'あのね', end_offset_ms: 150 },
+            { word: 'それは', end_offset_ms: 190 },
+          ],
+        },
+      ],
+    });
+    const { session, results } = await setup(transport);
+    session.advanceSegment(1, 200 * SR);
+    pump(session, null, 0, 320);
+    // pendingText（「あの」）より長いが、語はすべて境界の前に終わっている。
+    expect(results.map((r) => [r.kind, r.segment_id, r.text])).toEqual([
+      ['interim', 0, 'あの'],
+      ['final', 0, 'あのねそれは'],
     ]);
   });
 

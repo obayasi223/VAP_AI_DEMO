@@ -36,6 +36,20 @@ export const DEFAULT_SESSIONS_DIR = 'sessions';
 export const EVENTS_FILE = 'events.jsonl';
 export const QUARANTINE_FILE = 'quarantine.jsonl';
 export const MANIFEST_FILE = 'manifest.json';
+
+/** manifest のプロバイダの行。unavailable は開けなかったもの（理由つき）。 */
+export interface ManifestProvider {
+  provider: string;
+  provider_class: ProviderClass | 'unavailable';
+  reason: string | null;
+}
+
+/** manifest に載せるセッションの条件（J が渡す）。log_check はこれを必ず見る。 */
+export interface SessionManifestDetails {
+  condition: Condition;
+  policy_id: string;
+  providers: Record<string, ManifestProvider>;
+}
 /** session.log の状態を provider.status に出すときの名前。 */
 export const SESSION_LOG_PROVIDER = 'session_log';
 
@@ -383,6 +397,7 @@ export class SessionLog implements EventSink {
   private overflowActive = false;
   private closing: Promise<CloseReport> | null = null;
   private readonly startedWallClock: string;
+  private details: SessionManifestDetails | null = null;
 
   private constructor(
     readonly session_id: string,
@@ -555,6 +570,22 @@ export class SessionLog implements EventSink {
     return mergeFlush(events, quarantine);
   }
 
+  /**
+   * セッションの条件とプロバイダの区分を manifest に書く（log_check が受け入れの証拠かを判定する）。
+   * 書けなければ false。閉じた後は何もしない。
+   */
+  async describe(details: SessionManifestDetails): Promise<boolean> {
+    this.details = details;
+    if (this.closing !== null) return false;
+    try {
+      await this.fs.writeAtomic(this.paths.manifest, this.manifestText(false, null));
+      return true;
+    } catch (failure) {
+      this.report(`[session_log ${this.session_id}] manifest not written: ${errorMessage(failure)}`);
+      return false;
+    }
+  }
+
   /** 何度呼んでも同じ結果を返す。例外は出さず、失敗は CloseReport に載せて stderr にも出す。 */
   close(): Promise<CloseReport> {
     this.closing ??= this.doClose();
@@ -607,6 +638,7 @@ export class SessionLog implements EventSink {
         closed,
         closed_wall_clock: closed ? this.time.wallClock() : null,
         close_error: closeError,
+        ...(this.details === null ? {} : this.details),
         stats: this.stats(),
       },
       null,

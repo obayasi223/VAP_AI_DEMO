@@ -154,6 +154,9 @@ async function main(): Promise<void> {
       const a = window.__avatarDev!.avatar()!;
       a.setIdleIntensity(0);
       a.setAutoBlink(false);
+      // 小さな視線移動と表情の層も止める（画の差で確かめる試験の雑音になる）。
+      a.setSaccades(false);
+      a.setExpressionIntensity(0);
       a.setFraming('bust');
     });
     await sleep(6000);
@@ -316,6 +319,8 @@ async function main(): Promise<void> {
       const a = window.__avatarDev!.avatar()!;
       a.setIdleIntensity(1);
       a.setAutoBlink(true);
+      a.setSaccades(true);
+      a.setExpressionIntensity(1);
       a.setFraming('bust');
     });
     const idleSeconds = 40;

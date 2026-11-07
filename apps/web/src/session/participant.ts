@@ -9,9 +9,14 @@ import type { GazeReport, GazeTarget, NodeToBrowser, TrackSettings } from '@llm-
 import { startBrowserAudio, type BrowserAudioSession, type LinkState } from '../audio';
 import type { Avatar } from '../avatar';
 
+/** 別のタブが会話中で、このタブの接続を断られた（Worker は張り直さない）。 */
+export const SESSION_OPEN_ELSEWHERE_TEXT =
+  'この会話は別のタブで開かれています。このタブはつながりません。使わないほうのタブを閉じてください。';
+
 export interface ParticipantView {
   phase: 'idle' | 'starting' | 'running' | 'stopped' | 'failed';
-  link: LinkState | 'none';
+  /** elsewhere は別のタブで接続中のため断られた状態。 */
+  link: LinkState | 'none' | 'elsewhere';
   sessionId: string | null;
   isFake: boolean;
   degraded: boolean;
@@ -142,7 +147,13 @@ export class ParticipantController {
           else return;
           if (this.view.aiSpeaking !== this.playing.size > 0) this.update({ aiSpeaking: this.playing.size > 0 });
         },
-        onLink: (state) => this.update({ link: state }),
+        onLink: (state, detail) => {
+          if (state === 'closed' && detail.includes('session_open_elsewhere')) {
+            this.update({ link: 'elsewhere', error: SESSION_OPEN_ELSEWHERE_TEXT });
+            return;
+          }
+          this.update({ link: state });
+        },
         onError: (detail) => this.record.messages.push(`error: ${detail}`),
       });
     } catch (error) {

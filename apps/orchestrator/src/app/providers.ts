@@ -30,6 +30,12 @@ export interface SessionProviders {
   /** 画面とログに出す区分。 */
   classes: Record<'stt' | 'tts' | 'llm', ProviderClass | 'unavailable'>;
   names: Record<'stt' | 'tts' | 'llm', string>;
+  /** 設定で求めた区分（開けなかったときの provider.status に使う）。 */
+  requested: Record<'stt' | 'tts' | 'llm', ProviderClass>;
+  /** ターン完了の推定器の名前（policy.completion.estimator、なければ none）。 */
+  completion_name: string;
+  /** 推定器を作れなかった理由。作れた（または推定器なしの方策）なら null。 */
+  completion_error: string | null;
 }
 
 function message(error: unknown): string {
@@ -91,24 +97,33 @@ export async function createSessionProviders(input: {
   }
 
   const completion = completionFor(config.policy, llm.ok ? llm.value : null);
+  if (completion.error !== null) console.error(`[orchestrator] completion estimator unavailable: ${completion.error}`);
   const cls = (b: Built<{ provider_class: ProviderClass }>) => (b.ok ? b.value.provider_class : 'unavailable');
   const name = (b: Built<{ provider: string }>) => (b.ok ? b.value.provider : 'unavailable');
   return {
     stt,
     tts,
     llm,
-    completion,
+    completion: completion.estimator,
     classes: { stt: cls(stt), tts: cls(tts), llm: cls(llm) },
     names: { stt: name(stt), tts: name(tts), llm: name(llm) },
+    requested: { stt: config.stt, tts: config.tts, llm: config.llm },
+    completion_name: completion.name,
+    completion_error: completion.error,
   };
 }
 
-function completionFor(policy: Policy, llm: LlmProvider | null): TurnCompletionEstimator {
-  if (policy.policy_id !== 'ja') return new NullTurnCompletionEstimator();
+/** 作れなければ Null の推定器へ落とすが、理由を返す（黙って推定器なしにしない）。 */
+function completionFor(
+  policy: Policy,
+  llm: LlmProvider | null,
+): { estimator: TurnCompletionEstimator; name: string; error: string | null } {
+  if (policy.policy_id !== 'ja') return { estimator: new NullTurnCompletionEstimator(), name: 'none', error: null };
+  const name = policy.completion.estimator ?? 'none';
   try {
-    return createCompletionEstimator(policy.completion, llm ? { llm } : {});
-  } catch {
-    return new NullTurnCompletionEstimator();
+    return { estimator: createCompletionEstimator(policy.completion, llm ? { llm } : {}), name, error: null };
+  } catch (error) {
+    return { estimator: new NullTurnCompletionEstimator(), name, error: message(error).slice(0, 300) };
   }
 }
 

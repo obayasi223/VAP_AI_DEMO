@@ -172,6 +172,164 @@ const STEPS: readonly Step[] = [
   [6400, { event: 'cost.usage', provider: 'gemini_tts', purpose: 'tts_request', quantity: 3, unit: 'audio_seconds', estimated_cost_usd: present(0.000675) }],
 ];
 
+// ---- I2 の時系列の確認用（7 秒以降）。値は作り物で、会話の実測ではない。 ----------------
+
+/** 利用者の発話区間と AI の発話区間（ms）。AI の 3 番目は利用者の発話で割り込まれて止まる。 */
+const USER_SPANS: readonly [number, number][] = [[11000, 16000], [24000, 30500], [33800, 36500], [38000, 41000]];
+const AI_SPANS: readonly [number, number][] = [[6100, 9500], [17000, 22000], [31500, 34200], [42000, 46000]];
+const TAIL_END_MS = 47000;
+const VAP_PERIOD_MS = 80;
+
+const within = (t: number, spans: readonly [number, number][]) => spans.some(([a, b]) => t >= a && t < b);
+/** 決まった形の揺らぎ（乱数を使わないので毎回同じ図になる）。 */
+const wobble = (t: number) => 0.05 * Math.sin(t / 370) + 0.03 * Math.sin(t / 113);
+const clamp01 = (v: number) => Math.min(0.99, Math.max(0.01, v));
+
+function vapAt(t: number): EventDraft {
+  const user = within(t, USER_SPANS);
+  const ai = within(t, AI_SPANS);
+  // ch2（添字 1）が AI。p_now は 2 者の配分なので和が 1。
+  const aiNow = clamp01((ai ? 0.85 : user ? 0.12 : 0.55) + wobble(t));
+  const aiFuture = clamp01((ai ? 0.7 : user ? 0.3 : 0.6) + wobble(t + 900));
+  return {
+    event: 'vap.state',
+    t,
+    audio_frame: Math.round(t * 16),
+    model_variant: FAKE_MODEL_VARIANT,
+    inference_ms: 30,
+    raw: {},
+    channel_layout: '2ch',
+    p_now: [1 - aiNow, aiNow],
+    p_future: [1 - aiFuture, aiFuture],
+    vad: [clamp01((user ? 0.9 : 0.05) + wobble(t) / 2), clamp01((ai ? 0.9 : 0.05) + wobble(t + 400) / 2)],
+    user_speaking: user,
+    system_speaking: ai,
+  };
+}
+
+function prefetch(kind: 'prefetch.started' | 'prefetch.ready' | 'prefetch.cancelled', id: number, cancel_reason?: string): EventDraft {
+  return {
+    event: kind,
+    segment_id: id,
+    transcript_revision: id * 10,
+    audio_playback_id: id,
+    similarity: absent('fake'),
+    similarity_method: 'FAKE',
+    model_version: 'FAKE_model',
+    ...(kind === 'prefetch.started' ? { trigger: 'final_transcript' as const } : {}),
+    ...(cancel_reason === undefined ? {} : { cancel_reason }),
+  } as EventDraft;
+}
+
+function speech(kind: 'speech.started' | 'speech.ended' | 'speech.interrupted', id: number, start: number, end: number): EventDraft {
+  const base = {
+    audio_playback_id: id,
+    audio_frame: Math.round(start * 16),
+    started_at: start,
+    first_pcm_written_at: start - 30,
+    output_latency_ms: present(30),
+    origin: 'response' as const,
+  };
+  if (kind === 'speech.started') return { event: kind, ...base };
+  const finish = { ...base, spoken_text: '偽の応答', spoken_text_precision: 'time_proportional' as const, samples_written: Math.round((end - start) * 16) };
+  if (kind === 'speech.ended') return { event: kind, ...finish, ended_at: end };
+  return { event: kind, ...finish, interrupted_at: end, stop_point: 'word_boundary', decision_source: 'vap' };
+}
+
+function turnAllowed(allowed: boolean, reason: string): EventDraft {
+  return { event: 'turn.allowed', turn_allowed: allowed, invitation: { detected: false }, user_speaking: !allowed, p_now: present(0.6), p_future: present(0.6), completion_p: absent('fake'), completion_revision: absent('fake'), gap_ms: present(600), priority: absent('fake'), policy_id: 'FAKE_policy', decision_source: 'vap', vap_freshness: 'fresh', fallback_energy: absent('fake'), reason };
+}
+
+function gaze(target: 'user' | 'away', pause: boolean): EventDraft {
+  return { event: 'gaze.decision', target, reason: '偽の視線の理由', p_now: present(0.6), p_future: present(0.6), in_speech_pause: pause, vap_freshness: 'fresh' };
+}
+
+const CANDIDATE_2 = 'fake_candidate_2';
+const llmMeasured = (request_id: string, sent_at: number, received_at: number) => ({
+  segment_id: 2,
+  transcript_revision: 22,
+  request_id,
+  sent_at,
+  received_at,
+  model_version: 'FAKE_model',
+});
+
+function candidateChange(id: string, version: number, from: string | null, to: string, cause: string): EventDraft {
+  return { event: 'candidate.state_changed', candidate_id: id, candidate_version: version, from, to, cause_source: 'code', cause } as EventDraft;
+}
+function candidateByModel(id: string, version: number, from: string | null, to: string, decision: 'NEW' | 'REVISE' | 'WITHDRAW', request_id: string): EventDraft {
+  return { event: 'candidate.state_changed', candidate_id: id, candidate_version: version, from, to, cause_source: 'model_decision', decision, request_id } as EventDraft;
+}
+
+const TAIL_STEPS: readonly Step[] = [
+  [3660, candidateByModel(CANDIDATE, 1, null, 'INTENT_READY', 'NEW', 'fake_r1')],
+  [3700, candidateChange(CANDIDATE, 1, 'INTENT_READY', 'BREATH_INHALE', 'signal_gate_allowed')],
+  [6100, candidateChange(CANDIDATE, 1, 'BREATH_INHALE', 'SPEAKING', 'turn_allowed')],
+  [9500, { event: 'speech.ended', ...speechBase, spoken_text: '偽の発話', spoken_text_precision: 'time_proportional', samples_written: 54400, ended_at: 9500 }, BROWSER],
+  [9500, candidateChange(CANDIDATE, 1, 'SPEAKING', 'SPOKEN', 'speech_finished')],
+  [9600, turnAllowed(false, '偽: AI の発話の後')],
+  [13000, { event: 'initiative.decision', decision: 'NONE', ...llmMeasured('fake_r2', 12200, 13000), reason: modelOutput('偽: 発話する理由がない') }],
+  [15500, prefetch('prefetch.started', 2)],
+  [16200, prefetch('prefetch.ready', 2)],
+  [16500, turnAllowed(true, '偽: 利用者の発話の終わり')],
+  [17000, speech('speech.started', 2, 17000, 22000), BROWSER],
+  [19000, gaze('away', true)],
+  [19800, gaze('user', false)],
+  [22000, speech('speech.ended', 2, 17000, 22000), BROWSER],
+  [22000, turnAllowed(false, '偽: AI の発話の後')],
+  [26000, {
+    event: 'initiative.decision', decision: 'NEW', ...llmMeasured('fake_r3', 25100, 25950),
+    candidate_id: CANDIDATE_2, candidate_version: 1,
+    intent_type: modelOutput('FAKE_question'), evidence_span: modelOutput('偽の断片その二'),
+    reason: modelOutput('偽: LLM が書いた理由の例'), why_now: modelOutput('偽: 話題が切り替わる前に'),
+    cost_of_waiting: modelOutput('偽: 話題が流れる'), proposed_utterance: modelOutput('偽: それはいつのことですか'),
+    expiry_policy: modelOutput('FAKE'), urgency: modelOutput('FAKE'),
+    evidence_valid: verified(false, 'fake'), evidence_segment_ids: verified([2], 'fake'), decided_at: 26000,
+  }],
+  [26010, candidateByModel(CANDIDATE_2, 1, null, 'INTENT_READY', 'NEW', 'fake_r3')],
+  [28000, {
+    event: 'initiative.decision', decision: 'REVISE', ...llmMeasured('fake_r4', 27200, 27950),
+    candidate_id: CANDIDATE_2, candidate_version: 2,
+    intent_type: modelOutput('FAKE_question'), evidence_span: modelOutput('偽の断片その二の続き'),
+    reason: modelOutput('偽: 理由を書き直した例'), why_now: modelOutputAbsent('fake'),
+    cost_of_waiting: modelOutputAbsent('fake'), proposed_utterance: modelOutput('偽: それは先週ですか'),
+    expiry_policy: modelOutput('FAKE'), urgency: modelOutput('FAKE'),
+    evidence_valid: verified(true, 'fake'), evidence_segment_ids: verified([2, 3], 'fake'), updated_at: 28000,
+  }],
+  [28010, candidateByModel(CANDIDATE_2, 2, 'INTENT_READY', 'INTENT_READY', 'REVISE', 'fake_r4')],
+  [29000, prefetch('prefetch.started', 3)],
+  [29800, prefetch('prefetch.ready', 3)],
+  [31000, turnAllowed(true, '偽: 利用者の発話の終わり')],
+  [31500, speech('speech.started', 3, 31500, 34200), BROWSER],
+  [34000, turnAllowed(false, '偽: 利用者が話し始めた')],
+  [34200, speech('speech.interrupted', 3, 31500, 34200), BROWSER],
+  [36000, {
+    event: 'initiative.decision', decision: 'WITHDRAW', ...llmMeasured('fake_r5', 35300, 35980),
+    candidate_id: CANDIDATE_2, candidate_version: 2, withdrawn_at: 36000,
+    withdraw_reason: modelOutput('偽: 利用者が自分で答えた'), withdraw_evidence_segment_ids: verified([4], 'fake'),
+  }],
+  [36010, candidateByModel(CANDIDATE_2, 2, 'INTENT_READY', 'WITHDRAWN', 'WITHDRAW', 'fake_r5')],
+  [37000, prefetch('prefetch.started', 4)],
+  [37600, prefetch('prefetch.ready', 4)],
+  [39000, prefetch('prefetch.cancelled', 4, 'superseded')],
+  [40000, prefetch('prefetch.started', 5)],
+  [40800, prefetch('prefetch.ready', 5)],
+  [41500, turnAllowed(true, '偽: 利用者の発話の終わり')],
+  [42000, speech('speech.started', 5, 42000, 46000), BROWSER],
+  [44000, gaze('away', true)],
+  [44600, gaze('user', false)],
+  [46000, speech('speech.ended', 5, 42000, 46000), BROWSER],
+  [46000, turnAllowed(false, '偽: AI の発話の後')],
+  [46500, prefetch('prefetch.started', 6)],
+  [46800, prefetch('prefetch.cancelled', 6, 'user_resumed')],
+];
+
+function vapSteps(): Step[] {
+  const steps: Step[] = [];
+  for (let t = 7000; t <= TAIL_END_MS; t += VAP_PERIOD_MS) steps.push([t, vapAt(t), WORKER]);
+  return steps;
+}
+
 /** 不正なイベントを 1 件含む（time_basis がない）。 */
 const BROKEN_EVENT = {
   schema_version: 1,
@@ -181,7 +339,12 @@ const BROKEN_EVENT = {
 };
 
 export function createFakeEventScript(): unknown[] {
-  const events: unknown[] = STEPS.map(([t_ms, draft, basis]) => ({
+  // 時刻順に並べる（同じ時刻は元の順を保つ）。
+  const steps = [...STEPS, ...TAIL_STEPS, ...vapSteps()]
+    .map((step, i) => ({ step, i }))
+    .sort((a, b) => a.step[0] - b.step[0] || a.i - b.i)
+    .map(({ step }) => step);
+  const events: unknown[] = steps.map(([t_ms, draft, basis]) => ({
     ...draft,
     schema_version: 1,
     t_monotonic_ms: t_ms,
@@ -193,3 +356,12 @@ export function createFakeEventScript(): unknown[] {
   events.splice(5, 0, BROKEN_EVENT);
   return events;
 }
+
+/** 偽の口が接続の直後に流す research.config。向きは実測（i=1 が AI）と同じにしてある。 */
+export const FAKE_RESEARCH_CONFIG = {
+  type: 'research.config',
+  policy_id: 'FAKE_policy',
+  p_ai_index: 1,
+  direction_status: 'measured',
+  condition: 'initiative_inhale',
+} as const;

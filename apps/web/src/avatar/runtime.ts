@@ -1,19 +1,32 @@
 /**
  * VRM の読み込み、描画、1つの更新ループ。three に触るのはこのファイルだけ。
- * 判断はしない: 視線は setGaze で外から受け、音量は setMouthLevel／pushPcm で受ける（配線は J）。
+ * 判断はしない: 視線は setGaze で外から受け、音量は setMouthLevel／pushPcm で、語時刻と再生位置は
+ * onPlaybackAlignment／onPlaybackReport で受ける（配線は J）。
  *
+ * 層の順: rest → idle → gaze → saccade → expression → blink → mouth。
  * 1フレームの順序: 層の合成 → ボーンへ適用 → 視線 → 表情 → vrm.update → 描画 → 報告。
  * 吸気や準備姿勢（H2）は addLayer で足す。ループは増やさない。
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { VRMHumanBoneName, VRMLoaderPlugin, VRMUtils, type VRM } from '@pixiv/three-vrm';
+import {
+  VRMExpression,
+  VRMExpressionMorphTargetBind,
+  VRMHumanBoneName,
+  VRMLoaderPlugin,
+  VRMUtils,
+  type VRM,
+} from '@pixiv/three-vrm';
 import type { GazeReport, GazeTarget } from '@llm-vap/contracts';
 import { BlinkLayer, BlinkScheduler } from './blink';
-import { GazeController, GazeLayer, GazeReporter } from './gaze';
+import { ExpressionLayer, type SpeechFeatures } from './face';
+import { DEFAULT_GAZE, GazeController, GazeLayer, GazeReporter } from './gaze';
 import { IdleLayer, RestPoseLayer } from './idle';
-import { MouthLayer, VolumeMouthSource, mouthOpenAmount, type MouthShape, type MouthSource } from './mouth';
+import { AlignmentMouthSource, type LipSyncMode, type PlaybackAlignmentLike, type PlaybackReportLike } from './lipsync';
+import { computeRms, MouthLayer, VolumeMouthSource, mouthOpenAmount, type MouthShape, type MouthSource } from './mouth';
+import { SaccadeGenerator, SaccadeLayer } from './saccade';
 import { boneSignForMeta, LayerStack, type AvatarLayer } from './pose';
+import { matcapScaleFor, mipmapAllowed, pixelRatioFor, resolveRenderSettings, type RenderSettings } from './render_settings';
 import { RAD2DEG, type Rng } from './util';
 
 export type Framing = 'bust' | 'face';
@@ -26,6 +39,8 @@ export interface AvatarOptions {
   onProgress?: (loadedBytes: number, totalBytes: number) => void;
   /** browser_rpc の gaze.report の元。送信は呼び出し側（J）。 */
   onGazeReport?: (report: GazeReport) => void;
+  /** 描画の設定の上書き。'h1' は比較用の旧設定。 */
+  render?: Partial<RenderSettings> | 'h1';
 }
 
 /** 読める形で公開する値。avatar.* イベントは契約に無いので、今は取りに来てもらう。 */
@@ -34,8 +49,10 @@ export interface AvatarTelemetry {
   /** 直近のフレームの rAF 時刻。 */
   rafMs: number;
   fps: number;
-  mouth: { open: number; shape: MouthShape; appliedAa: number };
-  blink: { weight: number; count: number };
+  mouth: { open: number; shape: MouthShape; appliedAa: number; mode: LipSyncMode; playbackPositionMs: number | null };
+  blink: { weight: number; count: number; gazeCount: number };
+  saccade: { count: number; yawDeg: number; pitchDeg: number };
+  speech: SpeechFeatures;
   gaze: {
     target: GazeTarget;
     awayAmount: number;
@@ -74,15 +91,25 @@ export interface AvatarModelInfo {
 
 export interface Avatar {
   readonly mouth: VolumeMouthSource;
+  /** 既定の口（語時刻＋音量包絡）。語時刻が無ければ音量だけの口と同じに動く。 */
+  readonly lipSync: AlignmentMouthSource;
   setMouthLevel(rms: number): void;
   pushPcm(samples: ArrayLike<number>): void;
   closeMouth(): void;
-  /** 語境界・時間比例の口形へ差し替える口。null で音量駆動へ戻す。 */
+  /** Node から届いた playback.alignment（PlaybackAlignment をそのまま渡せる）。 */
+  onPlaybackAlignment(message: PlaybackAlignmentLike): void;
+  /** Worker が送った playback.started／position／ended（BrowserAudioOptions.onSent で受ける。そのまま渡せる）。 */
+  onPlaybackReport(message: PlaybackReportLike): void;
+  /** 口を差し替える。null で既定（lipSync）へ戻す。 */
   setMouthSource(source: MouthSource | null): void;
   setGaze(target: GazeTarget): void;
   triggerBlink(): void;
   setAutoBlink(enabled: boolean): void;
   setIdleIntensity(intensity: number): void;
+  /** 相手を見ている間の小さな視線移動。 */
+  setSaccades(enabled: boolean): void;
+  /** 表情の層（待機の表情、眉、話している間の頭の動き）の強さ 0〜1。 */
+  setExpressionIntensity(intensity: number): void;
   setFraming(framing: Framing): void;
   addLayer(layer: AvatarLayer, position?: { before: string }): void;
   removeLayer(name: string): void;
@@ -115,21 +142,31 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
     object.frustumCulled = false;
   });
 
+  const settings = resolveRenderSettings(options.render);
+  prepareMaterials(vrm, settings);
+
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xe8ebef);
+  scene.background = new THREE.Color(settings.background);
   scene.add(vrm.scene);
-  const key = new THREE.DirectionalLight(0xffffff, 2.2);
-  key.position.set(0.6, 1.6, 1.8);
-  const fill = new THREE.AmbientLight(0xffffff, 0.9);
+  const key = new THREE.DirectionalLight(0xffffff, settings.keyIntensity);
+  key.position.set(...settings.keyPosition);
+  const fill = new THREE.AmbientLight(0xffffff, settings.ambientIntensity);
   scene.add(key, fill);
 
   const camera = new THREE.PerspectiveCamera(20, 1, 0.05, 20);
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  // MToon は sRGB の出力を前提にした色。トーンマッピングは掛けない（明るい部分の色が変わる）。
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.NoToneMapping;
+  const applyPixelRatio = () => renderer.setPixelRatio(pixelRatioFor(window.devicePixelRatio, settings));
+  applyPixelRatio();
+  applyTextureFiltering(vrm, settings, renderer.capabilities.getMaxAnisotropy());
   container.appendChild(renderer.domElement);
   renderer.domElement.style.display = 'block';
 
   const resize = () => {
+    // ブラウザの拡大率が変わると devicePixelRatio も変わる。
+    applyPixelRatio();
     const width = Math.max(container.clientWidth, 1);
     const height = Math.max(container.clientHeight, 1);
     renderer.setSize(width, height);
@@ -140,24 +177,35 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(container);
 
+  registerMorphExpressions(vrm);
+
   const stack = new LayerStack();
   const mouth = new VolumeMouthSource();
+  const lipSync = new AlignmentMouthSource(mouth, () => performance.now());
   const blinkScheduler = new BlinkScheduler(rng);
   const gazeController = new GazeController(rng);
   const idle = new IdleLayer(rng);
   const gazeLayer = new GazeLayer(gazeController);
+  const saccades = new SaccadeGenerator(rng);
+  const saccadeLayer = new SaccadeLayer(saccades, (deg) => blinkScheduler.onGazeShift(deg));
   const blinkLayer = new BlinkLayer(blinkScheduler);
-  const mouthLayer = new MouthLayer(mouth);
+  const mouthLayer = new MouthLayer(lipSync);
+  const expression = new ExpressionLayer(rng, () => mouthOpenAmount(mouthLayer.shape));
   stack.add(new RestPoseLayer());
   stack.add(idle);
   stack.add(gazeLayer);
+  stack.add(saccadeLayer);
+  stack.add(expression);
   stack.add(blinkLayer);
   stack.add(mouthLayer);
+  /** そらす／戻すの視線移動の大きさ（lookAt の入力の度）。瞬きの確率に使う。 */
+  const gazeShiftDeg = Math.hypot(DEFAULT_GAZE.awayEyeYawDeg, DEFAULT_GAZE.awayEyePitchDeg);
 
   const gazeReporter = new GazeReporter((report) => options.onGazeReport?.(report));
 
   const sign = boneSignForMeta(vrm.meta.metaVersion);
   const applyPose = (dtMs: number, nowMs: number) => {
+    blinkScheduler.speaking = expression.features.speaking > 0.5;
     const frame = stack.step({ dtMs, nowMs });
     for (const [name, offset] of frame.bones) {
       humanoid.getNormalizedBoneNode(name as VRMHumanBoneName)?.rotation.set(offset.x * sign.x, offset.y * sign.y, offset.z * sign.z);
@@ -169,7 +217,15 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
     lookAt.yaw = baseYaw * frame.eye.userWeight + frame.eye.yawDeg;
     lookAt.pitch = basePitch * frame.eye.userWeight + frame.eye.pitchDeg;
     for (const [name, weight] of frame.expressions) expressionManager.setValue(name, weight);
-    vrm.update(Math.min(dtMs, MAX_SPRING_DT_MS) / 1000);
+    if (settings.springBones) {
+      vrm.update(Math.min(dtMs, MAX_SPRING_DT_MS) / 1000);
+    } else {
+      // vrm.update から spring bone だけを除いたもの（切り分け用）。
+      humanoid.update();
+      lookAt.update(dtMs / 1000);
+      expressionManager.update();
+      vrm.nodeConstraintManager?.update();
+    }
   };
 
   // 最初の姿勢を当ててからカメラを置き、髪の揺れを新しい姿勢で初期化する。
@@ -181,8 +237,10 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   const eyePosition = new THREE.Vector3();
   const placeCamera = (framing: Framing) => {
     lookAt.getLookAtWorldPosition(eyePosition);
-    const distance = framing === 'face' ? 1.1 : 1.9;
-    const lookDownBy = framing === 'face' ? 0.02 : 0.12;
+    // bust は参加者画面の既定。ビデオ通話くらいの距離（頭から胸まで）で、カメラは目の高さ（目線が合う）。
+    // 縦の画角 20 度、距離 1.6m で約 0.56m が写る。目が上から約 36% の高さに来るよう少し下を向ける。
+    const distance = framing === 'face' ? 1.1 : 1.6;
+    const lookDownBy = framing === 'face' ? 0.02 : 0.08;
     camera.position.set(eyePosition.x, eyePosition.y, eyePosition.z + distance);
     camera.lookAt(eyePosition.x, eyePosition.y - lookDownBy, eyePosition.z);
     camera.updateMatrixWorld();
@@ -244,16 +302,22 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
 
   return {
     mouth,
-    setMouthLevel: (rms) => mouth.setLevel(rms),
-    pushPcm: (samples) => mouth.pushPcm(samples),
+    lipSync,
+    setMouthLevel: (rms) => lipSync.setLevel(rms),
+    pushPcm: (samples) => lipSync.setLevel(computeRms(samples)),
     closeMouth: () => {
-      mouth.closeNow();
+      lipSync.closeNow();
     },
+    onPlaybackAlignment: (message) => lipSync.addAlignment(message),
+    onPlaybackReport: (message) => lipSync.onPlaybackReport(message),
     setMouthSource: (source) => {
-      mouthLayer.source = source ?? mouth;
+      mouthLayer.source = source ?? lipSync;
     },
     setGaze: (target) => {
-      if (gazeController.setTarget(target)) gazeReporter.commanded(target, !document.hidden);
+      if (gazeController.setTarget(target)) {
+        gazeReporter.commanded(target, !document.hidden);
+        blinkScheduler.onGazeShift(gazeShiftDeg);
+      }
     },
     triggerBlink: () => blinkScheduler.trigger(),
     setAutoBlink: (enabled) => {
@@ -261,6 +325,12 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
     },
     setIdleIntensity: (intensity) => {
       idle.intensity = intensity;
+    },
+    setSaccades: (enabled) => {
+      saccades.enabled = enabled;
+    },
+    setExpressionIntensity: (intensity) => {
+      expression.intensity = intensity;
     },
     setFraming: placeCamera,
     addLayer: (layer, position) => stack.add(layer, position ?? null),
@@ -277,8 +347,12 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
           open: mouthOpenAmount(mouthLayer.shape),
           shape: { ...mouthLayer.shape },
           appliedAa: expressionManager.getValue('aa') ?? 0,
+          mode: lipSync.mode,
+          playbackPositionMs: lipSync.playbackPositionMs(),
         },
-        blink: { weight: blinkLayer.weight, count: blinkScheduler.count },
+        blink: { weight: blinkLayer.weight, count: blinkScheduler.count, gazeCount: blinkScheduler.gazeCount },
+        saccade: { count: saccades.count, yawDeg: saccades.current.yawDeg, pitchDeg: saccades.current.pitchDeg },
+        speech: { ...expression.features },
         gaze: {
           target: g.target,
           awayAmount: g.awayAmount,
@@ -312,6 +386,87 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
       renderer.domElement.remove();
     },
   };
+}
+
+/**
+ * プリセットに無い表情をモーフから足す。今は眉上げ（VRoid の Fcl_BRW_Surprised）だけ。
+ * 無いモデルでは登録せず、層が書いた値は expressionManager が無視する。
+ */
+const MORPH_EXPRESSIONS: { name: string; morphSuffix: string }[] = [{ name: 'browUp', morphSuffix: 'Fcl_BRW_Surprised' }];
+
+function registerMorphExpressions(vrm: VRM): void {
+  const manager = vrm.expressionManager;
+  if (!manager) return;
+  for (const { name, morphSuffix } of MORPH_EXPRESSIONS) {
+    if (manager.getExpression(name)) continue;
+    const binds = new Map<number, THREE.Mesh[]>();
+    vrm.scene.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.morphTargetDictionary) return;
+      for (const [morphName, index] of Object.entries(mesh.morphTargetDictionary)) {
+        if (!morphName.endsWith(morphSuffix)) continue;
+        binds.set(index, [...(binds.get(index) ?? []), mesh]);
+      }
+    });
+    if (binds.size === 0) continue;
+    const expression = new VRMExpression(name);
+    for (const [index, primitives] of binds) expression.addBind(new VRMExpressionMorphTargetBind({ primitives, index, weight: 1 }));
+    vrm.scene.add(expression);
+    manager.registerExpression(expression);
+  }
+}
+
+/** MToon の加算マットキャップを材質の種類ごとに弱める。 */
+function prepareMaterials(vrm: VRM, settings: RenderSettings): void {
+  const scaled = new Set<THREE.Color>();
+  forEachMaterial(vrm, (material) => {
+    const mtoon = material as THREE.Material & { matcapFactor?: THREE.Color; matcapTexture?: THREE.Texture | null };
+    const factor = mtoon.matcapFactor;
+    // 輪郭線の材質（名前に " (Outline)"）と色の値を共有していても2回掛けない。
+    if (!(factor instanceof THREE.Color) || !mtoon.matcapTexture || scaled.has(factor)) return;
+    scaled.add(factor);
+    factor.multiplyScalar(matcapScaleFor(material.name, settings));
+  });
+}
+
+/**
+ * glTF のサンプラーが minFilter=LINEAR（ミップマップなし）なので、縮小表示で髪の筋やまつげがちらつく。
+ * 不透明な髪・肌・服のテクスチャにミップマップと異方性フィルタを付ける（mipmapAllowed）。
+ * マットキャップは法線で引くので触らない。
+ */
+function applyTextureFiltering(vrm: VRM, settings: RenderSettings, maxAnisotropy: number): void {
+  if (!settings.mipmaps) return;
+  const seen = new Set<THREE.Texture>();
+  forEachMaterial(vrm, (material) => {
+    if (!mipmapAllowed(material.name, material.transparent)) return;
+    const uniforms = (material as THREE.ShaderMaterial).uniforms ?? {};
+    const candidates: [string, unknown][] = [
+      ...Object.entries(material),
+      ...Object.entries(uniforms).map(([name, uniform]) => [name, (uniform as { value: unknown }).value] as [string, unknown]),
+    ];
+    for (const [key, value] of candidates) {
+      if (!(value instanceof THREE.Texture) || seen.has(value) || key === 'matcapTexture') continue;
+      seen.add(value);
+      value.generateMipmaps = true;
+      value.minFilter = THREE.LinearMipmapLinearFilter;
+      value.anisotropy = Math.max(1, Math.min(settings.anisotropy, maxAnisotropy));
+      value.needsUpdate = true;
+    }
+  });
+}
+
+function forEachMaterial(vrm: VRM, visit: (material: THREE.Material) => void): void {
+  const seen = new Set<THREE.Material>();
+  vrm.scene.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) {
+      if (seen.has(material)) continue;
+      seen.add(material);
+      visit(material);
+    }
+  });
 }
 
 async function loadGltf(options: AvatarOptions) {

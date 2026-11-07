@@ -17,8 +17,8 @@ describe('ResearchDashboard', () => {
     const html = render(store);
     expect(html).toContain('data-testid="fake-banner"');
     expect(html).toContain('偽データの表示です');
-    // 接続、プロバイダ、現在の状態、費用、遅延の 5 つの見出しすべて
-    expect(html.match(/偽データ<\/span>/g)).toHaveLength(5);
+    // I1 の 5 つ（接続、プロバイダ、現在の状態、費用、遅延）と I2 の 4 つ（p の時系列、候補、率、メモ）の見出しすべて
+    expect(html.match(/偽データ<\/span>/g)).toHaveLength(9);
   });
 
   it('実データの口では偽データと表示しない', () => {

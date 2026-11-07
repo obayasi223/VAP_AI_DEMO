@@ -20386,6 +20386,7 @@ var CLOCK_BURST = 6;
 var CLOCK_BURST_INTERVAL_MS = 100;
 var RECONNECT_MIN_MS = 250;
 var RECONNECT_MAX_MS = 5e3;
+var SESSION_OPEN_ELSEWHERE_CODE = 4e3;
 var init = null;
 var worklet = null;
 var socket = null;
@@ -20796,6 +20797,11 @@ function connect() {
     inputs.clear();
     toWorklet({ t: "input_lost" });
     if (shuttingDown) return;
+    if (event.code === SESSION_OPEN_ELSEWHERE_CODE) {
+      shuttingDown = true;
+      setLink("closed", `code=${event.code} session_open_elsewhere`);
+      return;
+    }
     counters.reconnects++;
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);

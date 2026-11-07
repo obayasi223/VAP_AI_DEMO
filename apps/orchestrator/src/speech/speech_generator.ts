@@ -44,6 +44,13 @@ const MAX_ACTIVE_CONTEXTS = 4;
 const MAX_SAMPLES_PER_FRAME = 4800;
 const SENTENCE_END = /[。！？!?\n]/;
 const DEFAULT_FADE_MS = 30;
+/**
+ * ブラウザの報告を待つ上限【暫定】。方策に項目がないのでコードで持つ。接続中の時間だけで数える（session が呼ぶ）。
+ *  - 開始: start から playback.started まで。下りの begin が届かなかった（送信の直後に切れた）場合に備える。
+ *  - 停止: stop から playback.ended まで。停止の猶予（max_wait_ms）に足す。
+ *  - 再接続後: 届いた分を流し切るまで（合成済みの長さ − 書き込み済み）に足す。
+ */
+export const REPORT_TIMEOUTS_MS = { start: 3000, stop: 2000, after_reattach: 3000 } as const;
 const SAMPLES_PER_MS = SAMPLE_RATE_HZ / 1000;
 
 /** ブラウザへの下り。J が PCM 枠と JSON に変換する。投げた例外はその音声の失敗として扱う。 */
@@ -128,6 +135,13 @@ interface Entry {
   /** TtsChunk.estimated_alignment の時間軸。語時刻の送信にだけ使い、停止点と発話済みの計算には使わない。 */
   estimatedTimeline: AlignmentTimeline;
   textSent: string;
+  /**
+   * 合成済みの音声に対応する文字数（chunk の alignment か estimated_alignment の chars の合計）。
+   * TTS へ送った文の全部が合成済みとは限らない（Gemini は flush ごとに1要求で、次の文はまだ音声がない）。
+   */
+  synthesizedChars: number;
+  /** 合成の途中で続きが来なくなった（文脈の喪失、TTS の down）。textSent の全部は合成されていない。 */
+  synthLost: boolean;
   playGeneration: number | null;
   nextFrameSeq: number;
   pendingWords: { text: string; start_ms: number; end_ms: number; granularity: 'word' }[];
@@ -137,6 +151,8 @@ interface Entry {
   startedAudioFrame: number | null;
   outputLatencyMs: number | null;
   plannedStop: PlannedStop | null;
+  /** ブラウザの次の報告の期限（orchestrator 時刻）。過ぎたら session が終わりを代行する。null は期限なし。 */
+  reportDeadline: number | null;
 }
 
 const TERMINAL: ReadonlySet<SpeechState> = new Set(['finished', 'cancelled', 'failed']);
@@ -220,6 +236,8 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
       timeline: new AlignmentTimeline(),
       estimatedTimeline: new AlignmentTimeline(),
       textSent: '',
+      synthesizedChars: 0,
+      synthLost: false,
       playGeneration: null,
       nextFrameSeq: 0,
       pendingWords: [],
@@ -229,6 +247,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
       startedAudioFrame: null,
       outputLatencyMs: null,
       plannedStop: null,
+      reportDeadline: null,
     };
     this.entries.set(entry.id, entry);
     // 呼び出し側が ID を受け取ってから動かす（状態の通知の順序を保つ）。
@@ -347,6 +366,8 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     if (chunk.pcm.length > 0 || entry.sampleRate === null) entry.sampleRate = chunk.sample_rate_hz;
 
     if (chunk.alignment.value === null && chunk.pcm.length > 0) this.counters.alignment_gaps += 1;
+    const chars = chunk.alignment.value?.chars ?? chunk.estimated_alignment?.chars;
+    if (chars) entry.synthesizedChars += [...chars.join('')].length;
     entry.timeline.addChunk({
       sample_rate_hz: chunk.sample_rate_hz,
       samples: chunk.pcm.length,
@@ -431,6 +452,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
       }
     }
     entry.playGeneration = this.sessionGeneration;
+    entry.reportDeadline = this.options.time.monotonicMs() + REPORT_TIMEOUTS_MS.start;
     this.setState(entry, 'playing', null);
     try {
       this.options.sink.begin({
@@ -578,6 +600,8 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
 
     this.teardown(entry, reason);
     this.setState(entry, 'stopping', reason);
+    entry.reportDeadline =
+      this.options.time.monotonicMs() + (immediate ? 0 : options.max_wait_ms) + REPORT_TIMEOUTS_MS.stop;
     this.sessionGeneration += 1;
     this.options.sink.stop({
       audio_playback_id: entry.id,
@@ -631,6 +655,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
       entry.abort.abort();
       entry.contextOpen = false;
       entry.synthComplete = true;
+      entry.synthLost = true;
       entry.pendingWords.push(...entry.timeline.confirm(true).map((word) => ({ ...word, granularity: 'word' as const })));
       entry.pendingEstimatedWords.push(
         ...entry.estimatedTimeline.confirm(true).map((word) => ({ ...word, granularity: 'word' as const })),
@@ -682,6 +707,8 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     if (!entry || entry.firstWrittenAt !== null) return;
     entry.firstWrittenAt = t_ms;
     entry.startedAudioFrame = message.audio_frame;
+    // 再生が始まった。止めるまでは期限を置かない（長い発話でも代行しない）。
+    if (entry.state === 'playing') entry.reportDeadline = null;
     entry.outputLatencyMs = message.output_latency_ms.value;
     entry.position = { written_ms: 0, at_ms: t_ms };
     this.options.emitter.emit({
@@ -778,10 +805,84 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
         precision: 'alignment_char',
       };
     }
+    // 比例配分は合成済みの音声に対応する文に限る。最後まで再生した（completed）ときも、合成済みの範囲が上限。
+    const synthesized = this.synthesizedText(entry);
     return {
-      text: completed ? entry.textSent : proportionalText(entry.textSent, heardMs, entry.timeline.duration_ms),
+      text: completed ? synthesized : proportionalText(synthesized, heardMs, entry.timeline.duration_ms),
       precision: 'time_proportional',
     };
+  }
+
+  /**
+   * 合成済みの音声に対応する文。合成が正常に終わっていれば送った全文。
+   * 途中なら chunk の chars の数だけ先頭から取る。chars のない音声 chunk があると、その分は数えられないので
+   * 少なめになる（話していない内容を履歴へ入れない側に倒す）。
+   */
+  private synthesizedText(entry: Entry): string {
+    if (entry.synthComplete && !entry.synthLost) return entry.textSent;
+    return [...entry.textSent].slice(0, entry.synthesizedChars).join('');
+  }
+
+  // ---- ブラウザの報告が来ないとき（J が呼ぶ） ------------------------------------
+
+  /** 再生中または停止中の音声。start の可否の判断（TurnInputs.start_blocked_reason）に使う。 */
+  activePlayback(): number | null {
+    for (const entry of this.entries.values()) {
+      if (entry.state === 'playing' || entry.state === 'stopping') return entry.id;
+    }
+    return null;
+  }
+
+  /**
+   * 再接続した。切断の間に止まった期限を数え直す。ブラウザは受け取った PCM を流し切ってから
+   * playback.ended を送るので、合成済みの長さから書き込み済みを引いた分を待つ。
+   */
+  rearmReportDeadlines(): void {
+    const now = this.options.time.monotonicMs();
+    for (const entry of this.entries.values()) {
+      if (entry.state !== 'playing' && entry.state !== 'stopping') continue;
+      const remaining = Math.max(0, entry.timeline.duration_ms - (entry.position?.written_ms ?? 0));
+      entry.reportDeadline = now + remaining + REPORT_TIMEOUTS_MS.after_reattach;
+    }
+  }
+
+  /** 期限を過ぎても報告のない音声の終わりを代行する。代行した ID を返す。 */
+  expireOverdueReports(audio_frame: number): number[] {
+    const now = this.options.time.monotonicMs();
+    const overdue = [...this.entries.values()].filter(
+      (entry) =>
+        (entry.state === 'playing' || entry.state === 'stopping') && entry.reportDeadline !== null && entry.reportDeadline <= now,
+    );
+    for (const entry of overdue) this.endOnBehalf(entry, 'browser_report_timeout', audio_frame, now);
+    return overdue.map((entry) => entry.id);
+  }
+
+  /**
+   * ブラウザが報告できなくなった（セッションを閉じる、再接続の猶予が切れた）。再生中と停止中の音声を、
+   * 最後に報告された書き込み位置で終わったものとして扱う（発話済みの部分だけが履歴に入る）。代行した ID を返す。
+   */
+  endActiveOnBehalf(reason: string, audio_frame: number): number[] {
+    const now = this.options.time.monotonicMs();
+    const active = [...this.entries.values()].filter((entry) => entry.state === 'playing' || entry.state === 'stopping');
+    for (const entry of active) this.endOnBehalf(entry, reason, audio_frame, now);
+    return active.map((entry) => entry.id);
+  }
+
+  private endOnBehalf(entry: Entry, reason: string, audio_frame: number, now: number): void {
+    this.handlePlaybackEnded(
+      {
+        type: 'playback.ended',
+        audio_playback_id: entry.id,
+        generation: this.sessionGeneration,
+        reason: 'error',
+        samples_written: Math.round((entry.position?.written_ms ?? 0) * SAMPLES_PER_MS),
+        samples_discarded: 0,
+        audio_frame,
+        client_t_ms: 0,
+        output_latency_ms: absent(reason),
+      },
+      now,
+    );
   }
 
   dispose(): void {

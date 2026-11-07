@@ -46,7 +46,14 @@ export interface LogCheckReport {
   absent_events: ResearchEventName[];
   t_monotonic_ms_range: { min: number; max: number } | null;
   wall_clock_range: { first: string; last: string } | null;
-  manifest: { found: boolean; closed: boolean | null; stats: Record<string, unknown> | null };
+  manifest: {
+    found: boolean;
+    closed: boolean | null;
+    stats: Record<string, unknown> | null;
+    condition: string | null;
+    policy_id: string | null;
+    providers: Record<string, { provider?: string; provider_class?: string; reason?: string | null }> | null;
+  };
   /** production 以外のプロバイダがあるか、プロバイダの状態がなければ受け入れの証拠に数えない（計画 §4.8）。 */
   acceptance_evidence: { eligible: boolean; reasons: string[] };
   providers: { provider: string; provider_class: string; last_status: string }[];
@@ -202,6 +209,9 @@ export async function checkLog(input: string, options: CheckOptions = {}): Promi
     closed?: boolean;
     close_error?: string | null;
     stats?: Record<string, unknown>;
+    condition?: string;
+    policy_id?: string;
+    providers?: Record<string, { provider?: string; provider_class?: string; reason?: string | null }>;
   } | null;
   if (!manifestFile.found) warnings.push('manifest.json がない');
   else if (manifestFile.error !== null) failures.push(`manifest.json が読めない: ${manifestFile.error}`);
@@ -248,6 +258,21 @@ export async function checkLog(input: string, options: CheckOptions = {}): Promi
   }
   const evidenceReasons: string[] = [];
   if (providers.size === 0) evidenceReasons.push('provider.status がない');
+  // manifest のプロバイダの区分は必ず見る（台本のプロバイダは自分で provider.status を出さないことがある）。
+  const manifestProviders = manifest?.providers;
+  if (manifest === null || manifestProviders === undefined || Object.keys(manifestProviders).length === 0) {
+    evidenceReasons.push('manifest にプロバイダの区分がない');
+  } else {
+    for (const [kind, row] of Object.entries(manifestProviders)) {
+      if (row.provider_class !== 'production') {
+        evidenceReasons.push(`manifest の ${kind}（${row.provider ?? '?'}）は ${row.provider_class ?? '不明'}${row.reason ? `: ${row.reason}` : ''}`);
+      }
+      if (row.provider_class === 'production' && row.provider !== undefined && kind !== 'completion' && !providers.has(row.provider)) {
+        evidenceReasons.push(`manifest の ${kind}（${row.provider}）の provider.status がない`);
+      }
+    }
+  }
+  if (manifest !== null && manifest.condition === undefined) evidenceReasons.push('manifest に条件がない');
   for (const row of providers.values()) {
     if (row.provider_class !== 'production') evidenceReasons.push(`${row.provider} は ${row.provider_class}`);
   }
@@ -318,6 +343,9 @@ export async function checkLog(input: string, options: CheckOptions = {}): Promi
       found: manifestFile.found,
       closed: manifest?.closed ?? null,
       stats: manifest?.stats ?? null,
+      condition: manifest?.condition ?? null,
+      policy_id: manifest?.policy_id ?? null,
+      providers: manifest?.providers ?? null,
     },
     acceptance_evidence: { eligible: evidenceReasons.length === 0, reasons: evidenceReasons },
     providers: [...providers.values()],

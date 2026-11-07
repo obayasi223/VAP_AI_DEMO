@@ -6,6 +6,7 @@ export * from './common';
 export * from './vap';
 export * from './maai_rpc';
 export * from './browser_rpc';
+export * from './research_rpc';
 export * from './policy';
 export * from './candidates';
 export * from './turn';

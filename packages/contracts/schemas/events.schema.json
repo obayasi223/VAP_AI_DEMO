@@ -4266,6 +4266,399 @@
         },
         "event": {
           "type": "string",
+          "const": "candidate.rejected"
+        },
+        "candidate_id": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "null_reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value",
+                "null_reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "candidate_version": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "null_reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value",
+                "null_reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "model_decision",
+            "code"
+          ]
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "NEW",
+            "KEEP",
+            "REVISE",
+            "WITHDRAW",
+            "transition",
+            "speech_start",
+            "held"
+          ]
+        },
+        "current_state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "INTENT_READY",
+                "BREATH_INHALE",
+                "BREATH_HOLD_OR_READY",
+                "DEFERRED",
+                "SPEAKING",
+                "SPOKEN",
+                "WITHDRAWN"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requested_state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "INTENT_READY",
+                "BREATH_INHALE",
+                "BREATH_HOLD_OR_READY",
+                "DEFERRED",
+                "SPEAKING",
+                "SPOKEN",
+                "WITHDRAWN"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "signal_gate_allowed",
+                "inhale_completed",
+                "user_continued",
+                "turn_allowed",
+                "invitation",
+                "expired",
+                "evidence_lost",
+                "stale_result",
+                "active_candidate_exists",
+                "signal_cooldown",
+                "normal_response_started",
+                "speech_finished",
+                "speech_interrupted",
+                "woz"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "null_reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value",
+                "null_reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "unknown_candidate",
+            "version_mismatch",
+            "stale_transcript_revision",
+            "stale_segment",
+            "invalid_transition",
+            "cause_not_allowed",
+            "state_not_applicable",
+            "evidence_invalid",
+            "withdraw_evidence_invalid",
+            "proposed_utterance_empty",
+            "post_turn_new_held",
+            "held_dropped",
+            "speech_start_refused"
+          ]
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "held": {
+          "type": "boolean"
+        },
+        "input_transcript_revision": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "null_reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value",
+                "null_reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "applied_transcript_revision": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "null_reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value",
+                "null_reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "t_monotonic_ms",
+        "wall_clock",
+        "session_id",
+        "condition",
+        "time_basis",
+        "event",
+        "candidate_id",
+        "candidate_version",
+        "source",
+        "operation",
+        "current_state",
+        "requested_state",
+        "cause",
+        "request_id",
+        "reason",
+        "details",
+        "held",
+        "input_transcript_revision",
+        "applied_transcript_revision"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "number",
+          "const": 1
+        },
+        "t_monotonic_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "wall_clock": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {
+          "type": "string",
+          "enum": [
+            "reactive",
+            "initiative_no_cue",
+            "initiative_inhale"
+          ]
+        },
+        "time_basis": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "orchestrator",
+                "browser_rtt",
+                "worker_audio_frame"
+              ]
+            },
+            "uncertainty_ms": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "uncertainty_ms"
+          ],
+          "additionalProperties": false
+        },
+        "event": {
+          "type": "string",
           "const": "signal.sent"
         },
         "candidate_id": {
@@ -8628,6 +9021,119 @@
           "additionalProperties": false
         }
       ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "number",
+          "const": 1
+        },
+        "t_monotonic_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "wall_clock": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {
+          "type": "string",
+          "enum": [
+            "reactive",
+            "initiative_no_cue",
+            "initiative_inhale"
+          ]
+        },
+        "time_basis": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "orchestrator",
+                "browser_rtt",
+                "worker_audio_frame"
+              ]
+            },
+            "uncertainty_ms": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "uncertainty_ms"
+          ],
+          "additionalProperties": false
+        },
+        "event": {
+          "type": "string",
+          "const": "research.note"
+        },
+        "note_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "client_wall_clock": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+        }
+      },
+      "required": [
+        "schema_version",
+        "t_monotonic_ms",
+        "wall_clock",
+        "session_id",
+        "condition",
+        "time_basis",
+        "event",
+        "note_id",
+        "text",
+        "client_wall_clock"
+      ],
+      "additionalProperties": false
     }
   ],
   "$defs": {

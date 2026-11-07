@@ -658,6 +658,37 @@ describe('SpeechGenerator: 再生と語境界の停止', () => {
     expect(r.speech.stats().alignment_gaps).toBe(1);
   });
 
+  it('alignment がないとき、比例配分は合成済みの文に限る（2文目の合成前の割り込み）', async () => {
+    // Gemini TTS の形: 文ごとに1要求、alignment なし、推定の chars だけ付く。
+    const r = await rig({ ready_ms: 100 });
+    const { audio_playback_id: id, generation } = r.speech.prepare(candidate(1, 'はい。そうです。'));
+    await flush();
+    r.tts.emitChunk(
+      chunkFor(id, generation, { seq: 1000, alignment: absent('provider_has_no_alignment'), estimated_alignment: estimate(['は', 'い', '。'], 300) }),
+    );
+    expect(r.speech.startChecked(id, EXPECT_V1).ok).toBe(true);
+    r.speech.handlePlaybackStarted(started(id, generation), 1);
+    r.speech.stop(id, 'x', { stop_point: 'immediate', max_wait_ms: 0, decision_source: 'vap' });
+    // 合成済み 1 秒のうち 0.9 秒。送った全文（8文字）で配分すると「はい。そうです」になる。
+    r.speech.handlePlaybackEnded(ended(id, generation + 1, 'stopped', 14400), 2);
+    expect(r.finished[0]).toMatchObject({ spoken_text: 'はい', spoken_text_precision: 'time_proportional' });
+  });
+
+  it('合成の途中で文脈を失って最後まで再生しても（completed）、合成済みの範囲までしか話していない', async () => {
+    const r = await rig({ ready_ms: 100 });
+    const { audio_playback_id: id, generation } = r.speech.prepare(candidate(1, 'はい。そうです。'));
+    await flush();
+    r.tts.emitChunk(
+      chunkFor(id, generation, { seq: 1000, alignment: absent('provider_has_no_alignment'), estimated_alignment: estimate(['は', 'い', '。'], 300) }),
+    );
+    expect(r.speech.startChecked(id, EXPECT_V1).ok).toBe(true);
+    r.speech.handlePlaybackStarted(started(id, generation), 1);
+    r.tts.deliverStatus('down', 'socket closed');
+    expect(r.sink.frames.at(-1)?.end_of_stream).toBe(true);
+    r.speech.handlePlaybackEnded(ended(id, generation, 'completed', 16000), 2);
+    expect(r.finished[0]?.spoken_text).toBe('はい。');
+  });
+
   it('再生前に捨てられたら発話イベントなしで空の発話済み', async () => {
     const r = await rig();
     const { audio_playback_id: id } = r.speech.prepare(candidate(1));

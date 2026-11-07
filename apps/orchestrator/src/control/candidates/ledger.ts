@@ -1,0 +1,828 @@
+/**
+ * 候補の状態の正本と ID・版の採番（計画 §4.5 の責任の分離、§5 E2a）。
+ *
+ * - want_to_speak の正本だけを持つ。permitted_to_speak（E1 の turn_allowed）と speaking（D の再生）は持たず、
+ *   SPEAKING へ入る原因は呼び手が判断した結果として受け取る。
+ * - candidate_id と版はここで振る。LLM には生成させない。
+ * - 不正な遷移、遅れて届いた判定、照合できない根拠は拒否し、candidate.rejected に理由を残す。
+ * - 版が変わったら、前の版の未再生の PCM を D の discardCandidate で棄てる。再生の開始は D の startChecked で
+ *   版と PCM の一致を確かめる。
+ * - モデルの説明文は記録するだけで判定に使わない（追補1）。
+ */
+import { CandidateConflictError, absent, present, verified } from '@llm-vap/contracts';
+import type {
+  CandidateCause,
+  CandidateContentPatch,
+  CandidateRecord,
+  CandidateRef,
+  CandidateRegistration,
+  CandidateState,
+  CandidateStore,
+  EventEmitter,
+  SpeechGenerator,
+} from '@llm-vap/contracts';
+import { evidenceStillStable, verifyEvidence, verifyWithdrawEvidence } from './evidence';
+import {
+  DEFAULT_TRANSITION_OPTIONS,
+  MODEL_APPLICABLE_STATES,
+  TERMINAL_STATES,
+  WITHDRAWABLE_STATES,
+  checkTransition,
+  transitionTable,
+} from './transitions';
+import type { TransitionOptions } from './transitions';
+import type {
+  AsrSegmentSnapshot,
+  CandidateContent,
+  CandidateModelNotes,
+  CandidateWant,
+  DecisionResult,
+  HeldDecision,
+  LedgerRecord,
+  ModelDecision,
+  Rejection,
+  RejectionReason,
+  SpeechStartResult,
+  TransitionResult,
+} from './types';
+
+/** D の SpeechGeneratorImpl のうち E2a が使う2つ。どちらも契約では省略可能なので、ここで必須にする。 */
+export type CandidateSpeechPort = Required<Pick<SpeechGenerator, 'startChecked' | 'discardCandidate'>>;
+
+export interface CandidateLedgerSettings {
+  /** policy.initiative.max_active_candidates。 */
+  max_active_candidates: number;
+  /** policy.initiative.candidate_expiry_ms。null（未校正）は時間での期限なし。 */
+  candidate_expiry_ms: number | null;
+  /**
+   * policy.initiative.candidate_expires_on_segment_change。
+   * null（未校正）は true として扱う（安全側。AI が話し始めた後に前のターンの候補を残さない）。
+   */
+  candidate_expires_on_segment_change: boolean | null;
+  /** 人が話し終えたとみなす無音の長さ。J は turn の MIN_GAP_TIME_MS を渡す（AI がそれより前に話し始めないため）。 */
+  post_turn_silence_ms: number;
+  /** DEFERRED からの再合図。既定は無効（計画 §4.6）。 */
+  allow_recue?: boolean;
+}
+
+export interface CandidateLedgerDeps {
+  emitter: EventEmitter;
+  /** 最新の安定テキスト。G の StableTranscriptView.snapshot() を渡す。 */
+  stable: () => readonly AsrSegmentSnapshot[];
+  speech: CandidateSpeechPort;
+  settings: CandidateLedgerSettings;
+}
+
+const CODE = 'code_transition';
+
+export class CandidateLedger {
+  private readonly records = new Map<string, LedgerRecord>();
+  private readonly transitionOptions: TransitionOptions;
+  private counter = 0;
+  private appliedRevision: number | null = null;
+  private currentSegment = 0;
+  private floor: { user_speaking: boolean; since: number } | null = null;
+  private held: HeldDecision | null = null;
+
+  constructor(private readonly deps: CandidateLedgerDeps) {
+    this.transitionOptions = { ...DEFAULT_TRANSITION_OPTIONS, allow_recue: deps.settings.allow_recue ?? false };
+    if (deps.settings.max_active_candidates < 1) throw new Error('max_active_candidates must be >= 1');
+  }
+
+  // ---- 読み出し --------------------------------------------------------------
+
+  get(candidate_id: string): CandidateRecord | null {
+    const record = this.records.get(candidate_id);
+    return record ? toContract(record) : null;
+  }
+
+  /** 記録の全体（説明文と時刻を含む）。研究者画面とログの確認用。 */
+  getRecord(candidate_id: string): LedgerRecord | null {
+    const record = this.records.get(candidate_id);
+    return record ? structuredClone(record) : null;
+  }
+
+  /** 既定は未解決（SPOKEN、WITHDRAWN 以外）のみ。保留中の NEW は入らない。 */
+  list(options?: { include_resolved?: boolean }): readonly CandidateRecord[] {
+    return [...this.records.values()]
+      .filter((r) => options?.include_resolved || !TERMINAL_STATES.includes(r.state))
+      .map(toContract);
+  }
+
+  /** want_to_speak。最も早く決まった未解決の候補。 */
+  want(): CandidateWant {
+    const active = [...this.records.values()]
+      .filter((r) => !TERMINAL_STATES.includes(r.state))
+      .sort((a, b) => a.timeline.decided_at - b.timeline.decided_at)[0];
+    if (!active) return { kind: 'none' };
+    return {
+      kind: 'candidate',
+      candidate_id: active.candidate_id,
+      candidate_version: active.candidate_version,
+      state: active.state,
+    };
+  }
+
+  heldPostTurn(): HeldDecision | null {
+    return this.held ? structuredClone(this.held) : null;
+  }
+
+  appliedTranscriptRevision(): number | null {
+    return this.appliedRevision;
+  }
+
+  segmentId(): number {
+    return this.currentSegment;
+  }
+
+  /** 遷移表の全経路（設定の allow_recue を反映）。 */
+  transitions() {
+    return transitionTable(this.transitionOptions);
+  }
+
+  // ---- モデルの判定（G から） ------------------------------------------------
+
+  /**
+   * G の判定を適用する。NONE も渡す（判定の順序の基準になる）。
+   * NEW は成功すると採番した ref を返す。G は initiative.decision をこの戻り値で emit する（採番の後）。
+   */
+  applyModelDecision(d: ModelDecision): DecisionResult {
+    if (d.segment_id < this.currentSegment) {
+      return this.rejectModel(d, 'stale_segment', [`input_segment=${d.segment_id}`, `current=${this.currentSegment}`]);
+    }
+    if (d.segment_id > this.currentSegment) this.onSegmentChanged(d.segment_id, d.received_at);
+    if (this.appliedRevision !== null && d.transcript_revision < this.appliedRevision) {
+      return this.rejectModel(d, 'stale_transcript_revision', []);
+    }
+    switch (d.decision) {
+      case 'NONE':
+        this.markApplied(d.transcript_revision);
+        return okResult('NONE', null, null, null);
+      case 'NEW':
+        return this.applyNew(d, false);
+      case 'KEEP':
+        return this.applyKeep(d);
+      case 'REVISE':
+        return this.applyRevise(d);
+      case 'WITHDRAW':
+        return this.applyWithdraw(d);
+    }
+  }
+
+  private applyNew(d: Extract<ModelDecision, { decision: 'NEW' }>, promoted: boolean): DecisionResult {
+    const content = this.verifyContent(d, d.content);
+    if (!content.ok) return content.rejection;
+
+    const active = [...this.records.values()].filter((r) => !TERMINAL_STATES.includes(r.state));
+    if (active.length >= this.deps.settings.max_active_candidates) {
+      // 登録と同時に棄却する。番号は振り、candidate.state_changed（from=null）に残す（契約の取り決め）。
+      const record = this.createRecord(d, content.segment_ids, 'WITHDRAWN');
+      record.withdraw = { source: 'code', cause: 'active_candidate_exists' };
+      record.timeline.resolved_at = d.received_at;
+      this.emitCodeChange(record, null, 'active_candidate_exists');
+      return {
+        ok: false,
+        reason: 'active_candidate_exists',
+        details: active.map((r) => r.candidate_id),
+        held: false,
+        ref: refOf(record),
+      };
+    }
+
+    if (!promoted && this.isPostTurn(d.received_at)) {
+      if (this.held) this.dropHeld(d.received_at, 'replaced_by_newer');
+      this.held = { decision: structuredClone(d), held_at: d.received_at, evidence_segment_ids: content.segment_ids };
+      return this.rejectModel(d, 'post_turn_new_held', [`silent_since=${this.floor?.since}`], { held: true });
+    }
+
+    const record = this.createRecord(d, content.segment_ids, 'INTENT_READY');
+    this.markApplied(d.transcript_revision);
+    this.emitModelChange(record, null, 'NEW', d.request_id);
+    return okResult('NEW', record, null, 'INTENT_READY', verified(content.segment_ids, EVIDENCE_METHOD));
+  }
+
+  private applyKeep(d: Extract<ModelDecision, { decision: 'KEEP' }>): DecisionResult {
+    const target = this.resolveTarget(d, d.target);
+    if (!target.ok) return target.rejection;
+    const record = target.record;
+    this.markApplied(d.transcript_revision);
+    record.last_request_id = d.request_id;
+    record.last_model_revision = d.transcript_revision;
+    record.received_at = d.received_at;
+    const from = record.state;
+    // KEEP でも根拠が今も安定テキストにあるかはコードで確かめる。消えていればコード由来で撤回する。
+    if (!evidenceStillStable(record.evidence_span, this.deps.stable())) {
+      this.withdrawByCode(record, 'evidence_lost', d.received_at);
+      return okResult('KEEP', record, from, 'WITHDRAWN');
+    }
+    return okResult('KEEP', record, from, from);
+  }
+
+  private applyRevise(d: Extract<ModelDecision, { decision: 'REVISE' }>): DecisionResult {
+    const target = this.resolveTarget(d, d.target);
+    if (!target.ok) return target.rejection;
+    const content = this.verifyContent(d, d.content, target.record);
+    if (!content.ok) return content.rejection;
+    const record = target.record;
+    const from = record.state;
+    record.candidate_version += 1;
+    record.transcript_revision = d.transcript_revision;
+    record.intent_type = d.content.intent_type;
+    record.evidence_span = d.content.evidence_span;
+    record.proposed_utterance = d.content.proposed_utterance;
+    record.expiry_policy = d.content.expiry_policy;
+    record.urgency = d.content.urgency;
+    record.evidence_segment_ids = content.segment_ids;
+    record.notes = structuredClone(d.notes);
+    record.last_request_id = d.request_id;
+    record.last_model_revision = d.transcript_revision;
+    record.received_at = d.received_at;
+    record.updated_at = d.received_at;
+    this.markApplied(d.transcript_revision);
+    // REVISE は状態を変えない（再吸気しない、計画 §4.6）。版だけが進む。
+    this.emitModelChange(record, from, 'REVISE', d.request_id);
+    // 文字の更新と音声の更新を一対一にする（仕様 §5）。新しい版の PCM は G が準備する。
+    this.deps.speech.discardCandidate(record.candidate_id, 'candidate_revised', record.candidate_version);
+    return okResult('REVISE', record, from, from, verified(content.segment_ids, EVIDENCE_METHOD));
+  }
+
+  private applyWithdraw(d: Extract<ModelDecision, { decision: 'WITHDRAW' }>): DecisionResult {
+    const target = this.resolveTarget(d, d.target);
+    if (!target.ok) return target.rejection;
+    const record = target.record;
+    const check = verifyWithdrawEvidence({
+      span: d.withdraw_evidence_span,
+      segment_ids: d.withdraw_evidence_segment_ids,
+      input_segments: d.input_segments,
+      latest: this.deps.stable(),
+      candidate_evidence_span: record.evidence_span,
+    });
+    if (!check.ok) return this.rejectModel(d, 'withdraw_evidence_invalid', check.details, { record });
+    const from = record.state;
+    const segment_ids = verified(check.segment_ids, WITHDRAW_EVIDENCE_METHOD);
+    record.state = 'WITHDRAWN';
+    record.updated_at = d.received_at;
+    record.last_request_id = d.request_id;
+    record.last_model_revision = d.transcript_revision;
+    record.received_at = d.received_at;
+    record.timeline.resolved_at = d.received_at;
+    record.withdraw = {
+      source: 'model_decision',
+      request_id: d.request_id,
+      withdraw_reason: structuredClone(d.withdraw_reason),
+      evidence_segment_ids: segment_ids,
+    };
+    this.markApplied(d.transcript_revision);
+    this.emitModelChange(record, from, 'WITHDRAW', d.request_id);
+    this.deps.speech.discardCandidate(record.candidate_id, 'candidate_withdrawn');
+    return { ...okResult('WITHDRAW', record, from, 'WITHDRAWN'), withdraw_evidence_segment_ids: segment_ids };
+  }
+
+  // ---- 保留した NEW（E3 で調停） ---------------------------------------------
+
+  /**
+   * 保留した NEW を候補にする（E3 の入口）。根拠と順序は今の時点でもう一度確かめる。
+   * 話の後かどうかの判定だけは省く（E3 がその上で選んだので）。
+   */
+  promoteHeld(at: number): DecisionResult | null {
+    const held = this.held;
+    if (!held) return null;
+    this.held = null;
+    const d = { ...held.decision, received_at: at };
+    if (d.segment_id < this.currentSegment) return this.rejectModel(d, 'stale_segment', ['promote']);
+    if (this.appliedRevision !== null && d.transcript_revision < this.appliedRevision) {
+      return this.rejectModel(d, 'stale_transcript_revision', ['promote']);
+    }
+    return this.applyNew(d, true);
+  }
+
+  // ---- コードの遷移（E2、E3、J から） ------------------------------------------
+
+  /** SPEAKING 以外への遷移。SPEAKING は startSpeech を使う（D の版の照合を通すため）。 */
+  transition(
+    candidate_id: string,
+    to: CandidateState,
+    cause: CandidateCause,
+    at: number,
+    expected_version?: number,
+  ): TransitionResult {
+    const record = this.records.get(candidate_id);
+    if (!record) return this.rejectCode(null, candidate_id, 'transition', to, cause, 'unknown_candidate', []);
+    if (expected_version !== undefined && expected_version !== record.candidate_version) {
+      return this.rejectCode(record, candidate_id, 'transition', to, cause, 'version_mismatch', [
+        `expected=${expected_version}`,
+        `current=${record.candidate_version}`,
+      ]);
+    }
+    if (to === 'SPEAKING') {
+      return this.rejectCode(record, candidate_id, 'transition', to, cause, 'invalid_transition', ['use_startSpeech']);
+    }
+    const check = checkTransition(record.state, to, cause, this.transitionOptions);
+    if (!check.ok) return this.rejectCode(record, candidate_id, 'transition', to, cause, check.reason, check.details);
+    const from = record.state;
+    if (to === 'WITHDRAWN') this.withdrawByCode(record, cause, at);
+    else {
+      record.state = to;
+      record.updated_at = at;
+      if (to === 'SPOKEN') record.timeline.resolved_at = at;
+      this.emitCodeChange(record, from, cause);
+    }
+    return { ok: true, record: toContract(record), from, to };
+  }
+
+  /**
+   * 候補の発話を始める。原因（turn_allowed など）の判断は呼び手のもの。ここは遷移表と D の版の照合だけを見る。
+   * D が拒否したら状態を変えない。candidate_mismatch では D が旧い PCM を棄てている。
+   */
+  startSpeech(
+    candidate_id: string,
+    expected_version: number,
+    audio_playback_id: number,
+    cause: CandidateCause,
+    at: number,
+  ): SpeechStartResult {
+    const record = this.records.get(candidate_id);
+    const refused = (r: Rejection): SpeechStartResult => ({ ...r, speech_refusal: null });
+    if (!record) {
+      return refused(this.rejectCode(null, candidate_id, 'speech_start', 'SPEAKING', cause, 'unknown_candidate', []));
+    }
+    if (expected_version !== record.candidate_version) {
+      return refused(
+        this.rejectCode(record, candidate_id, 'speech_start', 'SPEAKING', cause, 'version_mismatch', [
+          `expected=${expected_version}`,
+          `current=${record.candidate_version}`,
+        ]),
+      );
+    }
+    const check = checkTransition(record.state, 'SPEAKING', cause, this.transitionOptions);
+    if (!check.ok) {
+      return refused(this.rejectCode(record, candidate_id, 'speech_start', 'SPEAKING', cause, check.reason, check.details));
+    }
+    const started = this.deps.speech.startChecked(audio_playback_id, {
+      candidate_id: record.candidate_id,
+      candidate_version: record.candidate_version,
+    });
+    if (!started.ok) {
+      return {
+        ...this.rejectCode(record, candidate_id, 'speech_start', 'SPEAKING', cause, 'speech_start_refused', [
+          started.reason,
+          `audio_playback_id=${audio_playback_id}`,
+        ]),
+        speech_refusal: started.reason,
+      };
+    }
+    const from = record.state;
+    record.state = 'SPEAKING';
+    record.updated_at = at;
+    record.audio_playback_id = audio_playback_id;
+    this.emitCodeChange(record, from, cause);
+    return { ok: true, record: toContract(record), generation: started.generation };
+  }
+
+  /** 発話の終わり。再生 ID が違えば（別の世代の報告）拒否する。 */
+  finishSpeech(
+    candidate_id: string,
+    audio_playback_id: number,
+    cause: 'speech_finished' | 'speech_interrupted',
+    at: number,
+  ): TransitionResult {
+    const record = this.records.get(candidate_id);
+    if (record && record.state === 'SPEAKING' && record.audio_playback_id !== audio_playback_id) {
+      return this.rejectCode(record, candidate_id, 'transition', 'SPOKEN', cause, 'invalid_transition', [
+        'playback_mismatch',
+        `audio_playback_id=${audio_playback_id}`,
+        `speaking=${record.audio_playback_id}`,
+      ]);
+    }
+    return this.transition(candidate_id, 'SPOKEN', cause, at);
+  }
+
+  /** 追補2の cue_at（signal.started_at）。最初の合図だけを残す。 */
+  noteCueStarted(candidate_id: string, started_at: number): void {
+    const record = this.records.get(candidate_id);
+    if (record && record.timeline.cue_at === null) record.timeline.cue_at = started_at;
+  }
+
+  /** 追補2の speech_at（speech.started_at）。 */
+  noteSpeechStarted(candidate_id: string, audio_playback_id: number, started_at: number): void {
+    const record = this.records.get(candidate_id);
+    if (record && record.audio_playback_id === audio_playback_id && record.timeline.speech_at === null) {
+      record.timeline.speech_at = started_at;
+    }
+  }
+
+  // ---- 外の状況（J から） ------------------------------------------------------
+
+  /** 人が話しているか（E1 の TurnState.user_speaking）。話の後の NEW の判定に使う。 */
+  observeUserFloor(user_speaking: boolean, at: number): void {
+    if (this.floor && this.floor.user_speaking === user_speaking) return;
+    this.floor = { user_speaking, since: at };
+    if (user_speaking && this.held) this.dropHeld(at, 'user_resumed');
+  }
+
+  /** segment_id の変更（AI の発話開始、§4.1 の ASR.reset）。 */
+  onSegmentChanged(segment_id: number, at: number): void {
+    if (segment_id <= this.currentSegment) return;
+    this.currentSegment = segment_id;
+    if (this.held) this.dropHeld(at, 'segment_changed');
+    if (this.deps.settings.candidate_expires_on_segment_change === false) return;
+    for (const record of this.withdrawable()) this.withdrawByCode(record, 'expired', at);
+  }
+
+  /** 通常の応答を話し始めた（計画 §4.6「残っている候補は撤回」）。 */
+  onNormalResponseStarted(at: number): void {
+    if (this.held) this.dropHeld(at, 'normal_response_started');
+    for (const record of this.withdrawable()) this.withdrawByCode(record, 'normal_response_started', at);
+  }
+
+  /** 安定テキストが書き換わったとき（transcript_view の rewrote_stable）。根拠の消えた候補を撤回する。 */
+  sweepEvidence(at: number): void {
+    const latest = this.deps.stable();
+    for (const record of this.withdrawable()) {
+      if (!evidenceStillStable(record.evidence_span, latest)) this.withdrawByCode(record, 'evidence_lost', at);
+    }
+    if (this.held && !evidenceStillStable(this.held.decision.content.evidence_span, latest)) {
+      this.dropHeld(at, 'evidence_lost');
+    }
+  }
+
+  /** 期限（policy.initiative.candidate_expiry_ms、決定の時刻から）。J の固定周期の tick から呼ぶ。 */
+  tick(now: number): void {
+    const expiry = this.deps.settings.candidate_expiry_ms;
+    if (expiry === null) return;
+    for (const record of this.withdrawable()) {
+      if (now - record.timeline.decided_at >= expiry) this.withdrawByCode(record, 'expired', now);
+    }
+    if (this.held && now - this.held.held_at >= expiry) this.dropHeld(now, 'expired');
+  }
+
+  // ---- 旧 IF（S の monitor.ts を変えずに差し替えるための口） ---------------------
+
+  /**
+   * 契約の CandidateStore として使う口。S の monitor.ts は自分で candidate.state_changed を出すので、
+   * この口からはイベントを出さない（二重にしない）。採番、版の照合、遷移表、PCM の破棄だけを行う。
+   * G への移管後は applyModelDecision へ移り、この口は使わない。
+   */
+  asStore(): CandidateStore {
+    return {
+      register: (input: CandidateRegistration): CandidateRef => {
+        const record = this.newRecord(
+          {
+            request_id: 'legacy_store',
+            transcript_revision: input.transcript_revision,
+            segment_id: input.segment_id,
+            received_at: input.decided_at,
+          },
+          {
+            intent_type: input.intent_type,
+            evidence_span: input.evidence_span,
+            evidence_segment_ids: input.evidence_segment_ids,
+            proposed_utterance: input.proposed_utterance,
+            expiry_policy: input.expiry_policy,
+            urgency: input.urgency,
+          },
+          LEGACY_NOTES,
+          [...input.evidence_segment_ids],
+          'INTENT_READY',
+          input.decided_at,
+        );
+        this.markApplied(input.transcript_revision);
+        return refOf(record);
+      },
+      get: (id) => this.get(id),
+      list: (options) => this.list(options),
+      update: (id, expected_version, patch: CandidateContentPatch, updated_at) => {
+        const record = this.records.get(id);
+        if (!record) throw new Error(`unknown candidate ${id}`);
+        if (record.candidate_version !== expected_version) {
+          throw new CandidateConflictError(`${id}: expected version ${expected_version}, current ${record.candidate_version}`);
+        }
+        if (!MODEL_APPLICABLE_STATES.includes(record.state)) {
+          throw new CandidateConflictError(`${id}: not revisable in ${record.state}`);
+        }
+        Object.assign(record, structuredClone(patch));
+        record.candidate_version += 1;
+        record.updated_at = updated_at;
+        if (patch.transcript_revision !== undefined) this.markApplied(patch.transcript_revision);
+        this.deps.speech.discardCandidate(id, 'candidate_revised', record.candidate_version);
+        return refOf(record);
+      },
+      setState: (id, state, updated_at) => {
+        const record = this.records.get(id);
+        if (!record) throw new Error(`unknown candidate ${id}`);
+        const reachable = this.transitions().some(
+          (row) => row.from === record.state && row.to === state,
+        );
+        if (!reachable) throw new CandidateConflictError(`${id}: ${record.state} -> ${state} is not in the table`);
+        record.state = state;
+        record.updated_at = updated_at;
+        if (TERMINAL_STATES.includes(state)) record.timeline.resolved_at = updated_at;
+        if (state === 'WITHDRAWN') this.deps.speech.discardCandidate(id, 'candidate_withdrawn');
+        return toContract(record);
+      },
+    };
+  }
+
+  // ---- 内部 --------------------------------------------------------------------
+
+  private withdrawable(): LedgerRecord[] {
+    return [...this.records.values()].filter((r) => WITHDRAWABLE_STATES.includes(r.state));
+  }
+
+  private isPostTurn(at: number): boolean {
+    if (!this.floor || this.floor.user_speaking) return false;
+    return at - this.floor.since >= this.deps.settings.post_turn_silence_ms;
+  }
+
+  private markApplied(revision: number): void {
+    this.appliedRevision = this.appliedRevision === null ? revision : Math.max(this.appliedRevision, revision);
+  }
+
+  private verifyContent(
+    d: ModelDecision,
+    content: CandidateContent,
+    record?: LedgerRecord,
+  ): { ok: true; segment_ids: number[] } | { ok: false; rejection: Rejection } {
+    const evidence = verifyEvidence({
+      span: content.evidence_span,
+      segment_ids: content.evidence_segment_ids,
+      input_segments: d.input_segments,
+      latest: this.deps.stable(),
+    });
+    if (!evidence.ok) return { ok: false, rejection: this.rejectModel(d, 'evidence_invalid', evidence.details, { record }) };
+    if (content.proposed_utterance.trim().length === 0) {
+      return { ok: false, rejection: this.rejectModel(d, 'proposed_utterance_empty', [], { record }) };
+    }
+    return { ok: true, segment_ids: evidence.segment_ids };
+  }
+
+  private resolveTarget(
+    d: ModelDecision,
+    target: CandidateRef,
+  ): { ok: true; record: LedgerRecord } | { ok: false; rejection: Rejection } {
+    const record = this.records.get(target.candidate_id);
+    if (!record) {
+      return {
+        ok: false,
+        rejection: this.rejectModel(d, 'unknown_candidate', [`target=${target.candidate_id}`], {
+          candidate_id: target.candidate_id,
+        }),
+      };
+    }
+    if (!MODEL_APPLICABLE_STATES.includes(record.state)) {
+      return { ok: false, rejection: this.rejectModel(d, 'state_not_applicable', [record.state], { record }) };
+    }
+    if (record.candidate_version !== target.candidate_version) {
+      return {
+        ok: false,
+        rejection: this.rejectModel(
+          d,
+          'version_mismatch',
+          [`expected=${target.candidate_version}`, `current=${record.candidate_version}`],
+          { record },
+        ),
+      };
+    }
+    return { ok: true, record };
+  }
+
+  private createRecord(
+    d: Extract<ModelDecision, { decision: 'NEW' }>,
+    segment_ids: number[],
+    state: CandidateState,
+  ): LedgerRecord {
+    return this.newRecord(d, d.content, d.notes, segment_ids, state, d.received_at);
+  }
+
+  private newRecord(
+    meta: { request_id: string; transcript_revision: number; segment_id: number; received_at: number },
+    content: CandidateContent,
+    notes: CandidateModelNotes,
+    segment_ids: number[],
+    state: CandidateState,
+    decided_at: number,
+  ): LedgerRecord {
+    this.counter += 1;
+    const candidate_id = `c_${String(this.counter).padStart(4, '0')}`;
+    const record: LedgerRecord = {
+      candidate_id,
+      candidate_version: 1,
+      state,
+      segment_id: meta.segment_id,
+      transcript_revision: meta.transcript_revision,
+      intent_type: content.intent_type,
+      evidence_span: content.evidence_span,
+      proposed_utterance: content.proposed_utterance,
+      expiry_policy: content.expiry_policy,
+      urgency: content.urgency,
+      evidence_segment_ids: segment_ids,
+      decided_at,
+      updated_at: decided_at,
+      last_request_id: meta.request_id,
+      last_model_revision: meta.transcript_revision,
+      received_at: meta.received_at,
+      notes: structuredClone(notes),
+      timeline: { decided_at, cue_at: null, speech_at: null, resolved_at: null },
+      withdraw: null,
+      audio_playback_id: null,
+    };
+    this.records.set(candidate_id, record);
+    return record;
+  }
+
+  private withdrawByCode(record: LedgerRecord, cause: CandidateCause, at: number): void {
+    const from = record.state;
+    record.state = 'WITHDRAWN';
+    record.updated_at = at;
+    record.timeline.resolved_at = at;
+    record.withdraw = { source: 'code', cause };
+    this.emitCodeChange(record, from, cause);
+    this.deps.speech.discardCandidate(record.candidate_id, cause);
+  }
+
+  private dropHeld(at: number, why: string): void {
+    const held = this.held;
+    if (!held) return;
+    this.held = null;
+    this.emitRejected({
+      candidate_id: null,
+      candidate_version: null,
+      source: 'code',
+      operation: 'held',
+      current_state: null,
+      requested_state: null,
+      cause: null,
+      request_id: held.decision.request_id,
+      reason: 'held_dropped',
+      details: [why, `held_at=${held.held_at}`, `dropped_at=${at}`],
+      held: false,
+      input_transcript_revision: held.decision.transcript_revision,
+    });
+  }
+
+  private rejectModel(
+    d: ModelDecision,
+    reason: RejectionReason & string,
+    details: string[],
+    extra: { held?: boolean; record?: LedgerRecord; candidate_id?: string } = {},
+  ): Rejection {
+    const record = extra.record ?? null;
+    const operation = d.decision === 'NONE' ? 'NEW' : d.decision;
+    if (reason !== 'active_candidate_exists') {
+      this.emitRejected({
+        candidate_id: record?.candidate_id ?? extra.candidate_id ?? null,
+        candidate_version: record?.candidate_version ?? null,
+        source: 'model_decision',
+        operation,
+        current_state: record?.state ?? null,
+        requested_state: d.decision === 'WITHDRAW' ? 'WITHDRAWN' : d.decision === 'NEW' ? 'INTENT_READY' : null,
+        cause: null,
+        request_id: d.request_id,
+        reason,
+        details,
+        held: extra.held ?? false,
+        input_transcript_revision: d.transcript_revision,
+      });
+    }
+    return { ok: false, reason, details, held: extra.held ?? false, ref: record ? refOf(record) : null };
+  }
+
+  private rejectCode(
+    record: LedgerRecord | null,
+    candidate_id: string,
+    operation: 'transition' | 'speech_start',
+    to: CandidateState,
+    cause: CandidateCause,
+    reason: Exclude<RejectionReason, 'active_candidate_exists'>,
+    details: string[],
+  ): Rejection {
+    this.emitRejected({
+      candidate_id,
+      candidate_version: record?.candidate_version ?? null,
+      source: 'code',
+      operation,
+      current_state: record?.state ?? null,
+      requested_state: to,
+      cause,
+      request_id: null,
+      reason,
+      details,
+      held: false,
+      input_transcript_revision: null,
+    });
+    return { ok: false, reason, details, held: false, ref: record ? refOf(record) : null };
+  }
+
+  private emitRejected(e: {
+    candidate_id: string | null;
+    candidate_version: number | null;
+    source: 'model_decision' | 'code';
+    operation: 'NEW' | 'KEEP' | 'REVISE' | 'WITHDRAW' | 'transition' | 'speech_start' | 'held';
+    current_state: CandidateState | null;
+    requested_state: CandidateState | null;
+    cause: CandidateCause | null;
+    request_id: string | null;
+    reason: Exclude<RejectionReason, 'active_candidate_exists'>;
+    details: string[];
+    held: boolean;
+    input_transcript_revision: number | null;
+  }): void {
+    this.deps.emitter.emit({
+      event: 'candidate.rejected',
+      candidate_id: e.candidate_id !== null ? present(e.candidate_id) : absent('not_numbered'),
+      candidate_version: e.candidate_version !== null ? present(e.candidate_version) : absent('not_numbered'),
+      source: e.source,
+      operation: e.operation,
+      current_state: e.current_state,
+      requested_state: e.requested_state,
+      cause: e.cause,
+      request_id: e.request_id !== null ? present(e.request_id) : absent(CODE),
+      reason: e.reason,
+      details: e.details.filter((s) => s.length > 0),
+      held: e.held,
+      input_transcript_revision:
+        e.input_transcript_revision !== null ? present(e.input_transcript_revision) : absent(CODE),
+      applied_transcript_revision:
+        this.appliedRevision !== null ? present(this.appliedRevision) : absent('no_decision_applied_yet'),
+    });
+  }
+
+  private emitCodeChange(record: LedgerRecord, from: CandidateState | null, cause: CandidateCause): void {
+    this.deps.emitter.emit({
+      event: 'candidate.state_changed',
+      candidate_id: record.candidate_id,
+      candidate_version: record.candidate_version,
+      from,
+      to: record.state,
+      cause_source: 'code',
+      cause,
+    });
+  }
+
+  private emitModelChange(
+    record: LedgerRecord,
+    from: CandidateState | null,
+    decision: 'NEW' | 'REVISE' | 'WITHDRAW',
+    request_id: string,
+  ): void {
+    this.deps.emitter.emit({
+      event: 'candidate.state_changed',
+      candidate_id: record.candidate_id,
+      candidate_version: record.candidate_version,
+      from,
+      to: record.state,
+      cause_source: 'model_decision',
+      decision,
+      request_id,
+    });
+  }
+}
+
+const EVIDENCE_METHOD = 'e2a_listed_segments_contain_span_and_exist_in_latest';
+const WITHDRAW_EVIDENCE_METHOD = 'e2a_listed_segments_contain_span_after_candidate';
+
+const LEGACY_NOTES: CandidateModelNotes = {
+  reason: { source: 'model_output', value: null, null_reason: 'legacy_store_interface' },
+  why_now: { source: 'model_output', value: null, null_reason: 'legacy_store_interface' },
+  cost_of_waiting: { source: 'model_output', value: null, null_reason: 'legacy_store_interface' },
+};
+
+function refOf(record: LedgerRecord): CandidateRef {
+  return { candidate_id: record.candidate_id, candidate_version: record.candidate_version };
+}
+
+function toContract(record: LedgerRecord): CandidateRecord {
+  return {
+    candidate_id: record.candidate_id,
+    candidate_version: record.candidate_version,
+    state: record.state,
+    segment_id: record.segment_id,
+    transcript_revision: record.transcript_revision,
+    intent_type: record.intent_type,
+    evidence_span: record.evidence_span,
+    proposed_utterance: record.proposed_utterance,
+    expiry_policy: record.expiry_policy,
+    urgency: record.urgency,
+    evidence_segment_ids: [...record.evidence_segment_ids],
+    decided_at: record.decided_at,
+    updated_at: record.updated_at,
+  };
+}
+
+function okResult(
+  decision: ModelDecision['decision'],
+  record: LedgerRecord | null,
+  from: CandidateState | null,
+  to: CandidateState | null,
+  evidence_segment_ids: ReturnType<typeof verified<number[]>> | null = null,
+): Extract<DecisionResult, { ok: true }> {
+  return {
+    ok: true,
+    decision,
+    ref: record ? refOf(record) : null,
+    from,
+    to,
+    evidence_segment_ids,
+    withdraw_evidence_segment_ids: null,
+  };
+}
