@@ -302,7 +302,7 @@ describe('E3 発話の選択（selectSpeech）', () => {
     { name: '直前が直接の質問（文末の規則）→ 通常応答', condition: 'initiative_no_cue', candidate: { state: 'INTENT_READY' }, text: '明日は晴れるんですか', choice: 'response', reasons: ['direct_question:rule:desuka'] },
     { name: '判定が古い → 通常応答', condition: 'initiative_no_cue', candidate: { new_chars_since_judgement: 61 }, choice: 'response', reasons: ['judgement_stale:chars=61'] },
     { name: '判定の入力が分からない → 通常応答', condition: 'initiative_no_cue', candidate: { new_chars_since_judgement: null }, choice: 'response', reasons: ['judgement_input_unknown'] },
-    { name: '音声がまだ（DEFERRED）→ 通常応答', condition: 'initiative_inhale', candidate: { state: 'DEFERRED', audio: 'preparing' }, choice: 'response', reasons: ['candidate_audio_preparing'] },
+    { name: '音声がまだ（DEFERRED の作り直し）→ 待つ（期限で引き下がるのは negotiate）', condition: 'initiative_inhale', candidate: { state: 'DEFERRED', audio: 'preparing' }, choice: 'wait', reasons: ['candidate_audio_preparing'] },
     { name: '音声がまだ（吸気の後の準備姿勢）→ 待つ（期限で引き下がるのは negotiate）', condition: 'initiative_inhale', candidate: { state: 'BREATH_HOLD_OR_READY', audio: 'preparing' }, choice: 'wait', reasons: ['candidate_audio_preparing'] },
     { name: '音声が失敗（準備姿勢）→ 通常応答', condition: 'initiative_inhale', candidate: { state: 'BREATH_HOLD_OR_READY', audio: 'failed' }, choice: 'response', reasons: ['candidate_audio_failed'] },
     { name: '候補を話している最中', condition: 'initiative_inhale', candidate: { state: 'SPEAKING' }, choice: 'wait', reasons: ['candidate_speaking'] },

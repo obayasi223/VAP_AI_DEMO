@@ -220,7 +220,7 @@ describe('モデルの撤回（WITHDRAW）', () => {
       source: 'model_decision',
       request_id: 'ini_w',
       withdraw_reason: { source: 'model_output', value: '本人が補足した' },
-      evidence_segment_ids: { source: 'verified', value: [2], method: 'e2a_listed_segments_contain_span_after_candidate' },
+      evidence_segment_ids: { source: 'verified', value: [2], method: 'e2a_listed_segments_contain_span_after_candidate' },      evidence_source: 'user_utterance',
     });
     expect(r.sink.ofType('candidate.state_changed')[1]).toMatchObject({ cause_source: 'model_decision', decision: 'WITHDRAW', request_id: 'ini_w' });
   });

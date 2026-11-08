@@ -15,6 +15,7 @@ import type {
   ModelOutput,
   SpeechStartRefusal,
   Verified,
+  WithdrawEvidenceSource,
 } from '@llm-vap/contracts';
 import type { AsrSegmentSnapshot } from '../../cognition/initiative/transcript_view';
 
@@ -63,6 +64,8 @@ export type ModelDecision =
       withdraw_reason: MaybeModelOutput<string>;
       /** 内容の撤回の分類（二段判定の生成段）。1段判定（v2）は持たない。 */
       withdraw_kind?: ContentWithdrawKind;
+      /** 根拠を AI の発話で確かめるときの、生成段に見せた AI の発話。省略は人の発話（input_segments）で確かめる。 */
+      withdraw_evidence_ai_turns?: readonly string[];
     } & DecisionMeta);
 
 /**
@@ -120,6 +123,7 @@ export type WithdrawRecord =
       withdraw_reason: MaybeModelOutput<string>;
       evidence_segment_ids: Verified<number[]>;
       withdraw_kind?: ContentWithdrawKind;
+      evidence_source: WithdrawEvidenceSource;
     }
   | { source: 'code'; cause: CandidateCause };
 

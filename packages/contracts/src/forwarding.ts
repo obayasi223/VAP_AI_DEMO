@@ -33,6 +33,8 @@ export const EVENT_ROUTES = {
   'initiative.timing': { origin: 'node' },
   'initiative.not_offered': { origin: 'node' },
   'initiative.response_material': { origin: 'node' },
+  'initiative.response_reflection': { origin: 'node' },
+  'initiative.already_said': { origin: 'node' },
   'candidate.state_changed': { origin: 'node' },
   'candidate.rejected': { origin: 'node' },
   'signal.sent': { origin: 'node' },

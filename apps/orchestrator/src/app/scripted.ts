@@ -14,6 +14,7 @@
  * 合図から発話までの配線を通すためのもので、発話希望の判断ではない。
  * 二段判定の要求（response_json_schema で見分ける）には生成段とタイミング段の形で返す（scriptedStagedReply）。
  * 生成段は未解決の希望があれば KEEP（内容の再評価の経路を通す）、なければ NEW。wait_on_input はタイミング段だけ WAIT_FOR_TURN_END を返す。
+ * revise_on_input と withdraw_on_input（E2E の内容更新と撤回の経路）は長い台本の文で、2回目の判定で REVISE／WITHDRAW を返す。
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -510,6 +511,14 @@ export const SCRIPTED_INITIATIVE_REPLY = JSON.stringify({
 
 /** 発話希望の E2E の台本の発話文と、STT の台本（直接の質問で終わらない文。E3 は直接の質問なら通常応答を選ぶ）。 */
 export const SCRIPTED_CANDIDATE_UTTERANCE = 'すみません、少し確認してもいいですか。';
+/** E2E の内容更新の経路で話し直す文（前の版と似ていない文。REVISE の抑制にかからない）。 */
+export const SCRIPTED_REVISED_UTTERANCE = '東京の会場の費用は足りそうでしょうか。';
+/** 内容更新と撤回の E2E の台本（長い文）。1回目の判定で NEW、2回目の判定で更新／撤回が要るので、人が話している間に2回の判定が走る長さにする。 */
+export const INITIATIVE_LONG_STT_SCRIPT = [
+  '来月の展示会の予算は五十万円のままで進めようと思っていて、会場は東京にして、日程は十一月の十二日からで、準備は来週から少しずつ始める予定です。',
+  '最近、朝起きるのがつらくて困っているので、目覚ましを三つかけてみたのですが、それでもなかなか起きられなくて、どうしたものかと思っています。',
+  '目覚ましを三つかけても起きられないんです。',
+];
 export const INITIATIVE_STT_SCRIPT = [
   'こんにちは、今日はちょっと相談したいことがあります。',
   '最近、朝起きるのがつらくて困っています。',
@@ -540,7 +549,12 @@ export function scriptedInitiativeReply(request: LlmRequest): string {
   });
 }
 
-export type ScriptedInitiativeMode = 'none' | 'new_on_input' | 'wait_on_input';
+export type ScriptedInitiativeMode = 'none' | 'new_on_input' | 'wait_on_input' | 'revise_on_input' | 'withdraw_on_input';
+
+/** 長い台本の文で 2 回の判定を行う経路の台本か（台本の STT の速さと LLM の速さを変える）。 */
+export function scriptedSecondJudgementMode(mode: ScriptedInitiativeMode): boolean {
+  return mode === 'revise_on_input' || mode === 'withdraw_on_input';
+}
 
 const SCRIPTED_DESIRE_NONE = {
   reason: '台本の LLM の固定の返答（判定はしていない）',
@@ -581,6 +595,28 @@ export function scriptedStagedReply(request: LlmRequest, mode: ScriptedInitiativ
   }
   if (!schemaHas(request, 'desire')) return null;
   const last = [...text.matchAll(/^#(\d+)（[^）]*）: (.+)$/gmu)].at(-1);
+  if (candidate && mode === 'revise_on_input' && text.includes(SCRIPTED_CANDIDATE_UTTERANCE) && last) {
+    return JSON.stringify({
+      ...SCRIPTED_DESIRE_NONE,
+      desire: 'REVISE',
+      target_candidate_id: candidate[1],
+      intent_type: 'CLARIFICATION',
+      proposed_utterance: SCRIPTED_REVISED_UTTERANCE,
+      evidence_span: [...(last[2] as string)].slice(0, 8).join(''),
+      evidence_segment_ids: [Number(last[1])],
+    });
+  }
+  if (candidate && mode === 'withdraw_on_input' && last && [...(last[2] as string)].length >= 16) {
+    return JSON.stringify({
+      ...SCRIPTED_DESIRE_NONE,
+      desire: 'WITHDRAW',
+      target_candidate_id: candidate[1],
+      withdraw_kind: 'question_resolved',
+      withdraw_reason: '台本の撤回（判定はしていない）',
+      withdraw_evidence_span: [...(last[2] as string)].slice(-8).join(''),
+      withdraw_evidence_segment_ids: [Number(last[1])],
+    });
+  }
   if (candidate && mode !== 'none') return JSON.stringify({ ...SCRIPTED_DESIRE_NONE, desire: 'KEEP', target_candidate_id: candidate[1] });
   if (mode === 'none' || !last || [...(last[2] as string)].length < 8) return JSON.stringify(SCRIPTED_DESIRE_NONE);
   return JSON.stringify({
@@ -642,6 +678,8 @@ export class ScriptedReplyLlm implements LlmProvider {
         ? this.options.reply
         : (scriptedStagedReply(request, this.options.initiative) ??
           (this.options.initiative !== 'none' ? scriptedInitiativeReply(request) : SCRIPTED_INITIATIVE_REPLY));
+    // 2回の判定の経路の台本は、判定の文字列を1塊で返す（待ちは最初の遅延だけ。話している間に2回の判定を通すため）。
+    const perDelta = request.purpose === 'initiative' && scriptedSecondJudgementMode(this.options.initiative) ? reply.length : chars_per_delta;
     const sent_at = time.monotonicMs();
     emitter?.emit({
       event: 'llm.request',
@@ -680,12 +718,12 @@ export class ScriptedReplyLlm implements LlmProvider {
       let first: number | null = null;
       try {
         await new Promise((r) => setTimeout(r, first_delta_delay_ms));
-        for (let i = 0; i < reply.length; i += chars_per_delta) {
+        for (let i = 0; i < reply.length; i += perDelta) {
           if (request.signal?.aborted) throw abortError();
           if (i > 0 && delta_delay_ms > 0) await new Promise((r) => setTimeout(r, delta_delay_ms));
           if (request.signal?.aborted) throw abortError();
           first ??= time.monotonicMs();
-          yield reply.slice(i, i + chars_per_delta);
+          yield reply.slice(i, i + perDelta);
         }
         respond(reply, '', first);
         resolveResult({

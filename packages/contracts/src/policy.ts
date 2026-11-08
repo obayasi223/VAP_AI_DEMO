@@ -161,6 +161,16 @@ export const InitiativeStaged = z.strictObject({
    * 【暫定、未校正】省略は比較しない（すべて REVISE として適用）。
    */
   revise_min_utterance_similarity: Probability.optional(),
+  /**
+   * 候補の文と AI がすでに話した文の文字 2-gram のコサインがこれ以上なら「すでに話した内容」とする（発話の直前のガード、発話の後の照合、同内容の NEW の棄却）。
+   * 【暫定、未校正】手書きの例で置いた値。省略はこの3つの照合をしない。
+   */
+  already_said_min_similarity: Probability.optional(),
+  /**
+   * 通常応答の材料が実際の発話に反映されたかの推定の基準（内容の字を含む文字 2-gram の包含率）。
+   * 【暫定、未校正】推定の記録にだけ使う。省略は推定を記録しない。
+   */
+  reflection_min_containment: Probability.optional(),
 });
 export type InitiativeStaged = z.infer<typeof InitiativeStaged>;
 

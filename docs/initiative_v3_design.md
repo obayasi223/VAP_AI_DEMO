@@ -24,19 +24,22 @@
 |---|---|
 | 内容の撤回 | `initiative.desire`（`desire: WITHDRAW`、`outcome: withdrawn`、`withdraw_kind`）、`candidate.state_changed`（モデル由来、`withdraw_kind`） |
 | 今は申し出ない（WAIT） | `initiative.timing`（`timing: WAIT_FOR_TURN_END`）、合図のゲートの `timing_wait_for_turn_end`、通常応答の開始で持ち越したら `initiative.not_offered` |
-| 通常応答に材料として渡した | `initiative.response_material`（版と文。**渡した事実だけで、使われたかは分からない**） |
+| 通常応答に材料として渡した | `initiative.response_material`（版と文。**渡した事実だけ**） |
+| 渡した応答を実際に話した結果（推定） | `initiative.response_reflection`（実際に話した部分だけと比べた `estimated_reflected` と根拠の値。**推定で確定ではない**。§9） |
+| すでに話した内容なので撤回（コードの比較） | `candidate.state_changed`（コード由来の `already_said`）、`initiative.already_said`（比較の方法、値、基準、一致した文。§9） |
 | 期限切れ | `candidate.state_changed`（コード由来の `expired`） |
 | 音声が間に合わない、作れない | `candidate.state_changed`（コード由来の `audio_unavailable`）、`negotiation.decision` の `audio_abandoned` |
 
-**撤回の分類（`withdraw_kind`）。** いずれも今の発話の逐語の根拠が必須で、分類が3値のどれでもなければ棄却する（`withdraw_kind_invalid`）。
+**撤回の分類（`withdraw_kind`）。** いずれも発話の逐語の根拠が必須で（人の今の発話、または直近の会話の AI の発話。§9）、分類が次のどれでもなければ棄却する（`withdraw_kind_invalid`）。
 
 | 値 | 意味 |
 |---|---|
 | `question_resolved` | 聞こうとしていた疑問が、相手のその後の発話で解消した |
 | `premise_changed` | 希望の前提になっていた事柄を、相手が変えた、または取り消した |
 | `topic_moved` | 話題が移り、その希望が今の話と関係しなくなった |
+| `already_said` | その内容を AI がすでに話した（`initiative-desire-ja-v3` から。根拠は AI の発話の逐語になることが多い） |
 
-分類はモデルの判定で、コードは形式と根拠しか確かめない。分類が妥当かは確かめていない。
+分類はモデルの判定で、コードは形式と根拠しか確かめない。分類が妥当かは確かめていない。同じ名前の `already_said` がコードの比較（`CandidateCause`）にもある。どちらが撤回したかは `candidate.state_changed` の `cause_source` で分かれる（§9）。
 
 **REVISE の抑制。** `REVISE` でも `proposed_utterance` が前の版と実質同じなら作り直さず維持として扱う（小さな言い換えの繰り返しで音声を作り直さないため）。基準は「意図の種類が同じ」かつ「文字 2-gram のコサイン類似度が `revise_min_utterance_similarity` 以上」。`initiative.desire` の `revise_comparison` に方法、値、基準を残し、`outcome` は `revise_suppressed`。根拠の逐語照合は抑制の前に通す。REVISE の根拠は保留中の入力の範囲で検証する。
 
@@ -95,6 +98,8 @@ AI の開始の後に届いた前の segment の文は判定を起動しない�
 
 - `cue_reaction_window_ms`: 2000。根拠なしの観測窓。
 - `revise_min_utterance_similarity`: 0.8。手書きの例（小さな言い換え 0.83／0.90、言い換え 0.63／0.64、別内容 0〜0.4）で置いた暫定値。
+- `already_said_min_similarity`: 0.8（`revise_min_utterance_similarity` と別の項目）。発話の直前のガード、発話の後の照合、同内容の NEW の棄却の基準。手書きの例で置いた暫定値（§9）。未校正。
+- `reflection_min_containment`: 0.5。反映の推定（内容の字を含む文字 2-gram の包含率）の基準。推定の記録にだけ使う暫定値。未校正。
 
 ## 7. 発声の失敗からの復帰
 
@@ -116,6 +121,34 @@ AI の開始の後に届いた前の segment の文は判定を起動しない�
 - タイミング段は生成段の後なので、希望の発生から `OFFER_NOW` までの遅れは2回の呼び出しの合計になる（実測は上記）。生成段と並列にする最適化はしていない。
 - `active_candidate_exists` のとき E2a は新しい `NEW` を棄却する。2つ目の希望は `initiative.desire` の `rejected` として残るだけで、キューにはしない。
 - タイミング段は最新の活動中の候補を1件だけ判定する（`max_active_candidates` が 1 の前提）。
-- 持ち越しの候補の撤回の根拠は今の人の発話の逐語だけ。AI の発話（通常応答で既に言ったこと）を根拠にした撤回はできない。
-- 通常応答に材料を渡しても、使われたかは判定していない。使われた内容の候補が残り続けることがある（期限か生成段の撤回で消える）。
+- 反映の推定と「すでに話した内容」の照合は文字の一致なので、言い換えられた内容は「話した」にならない（§9）。候補が残り続けることがある（期限か生成段の撤回で消える）。
 - 撤回の分類、`REVISE` の抑制の基準、合図の反応の窓はどれも未検証の暫定値。
+
+## 9. 通常応答の材料の反映の確認と、重複発言の防止
+
+利用者の方針: WAIT 候補の通常応答への反映は必須にしない。通常応答を遅延させず、間に合った候補だけを必要に応じて参照する。渡したか、実際の応答に反映されたかは確認できるようにする。すでに AI が発言した内容や、後続の会話で不要になった希望が残って重複発言につながらないようにする。発話希望の判定の妥当性は、実会話を通じて研究側で評価する（ここのコードは確かめない）。
+
+**反映の確認（コード）。** 渡した事実は従来の `initiative.response_material`。通常応答の発話の終わりに `initiative.response_reflection` を1件出し、**実際に話した部分だけ**と渡した候補を比べた結果を残す。
+
+- `spoken_outcome`: `spoken`（最後まで）、`partly_spoken`（割り込みで途中まで。話した部分だけで判定）、`not_spoken`（準備のまま取り消し、1 音も出なかった。比較しない）。材料を渡した準備が話されないまま取り消されたときも `not_spoken` で残す。
+- `estimated_reflected` と `estimate`: 材料の文字 2-gram が話した文に含まれる割合（`containment`）と基準（`reflection_min_containment`）。ひらがなだけの 2-gram（です、ます、ください）は内容を示さないので、内容の字（漢字、カタカナ、英数字）を含む 2-gram を数える（`basis`。3 個未満なら全部の 2-gram）。コサインは参考の値（応答の長さで下がるので判定に使わない）。**推定で確定ではない**（言い換えは拾わない、同じ語を別の意味で使っても一致する）。
+- 計算は発話の後の同期のコードで、応答の開始や準備を待たせない。LLM の自己申告は足していない（足すなら LLM 生成の別の項目にする）。
+- 評価画面 `tools/initiative_review/` の判定の詳細に「渡した版、実際に話した文、推定の一致」を出す。
+
+**重複発言の防止（層ごと）。**
+
+| 層 | いつ | 何を比べるか | 記録 |
+|---|---|---|---|
+| 発話の直前のガード（コード） | 候補を話すと選んだ直後（`NegotiationWiring.select`）。**話す前の比較だけ**で通常応答を待たせない | 候補の文と、履歴の AI の発話（実際に話した部分）を、発話全体と文ごとの大きい方で文字 2-gram のコサイン。基準は `already_said_min_similarity` | 撤回の原因 `already_said`（`candidate.state_changed`）、`initiative.already_said`（`stage: before_speech`）、`negotiation.decision` の `already_said:similarity=…` |
+| AI の発話の後の照合（コード） | AI の発話の終わり（通常応答でも候補でも、履歴へ確定した後） | 保留中の候補（SPEAKING 以外）と、**この発話で話した部分** | 撤回の原因 `already_said`、`initiative.already_said`（`stage: after_ai_speech`、`matched_origin`） |
+| 同じ内容の新しい希望（NEW）（コード） | 生成段の結果を適用する前 | 提案の文と、履歴の AI の発話 | `initiative.desire` の `gate.reasons: already_said`、`already_said_comparison`、`outcome: gate_rejected`。E2a に渡さない |
+| 後続の会話で不要になったもの（モデル、根拠はコード） | 生成段の `WITHDRAW` | 撤回の根拠は人の発話か、**生成段に見せた直近の会話の AI の発話**の逐語。どちらで確かめたかを `withdraw_evidence_source`（`user_utterance`／`ai_utterance`）に残す。AI の発話のときは E2a も照合し直す | `initiative.desire`、`candidate.state_changed` の `withdraw_evidence_source`。判定の条件の中身は変えず、`initiative-desire-ja-v3` で根拠の範囲の説明と分類 `already_said` だけを足した |
+| 候補を話した後 | — | SPOKEN は終端で再開できない（再試行しない）。同じ文の再 NEW は上の NEW の棄却が受ける | 試験で固定 |
+
+撤回の扱いはどの層も既存どおり（音声の破棄、合図中なら `breath.release(withdrawn)`）。WAIT の判断や `question_resolved` などの内容の撤回とは別の値で記録する。
+
+**同内容の NEW の棄却は「AI がすでに話した内容」に限る。** 前の候補を撤回しただけで話していない内容は棄却しない（人の発話で状況が変わった場合を潰さない）。割り込みで途中までしか話していない内容も、話した部分との類似度が基準に届かない限り棄却しない。
+
+**持ち越しの候補への `KEEP`。** 持ち越しの候補への `KEEP` は、AI の発話の開始をまたいでも `stale_segment` で棄却せず適用する（既知の問題の修正。`applyModelDecision`）。候補を変えないので安全で、判定の鮮度（`last_request_id`）が古いままにならない。
+
+限界: どれも文字の一致で、言い換えは同じ内容として数えない。基準は手書きの例による暫定値で未校正。候補の文が短い（定型の短文）と、一致しやすい。発話の直前のガードと NEW の棄却はセッションの全部の AI の発話を見る（期間で切っていない）。これらの正しさは実会話で研究側が評価する。

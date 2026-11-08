@@ -21,9 +21,10 @@ import type {
   ContentWithdrawKind,
   EventEmitter,
   SpeechGenerator,
+  WithdrawEvidenceSource,
 } from '@llm-vap/contracts';
 import { normalizeForMatch } from '../../cognition/initiative/text';
-import { evidenceStillStable, verifyEvidence, verifyWithdrawEvidence } from './evidence';
+import { evidenceStillStable, verifyAiWithdrawEvidence, verifyEvidence, verifyWithdrawEvidence } from './evidence';
 import {
   DEFAULT_TRANSITION_OPTIONS,
   MODEL_APPLICABLE_STATES,
@@ -167,7 +168,8 @@ export class CandidateLedger {
       return this.rejectModel(d, 'stale_transcript_revision', []);
     }
     // WITHDRAW は候補を減らすだけなので、区間をまたいでも適用する（根拠と対象の確かめは applyWithdraw）。
-    if (crossedSegment && d.decision !== 'WITHDRAW') {
+    // 持ち越しの候補への KEEP は内容を変えないので、AI の発話の開始をまたいでも適用する（持ち越しの候補の判定が古いままにならないように）。
+    if (crossedSegment && d.decision !== 'WITHDRAW' && !this.isKeepOfCarried(d)) {
       const crossed = this.rejectAcrossSegment(d);
       if (crossed !== null) return crossed;
     }
@@ -270,17 +272,21 @@ export class CandidateLedger {
     const target = this.resolveTarget(d, d.target);
     if (!target.ok) return target.rejection;
     const record = target.record;
-    const check = verifyWithdrawEvidence({
-      span: d.withdraw_evidence_span,
-      segment_ids: d.withdraw_evidence_segment_ids,
-      input_segments: d.input_segments,
-      latest: this.deps.stable(),
-      candidate_evidence_span: record.evidence_span,
-      ...(record.carried_over ? { candidate_carried: true } : {}),
-    });
+    const fromAiTurn = d.withdraw_evidence_ai_turns !== undefined;
+    const check = fromAiTurn
+      ? verifyAiWithdrawEvidence({ span: d.withdraw_evidence_span, ai_turn_texts: d.withdraw_evidence_ai_turns ?? [] })
+      : verifyWithdrawEvidence({
+          span: d.withdraw_evidence_span,
+          segment_ids: d.withdraw_evidence_segment_ids,
+          input_segments: d.input_segments,
+          latest: this.deps.stable(),
+          candidate_evidence_span: record.evidence_span,
+          ...(record.carried_over ? { candidate_carried: true } : {}),
+        });
     if (!check.ok) return this.rejectModel(d, 'withdraw_evidence_invalid', check.details, { record });
     const from = record.state;
-    const segment_ids = verified(check.segment_ids, WITHDRAW_EVIDENCE_METHOD);
+    const evidence_source: WithdrawEvidenceSource = fromAiTurn ? 'ai_utterance' : 'user_utterance';
+    const segment_ids = verified(check.segment_ids, fromAiTurn ? WITHDRAW_AI_EVIDENCE_METHOD : WITHDRAW_EVIDENCE_METHOD);
     record.state = 'WITHDRAWN';
     record.updated_at = d.received_at;
     record.last_request_id = d.request_id;
@@ -292,12 +298,13 @@ export class CandidateLedger {
       request_id: d.request_id,
       withdraw_reason: structuredClone(d.withdraw_reason),
       evidence_segment_ids: segment_ids,
+      evidence_source,
       ...(d.withdraw_kind ? { withdraw_kind: d.withdraw_kind } : {}),
     };
     this.markApplied(d.transcript_revision);
-    this.emitModelChange(record, from, 'WITHDRAW', d.request_id, d.withdraw_kind);
+    this.emitModelChange(record, from, 'WITHDRAW', d.request_id, d.withdraw_kind, evidence_source);
     this.deps.speech.discardCandidate(record.candidate_id, 'candidate_withdrawn');
-    return { ...okResult('WITHDRAW', record, from, 'WITHDRAWN'), withdraw_evidence_segment_ids: segment_ids };
+    return { ...okResult('WITHDRAW', record, from, 'WITHDRAWN'), withdraw_evidence_segment_ids: fromAiTurn ? null : segment_ids };
   }
 
   // ---- 保留した NEW（E3 で調停） ---------------------------------------------
@@ -517,6 +524,10 @@ export class CandidateLedger {
    * 実際のセッションでは segment が変わるのは AI が話し始めたときだけなので、前者で必ず棄却される。
    * 後者を通るのは segment が判定から進んだ経路（リプレイ）だけ。
    */
+  private isKeepOfCarried(d: ModelDecision): boolean {
+    return d.decision === 'KEEP' && this.records.get(d.target.candidate_id)?.carried_over !== undefined;
+  }
+
   private rejectAcrossSegment(d: ModelDecision): Rejection | null {
     const where = [`input_segment=${d.segment_id}`, `current=${this.currentSegment}`];
     const start = this.lastAiStart;
@@ -775,6 +786,7 @@ export class CandidateLedger {
     decision: 'NEW' | 'REVISE' | 'WITHDRAW',
     request_id: string,
     withdraw_kind?: ContentWithdrawKind,
+    evidence_source?: WithdrawEvidenceSource,
   ): void {
     this.deps.emitter.emit({
       event: 'candidate.state_changed',
@@ -786,12 +798,15 @@ export class CandidateLedger {
       decision,
       request_id,
       ...(withdraw_kind ? { withdraw_kind: modelOutput(withdraw_kind) } : {}),
+      ...(evidence_source ? { withdraw_evidence_source: verified(evidence_source, EVIDENCE_SOURCE_METHOD) } : {}),
     });
   }
 }
 
 const EVIDENCE_METHOD = 'e2a_listed_segments_contain_span_and_exist_in_latest';
 const WITHDRAW_EVIDENCE_METHOD = 'e2a_listed_segments_contain_span_after_candidate';
+const WITHDRAW_AI_EVIDENCE_METHOD = 'e2a_span_in_shown_ai_turn';
+const EVIDENCE_SOURCE_METHOD = 'e2a_withdraw_evidence_matched_verbatim';
 
 function refOf(record: LedgerRecord): CandidateRef {
   return { candidate_id: record.candidate_id, candidate_version: record.candidate_version };

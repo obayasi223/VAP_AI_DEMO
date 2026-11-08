@@ -13,7 +13,7 @@ import {
   TrackSettings,
   VisibilityName,
 } from './browser_rpc';
-import { CandidateCause, CandidateRejectReason, CandidateState, ContentWithdrawKind, ConversationKind, TimingVerdict } from './candidates';
+import { CandidateCause, CandidateRejectReason, CandidateState, ContentWithdrawKind, ConversationKind, TimingVerdict, WithdrawEvidenceSource } from './candidates';
 import {
   AsrSegmentId,
   AudioFrameIndex,
@@ -372,6 +372,17 @@ export const InitiativeDesireOutcome = z.enum([
 export type InitiativeDesireOutcome = z.infer<typeof InitiativeDesireOutcome>;
 
 /**
+ * AI がすでに話した内容との比較（コードの基準。文字 2-gram のコサインで、発話全体と文ごとの大きい方）。
+ * 閾値は policy.initiative.staged.already_said_min_similarity【暫定】。文の一致で、意味の同一性は確かめていない。
+ */
+const AlreadySaidComparison = z.strictObject({
+  method: NonEmptyString,
+  similarity: Probability,
+  threshold: Probability,
+  matched_text: z.string(),
+});
+
+/**
  * 生成段の結果（言いたいことが生じたかと、その内容）。「今言うべきか」はここに入らない。
  * desire の値は initiative.decision の正本（NONE/NEW/KEEP/REVISE/WITHDRAW）と同じ語。KEEP/REVISE/WITHDRAW は未解決の希望の
  * 内容の再評価（タイミング段の「今は言わない」とは別の軸）。withdraw_* と revise_comparison は該当するときだけ入る（古いログにはない）。
@@ -403,6 +414,8 @@ export const InitiativeDesireEvent = eventSchema('initiative.desire', {
   withdraw_reason: MaybeModelOutput(z.string()).optional(),
   withdraw_evidence_span: MaybeModelOutput(z.string()).optional(),
   withdraw_evidence_segment_ids: Maybe(Verified(z.array(AsrSegmentId).min(1))).optional(),
+  /** 撤回の根拠がどちらの発話の逐語で確かめられたか。AI の発話のときは withdraw_evidence_segment_ids は null（ASR の区間がない）。 */
+  withdraw_evidence_source: Verified(WithdrawEvidenceSource).optional(),
   /** REVISE の前後の比較（コードの基準。維持として扱ったかは outcome の revise_suppressed）。 */
   revise_comparison: Verified(
     z.strictObject({
@@ -412,6 +425,8 @@ export const InitiativeDesireEvent = eventSchema('initiative.desire', {
       same_intent_type: z.boolean(),
     }),
   ).optional(),
+  /** AI がすでに話した内容と同じとして NEW を棄却した比較（gate.reasons の already_said）。棄却したときだけ入る。 */
+  already_said_comparison: Verified(AlreadySaidComparison).optional(),
 });
 
 const TimingBody = {
@@ -495,6 +510,8 @@ export const CandidateStateChangedEvent = z.discriminatedUnion('cause_source', [
     request_id: NonEmptyString,
     /** decision=WITHDRAW の内容の分類（二段判定のとき。LLM の出力）。 */
     withdraw_kind: MaybeModelOutput(ContentWithdrawKind).optional(),
+    /** decision=WITHDRAW の根拠がどちらの発話の逐語で確かめられたか。 */
+    withdraw_evidence_source: Verified(WithdrawEvidenceSource).optional(),
   }),
 ]);
 
@@ -522,6 +539,58 @@ export const InitiativeResponseMaterialEvent = eventSchema('initiative.response_
   transcript_revision: TranscriptRevision,
   prompt_version: NonEmptyString,
   proposed_utterance: ModelOutput(z.string()),
+  at: MonotonicMs,
+});
+
+/**
+ * 通常応答の材料（initiative.response_material）を渡した応答と、実際に話した文（話した部分だけ）の比較。**「反映された」という確定ではない**。
+ * 発話の終わりにコードが計算する（通常応答を待たせない）。estimated_reflected は文字の一致からの推定で、言い換えや意味の反映は測れない。
+ * LLM の自己申告は使っていない。
+ */
+export const InitiativeResponseReflectionEvent = eventSchema('initiative.response_reflection', {
+  candidate_id: CandidateId,
+  candidate_version: CandidateVersion,
+  /** initiative.response_material と同じ値（渡した応答の準備の入力）。 */
+  segment_id: SegmentId,
+  transcript_revision: TranscriptRevision,
+  /** 再生まで進んだら番号、準備のまま取り消されたら番号がないこともある。 */
+  audio_playback_id: Maybe(AudioPlaybackId),
+  proposed_utterance: ModelOutput(z.string()),
+  spoken_text: z.string(),
+  spoken_text_precision: Maybe(SpokenTextPrecision),
+  interrupted: z.boolean(),
+  /** spoken は最後まで話した、partly_spoken は割り込みで途中まで、not_spoken は話していない（準備のまま取り消し、1 音も出なかった）。 */
+  spoken_outcome: z.enum(['spoken', 'partly_spoken', 'not_spoken']),
+  /** not_spoken は比較しない（null と理由）。 */
+  estimated_reflected: Maybe(z.boolean()),
+  /** 推定の値と基準。文字 2-gram の包含率（内容の字を含む 2-gram が基本）と閾値、参考のコサイン。 */
+  estimate: Maybe(
+    z.strictObject({
+      method: NonEmptyString,
+      basis: z.enum(['content_bigrams', 'all_bigrams']),
+      containment: Probability,
+      cosine: Probability,
+      threshold: Probability,
+      material_bigrams: NonNegativeInt,
+      matched_bigrams: NonNegativeInt,
+    }),
+  ),
+  at: MonotonicMs,
+});
+
+/** 候補がすでに AI の話した内容と同じなのでコードが撤回した（candidate.state_changed の cause=already_said と対で出す）。 */
+export const InitiativeAlreadySaidEvent = eventSchema('initiative.already_said', {
+  candidate_id: CandidateId,
+  candidate_version: CandidateVersion,
+  /** before_speech は候補を話す直前のガード、after_ai_speech は AI の発話の後の照合。 */
+  stage: z.enum(['before_speech', 'after_ai_speech']),
+  /** 撤回した時点の候補の状態（遷移の前）。 */
+  candidate_state: CandidateState,
+  proposed_utterance: ModelOutput(z.string()),
+  comparison: Verified(AlreadySaidComparison),
+  /** 一致した AI の発話（origin は通常応答か候補か）。 */
+  matched_audio_playback_id: AudioPlaybackId,
+  matched_origin: z.enum(['response', 'candidate']),
   at: MonotonicMs,
 });
 
@@ -969,6 +1038,8 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   InitiativeTimingEvent,
   InitiativeNotOfferedEvent,
   InitiativeResponseMaterialEvent,
+  InitiativeResponseReflectionEvent,
+  InitiativeAlreadySaidEvent,
   CandidateStateChangedEvent,
   CandidateRejectedEvent,
   SignalSentEvent,
@@ -1012,6 +1083,8 @@ export const EVENT_NAMES = [
   'initiative.timing',
   'initiative.not_offered',
   'initiative.response_material',
+  'initiative.response_reflection',
+  'initiative.already_said',
   'candidate.state_changed',
   'signal.sent',
   'signal.started',

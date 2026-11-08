@@ -36,6 +36,8 @@ export const CandidateCause = z.enum([
   'active_candidate_exists',
   'signal_cooldown',
   'normal_response_started',
+  /** AI がすでに話した内容と同じだった（コードの比較。発話の直前のガードと、AI の発話の後の照合）。詳細は initiative.already_said。 */
+  'already_said',
   /** 候補の音声を発声の前に用意できなかった（TTS の失敗、吸気の後の期限切れ）。内容の撤回でも期限切れでもない。 */
   'audio_unavailable',
   'speech_finished',
@@ -100,9 +102,17 @@ export type TimingVerdict = z.infer<typeof TimingVerdict>;
 /**
  * 内容の撤回の分類（生成段が付ける。docs/initiative_v3_design.md §4）。タイミングの「今は言わない」とは別の軸。
  * 意味の定義は設計メモ。分類は LLM の判断で、ログでは ModelOutput で包む。
+ * already_said は AI がすでに話した内容（initiative-desire-ja-v3 から）。コードの比較による同じ名前の撤回は CandidateCause の already_said で区別する。
  */
-export const ContentWithdrawKind = z.enum(['question_resolved', 'premise_changed', 'topic_moved']);
+export const ContentWithdrawKind = z.enum(['question_resolved', 'premise_changed', 'topic_moved', 'already_said']);
 export type ContentWithdrawKind = z.infer<typeof ContentWithdrawKind>;
+
+/**
+ * 内容の撤回の根拠がどちらの発話にあったか（コードの照合の結果。docs/initiative_v3_design.md §1）。
+ * user_utterance は今話している人の発話（希望の根拠より後ろ）、ai_utterance は直近の会話の AI の発話（実際に声に出た部分）。
+ */
+export const WithdrawEvidenceSource = z.enum(['user_utterance', 'ai_utterance']);
+export type WithdrawEvidenceSource = z.infer<typeof WithdrawEvidenceSource>;
 
 export interface CandidateRegistration {
   segment_id: number;

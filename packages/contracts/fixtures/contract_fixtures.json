@@ -975,6 +975,138 @@
         }
       },
       {
+        "name": "initiative.response_reflection",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "initiative.response_reflection",
+          "candidate_id": "c_0007",
+          "candidate_version": 2,
+          "segment_id": 4,
+          "transcript_revision": 50,
+          "audio_playback_id": {
+            "value": 12
+          },
+          "proposed_utterance": {
+            "source": "model_output",
+            "value": "それは先ほどの前提と違いませんか"
+          },
+          "spoken_text": "先ほどの前提と違うようです",
+          "spoken_text_precision": {
+            "value": "alignment_char"
+          },
+          "interrupted": false,
+          "spoken_outcome": "spoken",
+          "estimated_reflected": {
+            "value": true
+          },
+          "estimate": {
+            "value": {
+              "method": "char_bigram_containment:v1",
+              "basis": "content_bigrams",
+              "containment": 0.71,
+              "cosine": 0.6,
+              "threshold": 0.5,
+              "material_bigrams": 14,
+              "matched_bigrams": 10
+            }
+          },
+          "at": 2200
+        }
+      },
+      {
+        "name": "initiative.response_reflection/not_spoken",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "initiative.response_reflection",
+          "candidate_id": "c_0007",
+          "candidate_version": 2,
+          "segment_id": 4,
+          "transcript_revision": 50,
+          "audio_playback_id": {
+            "value": null,
+            "null_reason": "not_played"
+          },
+          "proposed_utterance": {
+            "source": "model_output",
+            "value": "それは先ほどの前提と違いませんか"
+          },
+          "spoken_text": "",
+          "spoken_text_precision": {
+            "value": null,
+            "null_reason": "not_spoken"
+          },
+          "interrupted": false,
+          "spoken_outcome": "not_spoken",
+          "estimated_reflected": {
+            "value": null,
+            "null_reason": "not_spoken"
+          },
+          "estimate": {
+            "value": null,
+            "null_reason": "not_spoken"
+          },
+          "at": 2200
+        }
+      },
+      {
+        "name": "initiative.already_said",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "initiative.already_said",
+          "candidate_id": "c_0007",
+          "candidate_version": 2,
+          "stage": "after_ai_speech",
+          "candidate_state": "INTENT_READY",
+          "proposed_utterance": {
+            "source": "model_output",
+            "value": "それは先ほどの前提と違いませんか"
+          },
+          "comparison": {
+            "source": "verified",
+            "value": {
+              "method": "char_ngram_cosine:n=2",
+              "similarity": 0.92,
+              "threshold": 0.8,
+              "matched_text": "それは先ほどの前提と違いませんか"
+            },
+            "method": "already_said_comparison"
+          },
+          "matched_audio_playback_id": 12,
+          "matched_origin": "response",
+          "at": 2300
+        }
+      },
+      {
         "name": "negotiation.cue_reaction",
         "value": {
           "schema_version": 1,

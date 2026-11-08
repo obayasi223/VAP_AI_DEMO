@@ -115,10 +115,12 @@
     "staged": {
       "timing_strategy": "llm",
       "conversation_kind": "joint_thinking",
-      "desire_prompt_version": "initiative-desire-ja-v2",
+      "desire_prompt_version": "initiative-desire-ja-v3",
       "timing_prompt_version": "initiative-timing-ja-v2",
       "recent_context": { "max_turns": 6, "max_chars_per_turn": 300 },
-      "revise_min_utterance_similarity": 0.8
+      "revise_min_utterance_similarity": 0.8,
+      "already_said_min_similarity": 0.8,
+      "reflection_min_containment": 0.5
     }
   },
   "speech": {

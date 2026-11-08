@@ -23,8 +23,8 @@ export const DESIRE_JSON_SCHEMA = {
     prior_turn_evidence_span: { type: 'string', description: '過去のターンから抜き出した根拠の一部。なければ空。' },
     withdraw_kind: { type: 'string', enum: ['', ...CONTENT_WITHDRAW_KINDS], description: 'WITHDRAW の分類。他は空。' },
     withdraw_reason: { type: 'string', description: 'WITHDRAW の理由。他は空。' },
-    withdraw_evidence_span: { type: 'string', description: 'WITHDRAW の根拠になった今の発話をそのまま抜き出す。他は空。' },
-    withdraw_evidence_segment_ids: { type: 'array', items: { type: 'integer' }, description: 'withdraw_evidence_span を含む区間の番号。' },
+    withdraw_evidence_span: { type: 'string', description: 'WITHDRAW の根拠になった発話をそのまま抜き出す。他は空。' },
+    withdraw_evidence_segment_ids: { type: 'array', items: { type: 'integer' }, description: 'withdraw_evidence_span を含む区間の番号。AI の発話を根拠にしたときは空。' },
   },
   required: ['reason', 'desire', 'target_candidate_id', 'intent_type', 'proposed_utterance', 'evidence_span', 'evidence_segment_ids', 'prior_turn_evidence_span', 'withdraw_kind', 'withdraw_reason', 'withdraw_evidence_span', 'withdraw_evidence_segment_ids'],
 };

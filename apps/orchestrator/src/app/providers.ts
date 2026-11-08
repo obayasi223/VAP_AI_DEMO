@@ -26,7 +26,7 @@ import { createGeminiProviderFromEnv } from '../providers/llm';
 import { createGoogleSttProviderFromEnv } from '../providers/stt';
 import { chooseTtsProvider, createElevenLabsTtsProviderFromEnv, createGeminiTtsProviderFromEnv } from '../providers/tts';
 import type { OrchestratorConfig } from './config';
-import { EnergyScriptedSttProvider, INITIATIVE_STT_SCRIPT, ScriptedReplyLlm, WavScriptedTtsProvider } from './scripted';
+import { EnergyScriptedSttProvider, INITIATIVE_LONG_STT_SCRIPT, INITIATIVE_STT_SCRIPT, ScriptedReplyLlm, WavScriptedTtsProvider, scriptedSecondJudgementMode } from './scripted';
 import type { ScriptedInitiativeMode } from './scripted';
 
 /**
@@ -35,8 +35,8 @@ import type { ScriptedInitiativeMode } from './scripted';
  */
 function scriptedInitiative(env: NodeJS.ProcessEnv): ScriptedInitiativeMode {
   const value = env.SCRIPTED_INITIATIVE || 'none';
-  if (value !== 'none' && value !== 'new_on_input' && value !== 'wait_on_input') {
-    throw new Error(`SCRIPTED_INITIATIVE must be none, new_on_input or wait_on_input, got ${value}`);
+  if (value !== 'none' && value !== 'new_on_input' && value !== 'wait_on_input' && value !== 'revise_on_input' && value !== 'withdraw_on_input') {
+    throw new Error(`SCRIPTED_INITIATIVE must be none, new_on_input, wait_on_input, revise_on_input or withdraw_on_input, got ${value}`);
   }
   return value;
 }
@@ -125,10 +125,13 @@ export async function createSessionProviders(input: {
   let stt: Built<SttProvider>;
   if (config.stt === 'test_double') {
     // 台本の発話希望は候補を話しうる条件のセッションだけ（reactive のセッションの台本は変えない）。
-    const scripted = scriptedInitiative(env) !== 'none' && condition !== 'reactive';
+    const mode = scriptedInitiative(env);
+    const scripted = mode !== 'none' && condition !== 'reactive';
+    // 内容更新と撤回の台本は長い文で、1文字の長さを短くする（話している間に2回の判定が走るように。実測の話速ではない）。
+    const second = scripted && scriptedSecondJudgementMode(mode);
     stt = {
       ok: true,
-      value: new EnergyScriptedSttProvider({ time, emitter, ...(scripted ? { stable_interim: true, script: INITIATIVE_STT_SCRIPT } : {}) }),
+      value: new EnergyScriptedSttProvider({ time, emitter, ...(scripted ? { stable_interim: true, script: second ? INITIATIVE_LONG_STT_SCRIPT : INITIATIVE_STT_SCRIPT } : {}), ...(second ? { ms_per_char: 90 } : {}) }),
     };
   } else {
     try {

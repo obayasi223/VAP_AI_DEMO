@@ -73,8 +73,11 @@ export interface NegotiatorState {
   last_cue_at: number | null;
   /** 今の合図（吸気〜保持）。DEFERRED、発話、撤回で解く。 */
   cue: CueState | null;
-  /** DEFERRED へ移った合図。候補が撤回されたら脱力を解く（breath.release: withdrawn）ために cue_id を覚えておく。 */
-  deferred: { cue_id: string; candidate_id: string }[];
+  /**
+   * DEFERRED へ移った合図。候補が撤回されたら脱力を解く（breath.release: withdrawn）ために cue_id を覚えておく。
+   * audio_wait_started_at は、許可が出たまま新しい音声（改訂の作り直し）を待ち始めた時刻（hold_max_ms の待ちの起点）。
+   */
+  deferred: { cue_id: string; candidate_id: string; audio_wait_started_at?: number | null }[];
 }
 
 export function initialNegotiatorState(): NegotiatorState {
@@ -91,6 +94,8 @@ export interface NegotiatorTickInputs {
   avatar_available: boolean;
   /** TurnManager の user_speaking（前の tick の値）。 */
   user_speaking: boolean;
+  /** TurnManager の permitted_to_speak（前の tick の値）。延期中の音声の作り直しの待ちの起点。省略は false。 */
+  permitted?: boolean;
 }
 
 export type NegotiatorAction =
@@ -226,6 +231,28 @@ export function negotiate(settings: NegotiatorSettings, previous: NegotiatorStat
     state = { ...state, deferred: state.deferred.filter((d) => d !== deferred) };
   }
 
+  // DEFERRED の候補の音声を作り直している（延期中の改訂）。開始を保留し（通常の応答に切り替えない）、許可が出たら hold_max_ms まで待つ。
+  // 許可が出ているのに間に合わなければ話せないので閉じる。許可が出ていない間（話し続けている、間を待っている）は待ちに数えない。
+  let deferredAudioCue: string | null = null;
+  for (const deferred of [...state.deferred]) {
+    const candidate = inputs.candidates.find((c) => c.candidate_id === deferred.candidate_id);
+    const waiting = candidate?.state === 'DEFERRED' && candidate.audio === 'preparing';
+    if (waiting) deferredAudioCue = deferred.cue_id;
+    if (!waiting || inputs.permitted !== true) {
+      if (deferred.audio_wait_started_at != null) state = { ...state, deferred: state.deferred.map((d) => (d === deferred ? { ...d, audio_wait_started_at: null } : d)) };
+      continue;
+    }
+    const since = deferred.audio_wait_started_at ?? now;
+    if (now - since >= settings.hold_max_ms) {
+      actions.push({ kind: 'audio_abandoned', candidate_id: candidate.candidate_id, candidate_version: candidate.candidate_version, reasons: [`audio_not_ready_by_deadline:deferred_wait_ms=${Math.round(now - since)}`] });
+      actions.push({ kind: 'release', cue_id: deferred.cue_id, candidate_id: candidate.candidate_id, reason: 'withdrawn' });
+      state = { ...state, deferred: state.deferred.filter((d) => d !== deferred) };
+      deferredAudioCue = null;
+    } else if (deferred.audio_wait_started_at == null) {
+      state = { ...state, deferred: state.deferred.map((d) => (d === deferred ? { ...d, audio_wait_started_at: since } : d)) };
+    }
+  }
+
   // 吸気の完了は orchestrator の時計（ブラウザの報告を待たない）。
   const target = cueTarget(state, inputs);
   // 吸気の後に音声を待っている。通常の応答も含めて開始を保留する（待ちは hold_max_ms まで）。
@@ -292,7 +319,9 @@ export function negotiate(settings: NegotiatorSettings, previous: NegotiatorStat
     ? `candidate_inhale_in_progress:${state.cue?.cue_id}`
     : waitingForAudio && state.cue !== null
       ? `candidate_audio_wait:${state.cue.cue_id}`
-      : null;
+      : deferredAudioCue !== null
+        ? `candidate_audio_wait:${deferredAudioCue}`
+        : null;
   return { state, actions, gate, hold_start };
 }
 
@@ -308,6 +337,19 @@ export function releaseForSpeech(
     state: { ...state, cue: null, deferred },
     action: { kind: 'release', cue_id: state.cue.cue_id, candidate_id, reason: 'speech_started' },
   };
+}
+
+/** 候補を発話の前に撤回したときの解除（合図と DEFERRED の脱力の両方。理由は withdrawn）。呼び手が actions を送る。 */
+export function releaseForWithdrawal(
+  state: NegotiatorState,
+  candidate_id: string,
+): { state: NegotiatorState; actions: Extract<NegotiatorAction, { kind: 'release' }>[] } {
+  const actions: Extract<NegotiatorAction, { kind: 'release' }>[] = [];
+  if (state.cue?.candidate_id === candidate_id) actions.push({ kind: 'release', cue_id: state.cue.cue_id, candidate_id, reason: 'withdrawn' });
+  for (const deferred of state.deferred) {
+    if (deferred.candidate_id === candidate_id) actions.push({ kind: 'release', cue_id: deferred.cue_id, candidate_id, reason: 'withdrawn' });
+  }
+  return { state: { ...state, cue: state.cue?.candidate_id === candidate_id ? null : state.cue, deferred: state.deferred.filter((d) => d.candidate_id !== candidate_id) }, actions };
 }
 
 // ---- 合図の後の人の反応の観測 -----------------------------------------------------
@@ -438,8 +480,8 @@ export function selectSpeech(settings: NegotiatorSettings, inputs: SelectionInpu
   if (!speakable.includes(c.state)) {
     return { choice: 'response', reasons: [c.state === 'INTENT_READY' ? 'not_cued' : `state_not_speakable:${c.state}`], cause: null };
   }
-  // 吸気の後の準備姿勢で音声を待っている間（期限まで）は、通常応答に切り替えない（negotiate が hold_start で止めている）。
-  if (c.state === 'BREATH_HOLD_OR_READY' && c.audio === 'preparing') return { choice: 'wait', reasons: ['candidate_audio_preparing'], cause: null };
+  // 吸気の後の準備姿勢や延期中の作り直しで音声を待っている間（期限まで）は、通常応答に切り替えない（negotiate が hold_start で止めている）。
+  if ((c.state === 'BREATH_HOLD_OR_READY' || c.state === 'DEFERRED') && c.audio === 'preparing') return { choice: 'wait', reasons: ['candidate_audio_preparing'], cause: null };
   if (c.audio !== 'ready') return { choice: 'response', reasons: [`candidate_audio_${c.audio}`], cause: null };
   const chars = c.new_chars_since_judgement;
   if (chars === null) return { choice: 'response', reasons: ['judgement_input_unknown'], cause: null };

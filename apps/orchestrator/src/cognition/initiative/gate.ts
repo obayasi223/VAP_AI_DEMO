@@ -111,6 +111,25 @@ export function checkWithdrawEvidence(check: WithdrawCheckInput): GateResult<{ s
   return base;
 }
 
+export interface AiWithdrawEvidenceCheck {
+  span: string;
+  /** 生成段に見せた直近の会話の AI の発話（実際に声に出た部分だけ。古い順）。 */
+  ai_turn_texts: readonly string[];
+}
+
+/**
+ * 撤回の根拠が AI の発話にある場合の照合（逐語のみ。docs/initiative_v3_design.md §1）。候補の根拠より後ろかは問わない
+ * （AI がすでに話していたなら、希望より前の発話でも撤回の根拠になる）。新しいターンから探す。
+ */
+export function checkAiWithdrawEvidence(check: AiWithdrawEvidenceCheck): GateResult<{ turn_index: number }> {
+  const span = normalizeForMatch(check.span);
+  if (span.length < MIN_EVIDENCE_CHARS) return { ok: false, reasons: ['evidence_too_short'] };
+  for (let i = check.ai_turn_texts.length - 1; i >= 0; i -= 1) {
+    if (normalizeForMatch(check.ai_turn_texts[i]!).includes(span)) return { ok: true, turn_index: i };
+  }
+  return { ok: false, reasons: ['withdraw_evidence_not_in_ai_turns'] };
+}
+
 export interface PriorTurnEvidenceCheck {
   span: string;
   turns: readonly RecentTurn[];

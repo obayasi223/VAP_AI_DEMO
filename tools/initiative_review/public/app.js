@@ -355,6 +355,32 @@ function actualBlock(item) {
   return rows.length === 0 ? el('p', { class: 'note', text: '吸気も発話も起きていません。' }) : el('table', {}, rows);
 }
 
+// 通常応答に渡した材料（渡した版）と、実際に話した文の比較。反映はコードの文字の一致からの推定で、確定ではない。
+function reflectionBlock(item) {
+  if (item.kind !== 'candidate') return null;
+  if (item.reflection.length === 0) return el('p', { class: 'note', text: '通常応答の材料として渡していません。' });
+  const outcome = (r) => (r.spoken_outcome === 'spoken' ? '話した' : r.spoken_outcome === 'partly_spoken' ? '途中まで話した（割り込み）' : r.spoken_outcome === 'not_spoken' ? '話していない' : '記録なし');
+  const verdict = (r) => (r.estimated_reflected === null ? `推定なし（${r.estimate_reason ?? '応答の結果の記録がない'}）` : r.estimated_reflected ? '反映あり（推定）' : '反映なし（推定）');
+  return el(
+    'table',
+    {},
+    item.reflection.map((r) =>
+      el(
+        'tr',
+        {},
+        el('th', { text: `版 ${r.candidate_version ?? '—'} ／ ${fmtT(r.given_at ?? r.t_ms)}` }),
+        el(
+          'td',
+          {},
+          el('div', {}, el('b', { text: '渡した版: ' }), r.given_text ?? '—', badge('model_output')),
+          el('div', {}, el('b', { text: `実際に話した文（${outcome(r)}）: ` }), r.spoken_text || '（話した文なし）'),
+          el('div', {}, el('b', { text: '推定の一致: ' }), `${verdict(r)}${r.estimate_text ? ` — ${r.estimate_text}` : ''}`, badge('code')),
+        ),
+      ),
+    ),
+  );
+}
+
 function lineRow(line) {
   const missed = (state.doc?.missed ?? []).some((m) => m.anchor_line_id === line.id);
   return el(
@@ -452,6 +478,8 @@ function renderDetail() {
     el('div', { class: 'panel' }, timelineTable(item)),
     el('h3', { text: '実際に吸気や発話が起きた時刻' }),
     el('div', { class: 'panel' }, actualBlock(item)),
+    el('h3', { text: '通常応答に渡した材料と、反映の推定（渡した版、実際に話した文、推定の一致）' }),
+    el('div', { class: 'panel' }, reflectionBlock(item)),
     el('h3', { text: '前後の会話（人の行は ASR、AI の行は実際に声になった部分）' }),
     el('div', { class: 'panel' }, conversationBlock(item)),
   );

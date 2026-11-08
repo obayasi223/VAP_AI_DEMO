@@ -522,6 +522,8 @@ export class Session {
           },
           segment,
         );
+        // 履歴へ確定した後。話した部分と保留中の候補を比べる（通常応答の開始や準備を待たせない）。
+        this.negotiation?.onAiSpeechFinished(finished, this.time.monotonicMs());
       }),
     );
   }
@@ -556,6 +558,7 @@ export class Session {
                 timing_prompt_version: setup.staged.timing_prompt_version,
                 history: this.history,
                 ...(policy.initiative.staged?.revise_min_utterance_similarity !== undefined ? { revise_min_utterance_similarity: policy.initiative.staged.revise_min_utterance_similarity } : {}),
+                ...(policy.initiative.staged?.already_said_min_similarity !== undefined ? { already_said_min_similarity: policy.initiative.staged.already_said_min_similarity } : {}),
               },
             }
           : {}),
@@ -568,6 +571,16 @@ export class Session {
           emitter: this.emitter,
           speech: () => this.speech,
           send: (message) => this.send(message),
+          now: () => this.time.monotonicMs(),
+          ...(setup.staged
+            ? {
+                history: this.history,
+                repeat_guard: {
+                  ...(policy.initiative.staged?.already_said_min_similarity !== undefined ? { already_said_min_similarity: policy.initiative.staged.already_said_min_similarity } : {}),
+                  ...(policy.initiative.staged?.reflection_min_containment !== undefined ? { reflection_min_containment: policy.initiative.staged.reflection_min_containment } : {}),
+                },
+              }
+            : {}),
         });
       } else {
         this.negotiationReason = 'negotiation_settings_unavailable';
@@ -869,6 +882,7 @@ export class Session {
           ai_speaking: previous.speaking.phase !== 'silent' || (this.speech?.activePlayback() ?? null) !== null,
           avatar_available: this.link !== null,
           user_speaking: previous.user_speaking,
+          permitted: previous.permitted_to_speak,
           p_now_ai: this.vap === null ? null : readVap(this.vap, vapDirectionSettings(this.options.policy)).p_now_ai,
         }) ?? null;
       const inputs = this.inputs(holdStart);

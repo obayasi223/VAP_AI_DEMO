@@ -5,7 +5,7 @@
  *  - dropped: 判定がコードに棄てられた要求（stale、ゲート、保留など）。適用されなかったので候補にならないが、見て評価できるようにする。
  */
 import { conversationLabel, fieldsFrom, num, unwrapValue, type Collected, type DecisionRecord, type LlmRecord, type RawEvent, type SttRecord } from './readers';
-import type { DecisionStep, Field, InhaleRecord, RateAxis, ReviewItem, SpeechOutcome, SpeechRecord, StableSnapshot, TimelineRow, TranscriptLine } from './model';
+import type { DecisionStep, Field, InhaleRecord, RateAxis, ReflectionView, ReviewItem, SpeechOutcome, SpeechRecord, StableSnapshot, TimelineRow, TranscriptLine } from './model';
 
 const FRAMES_PER_MS = 16;
 
@@ -63,6 +63,13 @@ function stableAt(stt: SttRecord[], segmentId: number | null, revision: number |
     .sort((a, b) => a.asr_segment_id - b.asr_segment_id)
     .map((r) => ({ asr_segment_id: r.asr_segment_id, text: r.stable_text, unstable: r.unstable_text, final: r.final }));
   return { ...empty, segments, text: segments.map((s) => s.text).join('') };
+}
+
+/** 推定の値と基準を、画面に出す短い文にする（値の丸めは表示だけ）。 */
+function estimateText(estimate: Record<string, unknown> | null): string | null {
+  if (estimate === null) return null;
+  const n = (key: string): string => (typeof estimate[key] === 'number' ? String(Math.round((estimate[key] as number) * 1000) / 1000) : '—');
+  return `包含率 ${n('containment')}（基準 ${n('threshold')}、2-gram ${n('matched_bigrams')}/${n('material_bigrams')}、${String(estimate.basis ?? '—')}）`;
 }
 
 function buildLines(c: Collected, map: FrameMap): TranscriptLine[] {
@@ -166,6 +173,11 @@ function droppedStep(requestId: string | null, llm: LlmRecord | undefined, c: Co
   };
 }
 
+function reflectionRow(r: Collected['reflections'][number]): TimelineRow {
+  const verdict = r.estimated_reflected === null ? `推定なし（${r.estimate_reason ?? '理由なし'}）` : r.estimated_reflected ? '推定: 反映あり' : '推定: 反映なし';
+  return { t_ms: r.t_ms, event: 'initiative.response_reflection', label: `通常応答の結果（${r.spoken_outcome}）: ${verdict}`, detail: r.spoken_text || null, provenance: 'code' };
+}
+
 function initiativeRequestAtRevision(c: Collected, revision: number | null): string | null {
   if (revision === null) return null;
   let found: string | null = null;
@@ -261,6 +273,7 @@ export function assemble(c: Collected, ctx: AssembleContext): { items: ReviewIte
         timeline: [],
         inhale: [],
         speech: [],
+        reflection: [],
       };
       shells.set(key, item);
     }
@@ -411,6 +424,51 @@ export function assemble(c: Collected, ctx: AssembleContext): { items: ReviewIte
         provenance: 'code',
       });
     }
+  }
+  // 通常応答の材料（渡した版）と、実際に話した文の比較。同じ候補・版・入力の組で結ぶ。
+  const reflectionsByMaterial = new Map<string, Collected['reflections'][number]>();
+  const materialKey = (m: { candidate_id: string; candidate_version: number | null; segment_id: number | null; transcript_revision: number | null }) =>
+    `${m.candidate_id}|${String(m.candidate_version)}|${String(m.segment_id)}|${String(m.transcript_revision)}`;
+  for (const r of c.reflections) reflectionsByMaterial.set(materialKey(r), r);
+  for (const material of c.materials) {
+    const item = onCandidate(material.candidate_id);
+    if (item === undefined) continue;
+    const key = materialKey(material);
+    const r = reflectionsByMaterial.get(key);
+    reflectionsByMaterial.delete(key);
+    const view: ReflectionView = {
+      t_ms: r?.t_ms ?? material.t_ms,
+      candidate_version: material.candidate_version,
+      given_text: material.proposed_utterance,
+      prompt_version: material.prompt_version,
+      given_at: material.t_ms,
+      audio_playback_id: r?.audio_playback_id ?? null,
+      spoken_text: r?.spoken_text ?? '',
+      spoken_outcome: r?.spoken_outcome ?? null,
+      interrupted: r?.interrupted ?? false,
+      estimated_reflected: r?.estimated_reflected ?? null,
+      estimate_reason: r?.estimate_reason ?? null,
+      estimate_text: estimateText(r?.estimate ?? null),
+    };
+    item.reflection.push(view);
+    item.timeline.push({ t_ms: material.t_ms, event: 'initiative.response_material', label: `通常応答の材料として渡した（版 ${material.candidate_version ?? '—'}）`, detail: material.proposed_utterance, provenance: 'model_output' });
+    if (r) item.timeline.push(reflectionRow(r));
+  }
+  // 材料の記録なしの比較（古いログなど）も残す。
+  for (const r of reflectionsByMaterial.values()) {
+    const item = onCandidate(r.candidate_id);
+    if (item === undefined) continue;
+    item.reflection.push({ t_ms: r.t_ms, candidate_version: r.candidate_version, given_text: r.proposed_utterance, prompt_version: null, given_at: null, audio_playback_id: r.audio_playback_id, spoken_text: r.spoken_text, spoken_outcome: r.spoken_outcome, interrupted: r.interrupted, estimated_reflected: r.estimated_reflected, estimate_reason: r.estimate_reason, estimate_text: estimateText(r.estimate) });
+    item.timeline.push(reflectionRow(r));
+  }
+  for (const said of c.alreadySaid) {
+    onCandidate(said.candidate_id)?.timeline.push({
+      t_ms: said.t_ms,
+      event: 'initiative.already_said',
+      label: `撤回: すでに話した内容（${said.stage === 'before_speech' ? '発話の直前' : 'AI の発話の後'}。類似度 ${said.similarity === null ? '—' : Math.round(said.similarity * 1000) / 1000}、基準 ${said.threshold ?? '—'}）`,
+      detail: said.matched_text,
+      provenance: 'code',
+    });
   }
   for (const other of c.others) {
     const key = (other.candidate_id !== null ? candidateToKey.get(other.candidate_id) : undefined) ?? (other.request_id !== null ? requestToKey.get(other.request_id) : undefined);

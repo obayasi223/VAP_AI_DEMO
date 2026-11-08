@@ -15,6 +15,8 @@
  * - LLM が書いた理由は ModelOutput で包み、ゲートは読まない。
  * - 根拠の範囲: evidence_span は今話している側の安定テキストだけに照合する（E2a の照合と同じ）。
  *   過去のターンは prior_turn_evidence_span で文脈として示せるが、単独では根拠にならず、照合に失敗したら棄却する。
+ * - 撤回の根拠は人の発話か、生成段に見せた AI の発話（実際に声に出た部分）の逐語。どちらで確かめたかを記録する（設計メモ §1）。
+ * - NEW は AI がすでに話した内容と同じなら棄却して理由を残す（already_said）。AI の発話に限り、人の発話の変化は見ない。
  */
 import { ContentWithdrawKind, absent, modelOutput, modelOutputAbsent, present, verified } from '@llm-vap/contracts';
 import type {
@@ -28,12 +30,15 @@ import type {
   MaybeModelOutput,
   TimeSource,
   TimingStrategy,
+  WithdrawEvidenceSource,
 } from '@llm-vap/contracts';
 import type { CandidateContent, CandidateModelNotes, DecisionMeta, DecisionResult, ModelDecision } from '../../control/candidates/types';
 import type { ConversationKindProfile } from './conversation_kind';
+import { findAlreadySaid } from './already_said';
+import type { AlreadySaidMatch } from './already_said';
 import { failureReason } from './failure';
 import { SIMILARITY_METHOD, charNgramCosine } from '../similarity';
-import { checkEvidence, checkFreshness, checkPriorTurnEvidence, checkWithdrawEvidence } from './gate';
+import { checkAiWithdrawEvidence, checkEvidence, checkFreshness, checkPriorTurnEvidence, checkWithdrawEvidence } from './gate';
 import { recentTurnsFromHistory } from './recent_turns';
 import type { RecentContextLimits, RecentTurn } from './recent_turns';
 import { DESIRE_JSON_SCHEMA, TIMING_JSON_SCHEMA, parseDesireOutput, parseTimingOutput } from './staged_output';
@@ -56,6 +61,8 @@ export interface StagedOptions {
   history?: Pick<ConversationHistoryReader, 'snapshot' | 'version'>;
   /** REVISE を維持として扱う proposed_utterance の類似度の下限（policy.initiative.staged の暫定値）。省略は比較しない。 */
   revise_min_utterance_similarity?: number;
+  /** AI がすでに話した内容と同じ NEW を棄却する類似度の下限（policy.initiative.staged の暫定値）。省略は棄却しない。 */
+  already_said_min_similarity?: number;
 }
 
 /** 1回の判定の入力（段ごとに作り直す）。 */
@@ -273,6 +280,8 @@ export class StagedPipeline<I extends StagedInput> {
     if (normalizeForMatch(output.proposed_utterance).length === 0) reasons.push('proposed_utterance_empty');
     const target = output.desire === 'REVISE' ? input.candidates.find((c) => c.candidate_id === output.target_candidate_id) : undefined;
     if (output.desire === 'REVISE' && !target) reasons.push('target_candidate_not_in_input');
+    const alreadySaid = output.desire === 'NEW' ? this.findAlreadySaid(output.proposed_utterance) : null;
+    if (alreadySaid) reasons.push('already_said');
     const stale = this.freshnessReasons(input);
     reasons.push(...stale);
     if (stale.length > 0) this.host.markStale();
@@ -284,6 +293,7 @@ export class StagedPipeline<I extends StagedInput> {
         gate_reasons: reasons,
         outcome: 'gate_rejected',
         ledger_reason: absent('gate_rejected'),
+        ...(alreadySaid ? { already_said: alreadySaid } : {}),
       });
       return stale.length > 0;
     }
@@ -345,6 +355,14 @@ export class StagedPipeline<I extends StagedInput> {
     return false;
   }
 
+  /** AI がすでに話した内容か（NEW の棄却）。基準か履歴がなければ比較しない。 */
+  private findAlreadySaid(utterance: string): AlreadySaidMatch | null {
+    const threshold = this.deps.options.already_said_min_similarity;
+    const history = this.deps.options.history;
+    if (threshold === undefined || !history) return null;
+    return findAlreadySaid(utterance, history.snapshot(), threshold);
+  }
+
   /** REVISE の前後の比較（proposed_utterance の文字 2-gram のコサインと意図の種類）。基準が未設定なら null。 */
   private reviseComparison(output: DesireOutput, target: CandidateRecord): ReviseComparison | null {
     const threshold = this.deps.options.revise_min_utterance_similarity;
@@ -394,6 +412,8 @@ export class StagedPipeline<I extends StagedInput> {
     if (!target) reasons.push('target_candidate_not_in_input');
     const kind = ContentWithdrawKind.safeParse(output.withdraw_kind);
     if (!kind.success) reasons.push('withdraw_kind_invalid');
+    let evidenceSource: WithdrawEvidenceSource = 'user_utterance';
+    let aiTurns: string[] | undefined;
     if (target) {
       const check = checkWithdrawEvidence({
         span: output.withdraw_evidence_span,
@@ -403,7 +423,17 @@ export class StagedPipeline<I extends StagedInput> {
         candidate_evidence_span: target.evidence_span,
         ...(target.carried_over ? { candidate_carried: true } : {}),
       });
-      if (!check.ok) reasons.push(...check.reasons.map((r) => `withdraw_rejected:${r}`));
+      if (!check.ok) {
+        // 人の発話に根拠がなければ、見せた AI の発話で確かめる（逐語のみ）。どちらでもなければ棄却する。
+        const ai = context.turns.filter((t) => t.role === 'ai').map((t) => t.text);
+        const aiCheck = ai.length > 0 ? checkAiWithdrawEvidence({ span: output.withdraw_evidence_span, ai_turn_texts: ai }) : null;
+        if (aiCheck?.ok) {
+          evidenceSource = 'ai_utterance';
+          aiTurns = ai;
+        } else {
+          reasons.push(...check.reasons.map((r) => `withdraw_rejected:${r}`), ...(aiCheck && !aiCheck.ok ? aiCheck.reasons.map((r) => `withdraw_rejected:${r}`) : []));
+        }
+      }
     }
     if (reasons.length > 0 || !target || !kind.success) {
       this.emitDesire(input, output, result, received_at, context, {
@@ -424,6 +454,7 @@ export class StagedPipeline<I extends StagedInput> {
       withdraw_evidence_segment_ids: output.withdraw_evidence_segment_ids,
       withdraw_reason: maybeText(output.withdraw_reason),
       withdraw_kind: kind.data,
+      ...(aiTurns ? { withdraw_evidence_ai_turns: aiTurns } : {}),
     });
     this.emitDesire(input, output, result, received_at, context, {
       ref: applied.ok ? (applied.ref as CandidateRef) : applied.ref,
@@ -432,7 +463,7 @@ export class StagedPipeline<I extends StagedInput> {
       gate_reasons: [],
       outcome: applied.ok ? 'withdrawn' : 'rejected',
       ledger_reason: applied.ok ? ACCEPTED : present(applied.reason),
-      withdraw: { kind: kind.data, reason: output.withdraw_reason, span: output.withdraw_evidence_span, segment_ids: applied.ok ? (applied.withdraw_evidence_segment_ids ?? null) : null },
+      withdraw: { kind: kind.data, reason: output.withdraw_reason, span: output.withdraw_evidence_span, segment_ids: applied.ok ? (applied.withdraw_evidence_segment_ids ?? null) : null, source: applied.ok ? evidenceSource : null },
     });
     if (applied.ok) this.verdicts.delete(target.candidate_id);
   }
@@ -500,7 +531,8 @@ export class StagedPipeline<I extends StagedInput> {
       outcome: InitiativeDesireOutcome;
       ledger_reason: { value: string } | { value: null; null_reason: string };
       revise_comparison?: ReviseComparison;
-      withdraw?: { kind: ContentWithdrawKind; reason: string; span: string; segment_ids: { source: 'verified'; value: number[]; method: string } | null };
+      withdraw?: { kind: ContentWithdrawKind; reason: string; span: string; segment_ids: { source: 'verified'; value: number[]; method: string } | null; source: WithdrawEvidenceSource | null };
+      already_said?: AlreadySaidMatch;
     },
   ): void {
     const ref = fields.ref;
@@ -523,12 +555,21 @@ export class StagedPipeline<I extends StagedInput> {
       outcome: fields.outcome,
       ledger_reason: fields.ledger_reason,
       ...(fields.revise_comparison ? { revise_comparison: verified(fields.revise_comparison, 'staged_revise_comparison') } : {}),
+      ...(fields.already_said
+        ? {
+            already_said_comparison: verified(
+              { method: fields.already_said.method, similarity: fields.already_said.similarity, threshold: fields.already_said.threshold, matched_text: fields.already_said.matched_text },
+              'staged_already_said_comparison',
+            ),
+          }
+        : {}),
       ...(output.desire === 'WITHDRAW'
         ? {
             withdraw_kind: fields.withdraw ? modelOutput(fields.withdraw.kind) : modelOutputAbsent('gate_or_ledger_rejected'),
             withdraw_reason: maybeText(output.withdraw_reason),
             withdraw_evidence_span: maybeText(output.withdraw_evidence_span),
-            withdraw_evidence_segment_ids: fields.withdraw?.segment_ids ? present(fields.withdraw.segment_ids) : absent('not_applied'),
+            withdraw_evidence_segment_ids: fields.withdraw?.segment_ids ? present(fields.withdraw.segment_ids) : absent(fields.withdraw?.source === 'ai_utterance' ? 'ai_utterance_evidence' : 'not_applied'),
+            ...(fields.withdraw?.source ? { withdraw_evidence_source: verified(fields.withdraw.source, 'staged_withdraw_evidence_matched_verbatim') } : {}),
           }
         : {}),
     });

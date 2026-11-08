@@ -329,6 +329,48 @@ export interface Collected {
   otherFrames: [number, number][];
   others: OtherRecord[];
   outcomes: OutcomeRecord[];
+  materials: MaterialRecord[];
+  reflections: ReflectionRecord[];
+  alreadySaid: AlreadySaidRecord[];
+}
+
+/** 通常応答の材料として渡した記録（initiative.response_material）。 */
+export interface MaterialRecord {
+  t_ms: number;
+  candidate_id: string;
+  candidate_version: number | null;
+  segment_id: number | null;
+  transcript_revision: number | null;
+  proposed_utterance: string | null;
+  prompt_version: string | null;
+}
+
+/** 実際に話した文と材料の比較（initiative.response_reflection）。推定で確定ではない。 */
+export interface ReflectionRecord {
+  t_ms: number;
+  candidate_id: string;
+  candidate_version: number | null;
+  segment_id: number | null;
+  transcript_revision: number | null;
+  audio_playback_id: number | null;
+  proposed_utterance: string | null;
+  spoken_text: string;
+  spoken_outcome: string;
+  interrupted: boolean;
+  estimated_reflected: boolean | null;
+  estimate_reason: string | null;
+  estimate: RawEvent | null;
+}
+
+/** すでに話した内容としての撤回（initiative.already_said）。 */
+export interface AlreadySaidRecord {
+  t_ms: number;
+  candidate_id: string;
+  candidate_version: number | null;
+  stage: string;
+  similarity: number | null;
+  threshold: number | null;
+  matched_text: string;
 }
 
 export function emptyCollected(): Collected {
@@ -345,6 +387,9 @@ export function emptyCollected(): Collected {
     otherFrames: [],
     others: [],
     outcomes: [],
+    materials: [],
+    reflections: [],
+    alreadySaid: [],
   };
 }
 
@@ -643,6 +688,57 @@ function readVap(e: RawEvent, c: Collected): void {
   if (frame !== null) c.vapFrames.push([eventTime(e), frame]);
 }
 
+function readMaterial(e: RawEvent, c: Collected): void {
+  const candidate_id = str(e.candidate_id);
+  if (candidate_id === null) return;
+  c.materials.push({
+    t_ms: num(e.at) ?? eventTime(e),
+    candidate_id,
+    candidate_version: num(e.candidate_version),
+    segment_id: num(e.segment_id),
+    transcript_revision: num(e.transcript_revision),
+    proposed_utterance: str(e.proposed_utterance),
+    prompt_version: str(e.prompt_version),
+  });
+}
+
+function readReflection(e: RawEvent, c: Collected): void {
+  const candidate_id = str(e.candidate_id);
+  if (candidate_id === null) return;
+  const reflected = (e.estimated_reflected ?? {}) as { value?: unknown; null_reason?: unknown };
+  const estimate = (e.estimate ?? {}) as { value?: unknown };
+  c.reflections.push({
+    t_ms: num(e.at) ?? eventTime(e),
+    candidate_id,
+    candidate_version: num(e.candidate_version),
+    segment_id: num(e.segment_id),
+    transcript_revision: num(e.transcript_revision),
+    audio_playback_id: num(e.audio_playback_id),
+    proposed_utterance: str(e.proposed_utterance),
+    spoken_text: typeof e.spoken_text === 'string' ? e.spoken_text : '',
+    spoken_outcome: str(e.spoken_outcome) ?? 'unknown',
+    interrupted: e.interrupted === true,
+    estimated_reflected: typeof reflected.value === 'boolean' ? reflected.value : null,
+    estimate_reason: typeof reflected.null_reason === 'string' ? reflected.null_reason : null,
+    estimate: estimate.value !== null && typeof estimate.value === 'object' ? (estimate.value as RawEvent) : null,
+  });
+}
+
+function readAlreadySaid(e: RawEvent, c: Collected): void {
+  const candidate_id = str(e.candidate_id);
+  if (candidate_id === null) return;
+  const comparison = (unwrapValue(e.comparison) ?? {}) as RawEvent;
+  c.alreadySaid.push({
+    t_ms: num(e.at) ?? eventTime(e),
+    candidate_id,
+    candidate_version: num(e.candidate_version),
+    stage: str(e.stage) ?? 'unknown',
+    similarity: num(comparison.similarity),
+    threshold: num(comparison.threshold),
+    matched_text: typeof comparison.matched_text === 'string' ? comparison.matched_text : '',
+  });
+}
+
 /** 読み手のないイベント。candidate_id か request_id があれば系列の遷移に生のまま残す。 */
 function readOther(e: RawEvent, c: Collected): void {
   const candidate_id = str(e.candidate_id);
@@ -676,6 +772,9 @@ export const EVENT_READERS: Record<string, EventReader> = {
   'stt.final': readStt,
   'vap.state': readVap,
   'turn.outcome': readOutcome,
+  'initiative.response_material': readMaterial,
+  'initiative.response_reflection': readReflection,
+  'initiative.already_said': readAlreadySaid,
 };
 
 export function collect(events: RawEvent[]): Collected {

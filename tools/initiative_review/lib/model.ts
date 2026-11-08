@@ -81,6 +81,26 @@ export interface SpeechOutcome {
   fields: { label: string; value: string }[];
 }
 
+/** 通常応答の材料（渡した版）と実際に話した文の比較。話していない、記録がないときは spoken_outcome が null ／ not_spoken。 */
+export interface ReflectionView {
+  t_ms: number;
+  candidate_version: number | null;
+  given_text: string | null;
+  prompt_version: string | null;
+  given_at: number | null;
+  audio_playback_id: number | null;
+  /** 話した部分だけ（割り込みは途中まで）。話していなければ空。 */
+  spoken_text: string;
+  /** spoken ／ partly_spoken ／ not_spoken。応答の結果の記録がないときは null。 */
+  spoken_outcome: string | null;
+  interrupted: boolean;
+  /** コードの文字の一致からの推定。判定できないときは null。 */
+  estimated_reflected: boolean | null;
+  estimate_reason: string | null;
+  /** 推定の値と基準を文字にしたもの（例: 包含率 0.71 / 基準 0.5）。 */
+  estimate_text: string | null;
+}
+
 export type ItemKind = 'candidate' | 'none' | 'dropped';
 export type RateAxis = 'content' | 'timing' | 'wait_withdraw';
 
@@ -103,6 +123,8 @@ export interface ReviewItem {
   timeline: TimelineRow[];
   inhale: InhaleRecord[];
   speech: SpeechRecord[];
+  /** 通常応答に渡した材料と、実際に話した文との比較（反映は推定で、確定ではない）。 */
+  reflection: ReflectionView[];
   /** 表示する前後の会話（lines の id）。 */
   context_before: string[];
   context_after: string[];

@@ -256,6 +256,33 @@ describe('二段判定（initiative.desire と initiative.timing）', () => {
     expect(session.warnings.join(' ')).toContain('違います');
   });
 
+  it('通常応答に渡した材料、実際に話した文、推定の一致を判定の詳細に出す（反映は推定として）', () => {
+    const material = (segment: number, revision: number, text: string, at: number) => ({
+      schema_version: 1, t_monotonic_ms: at, wall_clock: '2026-01-01T00:00:00.000Z', session_id: 's_synthetic', condition: 'initiative_inhale',
+      time_basis: { source: 'orchestrator', uncertainty_ms: { value: 0 } },
+      event: 'initiative.response_material', candidate_id: 'c_0002', candidate_version: 1, segment_id: segment, transcript_revision: revision,
+      prompt_version: 'response_prompt_v1+pending_material_v1', proposed_utterance: { source: 'model_output', value: text }, at,
+    });
+    const events = [
+      ...stagedEvents(),
+      material(2, 8, '渡した文その一', 6000),
+      { ...material(2, 8, '渡した文その一', 7000), event: 'initiative.response_reflection', audio_playback_id: { value: 11 }, spoken_text: '話した文', spoken_text_precision: { value: 'alignment_char' }, interrupted: false, spoken_outcome: 'spoken', estimated_reflected: { value: true }, estimate: { value: { method: 'char_bigram_containment:v1', basis: 'content_bigrams', containment: 0.8, cosine: 0.4, threshold: 0.5, material_bigrams: 10, matched_bigrams: 8 } }, at: 7000 },
+      material(3, 9, '渡した文その二', 8000),
+      { ...material(3, 9, '', 8100), event: 'initiative.already_said', stage: 'after_ai_speech', candidate_state: 'INTENT_READY', comparison: { source: 'verified', value: { method: 'm', similarity: 0.9, threshold: 0.8, matched_text: '話した一文' }, method: 'x' }, matched_audio_playback_id: 11, matched_origin: 'response', at: 8100 },
+    ];
+    const session = load({ events }, 's_reflect');
+    const item = session.items.find((i) => i.candidate_id === 'c_0002')!;
+    expect(item.reflection).toMatchObject([
+      { given_text: '渡した文その一', spoken_text: '話した文', spoken_outcome: 'spoken', estimated_reflected: true },
+      { given_text: '渡した文その二', spoken_outcome: null, estimated_reflected: null },
+    ]);
+    expect(item.reflection[0]!.estimate_text).toContain('包含率 0.8');
+    const rows = item.timeline.map((r) => r.label);
+    expect(rows.some((l) => l.startsWith('通常応答の結果（spoken）: 推定: 反映あり'))).toBe(true);
+    expect(rows.some((l) => l.startsWith('撤回: すでに話した内容（AI の発話の後。類似度 0.9'))).toBe(true);
+    expect(rows.some((l) => l.includes('未対応'))).toBe(false);
+  });
+
   it('その発話の結果（turn.outcome）を候補の発話の詳細に載せる', () => {
     const outcomeEvent = {
       schema_version: 1,

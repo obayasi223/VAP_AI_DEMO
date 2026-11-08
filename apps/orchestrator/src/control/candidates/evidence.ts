@@ -7,7 +7,7 @@
  *
  * ここはモデルの説明文（reason など）を引数に取らない。
  */
-import { checkEvidence, checkWithdrawEvidence } from '../../cognition/initiative/gate';
+import { checkAiWithdrawEvidence, checkEvidence, checkWithdrawEvidence } from '../../cognition/initiative/gate';
 import { normalizeForMatch } from '../../cognition/initiative/text';
 import type { AsrSegmentSnapshot } from './types';
 
@@ -56,6 +56,12 @@ export function verifyWithdrawEvidence(input: {
   if (idsMissingFromLatest(input.segment_ids, input.latest)) details.push('evidence_segment_id_not_in_latest');
   if (details.length > 0 || !base.ok) return { ok: false, details };
   return { ok: true, segment_ids: base.segment_ids };
+}
+
+/** 撤回の根拠が AI の発話の逐語にあるかを、G から渡された AI の発話で確かめ直す（LLM の申告を信じない）。ASR の区間はないので segment_ids は空。 */
+export function verifyAiWithdrawEvidence(input: { span: string; ai_turn_texts: readonly string[] }): EvidenceResult {
+  const base = checkAiWithdrawEvidence(input);
+  return base.ok ? { ok: true, segment_ids: [] } : { ok: false, details: [...base.reasons] };
 }
 
 /** 候補の根拠が最新の安定テキストに残っているか。ASR の書き換えで消えた根拠を検出する。 */

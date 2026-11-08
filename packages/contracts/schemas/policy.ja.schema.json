@@ -764,6 +764,16 @@
               "type": "number",
               "minimum": 0,
               "maximum": 1
+            },
+            "already_said_min_similarity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "reflection_min_containment": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
             }
           },
           "required": [

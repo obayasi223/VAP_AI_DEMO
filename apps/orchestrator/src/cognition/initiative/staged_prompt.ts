@@ -97,7 +97,13 @@ OFFER_NOW は声を出す許可ではない。話し始めてよいかは別の�
 ${WRITING_RULES}`;
 
 // v2: 未解決の希望の内容の再評価を生成段へ移し、撤回の分類を足した。判定の条件の語は会話の種類の設定（desire_lens.conditions）にある。
-const DESIRE_SYSTEM_V2 = (profile: ConversationKindProfile) => `あなたは音声対話システムの中で、AI の側の「言いたいこと」の内容だけを判定する段です。
+const WITHDRAW_KINDS_V2 = `- question_resolved: AI が確かめたかったことや疑問が、話し手の説明で解消した。
+- premise_changed: 希望の前提になっていたことが、話し手の発話で変わった。
+- topic_moved: 話題が移り、言う価値がなくなった。`;
+
+const WITHDRAW_EVIDENCE_RULE_V2 = `- withdraw_evidence_span は、WITHDRAW の根拠になった発話を、今話している人の発話の、希望の根拠より後ろからそのまま連続して抜き出す。withdraw_reason にその理由を書く。`;
+
+const DESIRE_SYSTEM_V2_BODY = (profile: ConversationKindProfile, withdrawKinds: string, withdrawEvidenceRule: string) => `あなたは音声対話システムの中で、AI の側の「言いたいこと」の内容だけを判定する段です。
 判定するのは、言いたいことが生じたかどうかと、未解決の希望の内容がどうなったかだけです。いつ言うか、今言うべきか、話の途中かどうかは別の段が決めるので、考えません。
 
 # この会話と AI の立場
@@ -122,9 +128,7 @@ ${profile.desire_lens.conditions.map((c) => `- ${c}`).join('\n')}
 - WITHDRAW: 未解決の希望が内容の面で要らなくなった。今は言わない、待ったほうがよいというタイミングの理由では選ばない（それは別の段が判定する）。
 
 # WITHDRAW の分類（withdraw_kind）
-- question_resolved: AI が確かめたかったことや疑問が、話し手の説明で解消した。
-- premise_changed: 希望の前提になっていたことが、話し手の発話で変わった。
-- topic_moved: 話題が移り、言う価値がなくなった。
+${withdrawKinds}
 
 # 書き方の決まり
 - evidence_span は、今話している人の発話（# の区間）からそのまま連続して抜き出す。言い換えない。根拠の箇所だけを短く抜き出す。
@@ -132,8 +136,18 @@ ${profile.desire_lens.conditions.map((c) => `- ${c}`).join('\n')}
 - 「# 直近の会話」のターンとのつながりが根拠の一部なら、prior_turn_evidence_span に「# 直近の会話」の中からそのまま抜き出す。なければ空。今の発話（# の区間）の前半はここに書かない。直近の会話だけを根拠にはできない（今の発話の根拠が必須）。
 - proposed_utterance は、言いたい内容を話し言葉で短く、AI の立場で書く。
 - intent_type は例から選ぶか、短い英大文字で書く。
-- withdraw_evidence_span は、WITHDRAW の根拠になった発話を、今話している人の発話の、希望の根拠より後ろからそのまま連続して抜き出す。withdraw_reason にその理由を書く。
+${withdrawEvidenceRule}
 ${WRITING_RULES}`;
+
+const DESIRE_SYSTEM_V2 = (profile: ConversationKindProfile) => DESIRE_SYSTEM_V2_BODY(profile, WITHDRAW_KINDS_V2, WITHDRAW_EVIDENCE_RULE_V2);
+
+// v3: 撤回の根拠の範囲に AI の発話（直近の会話、実際に声に出た部分）を足し、分類に already_said を足しただけ。判定の条件の語は変えていない（v2 と同じ本体）。
+const DESIRE_SYSTEM_V3 = (profile: ConversationKindProfile) =>
+  DESIRE_SYSTEM_V2_BODY(
+    profile,
+    `${WITHDRAW_KINDS_V2}\n- already_said: その内容を AI がすでに話した。`,
+    `- withdraw_evidence_span は、WITHDRAW の根拠になった発話を、今話している人の発話の、希望の根拠より後ろから、または「# 直近の会話」の AI の発話からそのまま連続して抜き出す。AI の発話から抜き出したときは withdraw_evidence_segment_ids を空にする。withdraw_reason にその理由を書く。`,
+  );
 
 // v2: タイミングの判定だけにした（撤回は生成段へ）。判定の条件の語は会話の種類の設定（timing_lens.conditions）にある。
 const TIMING_SYSTEM_V2 = (profile: ConversationKindProfile) => `あなたは音声対話システムの中で、すでに生じた「言いたいこと」を、いつ申し出るかを判定する段です。
@@ -195,13 +209,14 @@ const staged = (id: string, system: (p: ConversationKindProfile) => string): Sta
 export const DESIRE_PROMPTS: Record<string, StagedPromptVersion> = {
   'initiative-desire-ja-v1': staged('initiative-desire-ja-v1', DESIRE_SYSTEM_V1),
   'initiative-desire-ja-v2': staged('initiative-desire-ja-v2', DESIRE_SYSTEM_V2),
+  'initiative-desire-ja-v3': staged('initiative-desire-ja-v3', DESIRE_SYSTEM_V3),
 };
 export const TIMING_PROMPTS: Record<string, StagedPromptVersion> = {
   'initiative-timing-ja-v1': staged('initiative-timing-ja-v1', TIMING_SYSTEM_V1),
   'initiative-timing-ja-v2': staged('initiative-timing-ja-v2', TIMING_SYSTEM_V2),
 };
 
-export const CURRENT_DESIRE_PROMPT_VERSION = 'initiative-desire-ja-v2';
+export const CURRENT_DESIRE_PROMPT_VERSION = 'initiative-desire-ja-v3';
 export const CURRENT_TIMING_PROMPT_VERSION = 'initiative-timing-ja-v2';
 
 export function getDesirePrompt(id: string): StagedPromptVersion {

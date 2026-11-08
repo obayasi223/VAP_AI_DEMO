@@ -20,6 +20,7 @@ import type { ResearchEvent } from '@llm-vap/contracts';
 import { SystemTimeSource } from '@llm-vap/contracts';
 import { loadDotEnv, readConfig } from '../../src/app/config';
 import { DEFAULT_SCRIPTED_REPLY } from '../../src/app/scripted';
+import { CURRENT_DESIRE_PROMPT_VERSION } from '../../src/cognition/initiative/staged_prompt';
 import { createMaaiClient } from '../../src/app/maai_setup';
 import { OrchestratorServer, SwitchableTimeSource } from '../../src/ws/server';
 import type { Session } from '../../src/session/session';
@@ -53,7 +54,12 @@ const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 3471);
 const ORCH_PORT = Number(process.env.E2E_ORCH_PORT ?? 8797);
 const REAL = process.env.E2E_REAL === '1';
 const MAIN_SECONDS = Number(process.env.E2E_SECONDS ?? (REAL ? 40 : 75));
-const SILENCE_S = Number(process.env.E2E_SILENCE_S ?? 12);
+// 偽マイクの無音の長さ。台本の応答は約 12 秒なので、12 秒だと次の人の声と AI の声の重なりが最後の 1 秒未満になり、
+// VAP の割り込みの条件がほとんど成立しない（通るのは MaAI が遅れて fallback に落ちた回だけだった）。
+const SILENCE_S = Number(process.env.E2E_SILENCE_S ?? 6);
+const BROWSER_NICE = 15;
+/** 最初のセッションのページを閉じた時刻。閉じた後（直前の 1 秒を含む）の視線の判断は描画の報告が返らないので検査から外す。 */
+let mainPageClosedAtWall: number | null = null;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const results: Record<string, unknown> = { real_providers: REAL };
@@ -77,30 +83,38 @@ type Ev<N extends ResearchEvent['event']> = Extract<ResearchEvent, { event: N }>
 const ofType = <N extends ResearchEvent['event']>(events: ResearchEvent[], name: N) =>
   events.filter((e): e is Ev<N> => e.event === name);
 
-/** ブラウザと子プロセスの優先度を下げる（G0 の実測で、ソフトウェア描画が MaAI を詰まらせたため）。 */
-function reniceTree(pid: number): void {
-  const all = new Set<number>([pid]);
-  const queue = [pid];
-  while (queue.length > 0) {
-    const p = queue.pop() as number;
+/**
+ * ブラウザを低い優先度で起動するラッパーを作る（G0 の実測で、ソフトウェア描画が MaAI を詰まらせたため）。
+ * Linux の nice はスレッドごとなので、起動後に renice しても既存のスレッドに効かない。起動の時点で下げて、
+ * 子プロセスとスレッドへ継承させる。
+ */
+async function lowPriorityChromium(dir: string): Promise<string> {
+  const wrapper = path.join(dir, 'chromium-nice.sh');
+  await writeFile(wrapper, `#!/bin/sh\nexec nice -n ${BROWSER_NICE} ${JSON.stringify(chromium.executablePath())} "$@"\n`, { mode: 0o755 });
+  return wrapper;
+}
+
+/** コマンドラインに marker を含むプロセスと、その子孫の nice の値。 */
+function niceOfProcessTree(marker: string): number[] {
+  const pgrep = (args: string[]): number[] => {
     try {
-      const out = execFileSync('pgrep', ['-P', String(p)], { encoding: 'utf8' });
-      for (const line of out.split('\n')) {
-        const child = Number(line.trim());
-        if (child > 0 && !all.has(child)) {
-          all.add(child);
-          queue.push(child);
-        }
-      }
+      return execFileSync('pgrep', args, { encoding: 'utf8' }).split('\n').map(Number).filter((n) => n > 0);
     } catch {
-      /* 子なし */
+      return [];
+    }
+  };
+  const all = new Set<number>(pgrep(['-f', marker]).filter((p) => p !== process.pid));
+  const queue = [...all];
+  while (queue.length > 0) {
+    for (const child of pgrep(['-P', String(queue.pop())])) {
+      if (!all.has(child)) {
+        all.add(child);
+        queue.push(child);
+      }
     }
   }
-  try {
-    execFileSync('renice', ['-n', '15', '-p', ...[...all].map(String)], { stdio: 'ignore' });
-  } catch {
-    /* 失敗しても続ける */
-  }
+  const out = execFileSync('ps', ['-o', 'ni=', '-p', [...all].join(',')], { encoding: 'utf8' });
+  return out.split('\n').map((l) => l.trim()).filter((l) => l !== '').map(Number);
 }
 
 async function waitFor<T>(what: string, fn: () => T | null | undefined | false, timeoutMs: number, stepMs = 100): Promise<T | null> {
@@ -201,15 +215,15 @@ async function main(): Promise<void> {
 
     next = await startNext();
     browser = await chromium.launch({
-      channel: 'chromium',
+      executablePath: await lowPriorityChromium(workDir),
       headless: true,
       args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${fakeWav}`],
     });
-    const browserPid = (browser as unknown as { process?: () => ChildProcess | null }).process?.()?.pid;
 
     // ---- 1. 通常の対話 -------------------------------------------------------------
     let page = await openParticipant(browser);
-    if (browserPid) reniceTree(browserPid);
+    const browserNice = niceOfProcessTree(fakeWav);
+    check('ブラウザの全プロセスの優先度が下がっている（描画が MaAI を詰まらせない）', browserNice.length >= 3 && browserNice.every((n) => n === BROWSER_NICE), browserNice);
     results.avatar_error = await page.evaluate(() => window.__participant!.avatarError());
     // ?condition= も NEXT_PUBLIC_DEFAULT_CONDITION もないとき、開始画面は未選択（条件を送らず orchestrator の CONDITION に任せる）。
     const pickedDefault = await page.evaluate(() => (document.querySelector('input[name="condition"]:checked') as HTMLInputElement | null)?.value ?? null);
@@ -220,7 +234,6 @@ async function main(): Promise<void> {
       picked: pickedDefault,
       session: session1.condition,
     });
-    if (browserPid) reniceTree(browserPid);
     console.log(`  session 1: ${session1.session_id}; running ${MAIN_SECONDS}s`);
     await sleep(MAIN_SECONDS * 1000);
     const view1 = await page.evaluate(() => {
@@ -293,6 +306,7 @@ async function main(): Promise<void> {
     await tab2.close();
     await sleep(6000);
 
+    mainPageClosedAtWall = Date.now();
     // ---- 3. ページの再読み込み → 新しいセッション（条件は吸気あり。開始画面の選択の初期値を ?condition= で） ----------
     await page.close();
     page = await openParticipant(browser, '&condition=initiative_inhale');
@@ -325,6 +339,8 @@ async function main(): Promise<void> {
     // ---- 3b. 二段判定の WAIT_FOR_TURN_END（台本のときだけ）: 吸気せず候補の文も話さず通常応答へ回す。候補は保留のまま。方式と種類は URL で選ぶ --------
     let session3: Session | null = null;
     let session4: Session | null = null;
+    let session5: Session | null = null;
+    let session6: Session | null = null;
     if (!REAL) {
       env.SCRIPTED_INITIATIVE = 'wait_on_input';
       page = await openParticipant(browser, '&condition=initiative_inhale&conversation_kind=companion&timing_strategy=llm');
@@ -366,10 +382,44 @@ async function main(): Promise<void> {
       results.session4 = session4 ? { candidate_spoken: spoke4 !== null, breath: breath4 } : null;
       await page.close();
       await server.endSession('e2e_done');
+
+      // ---- 3d. 話し続ける → 延期 → 内容更新（REVISE）→ 譲られたら新しい版を話す（台本）。方式は llm --------
+      env.SCRIPTED_INITIATIVE = 'revise_on_input';
+      page = await openParticipant(browser, '&condition=initiative_inhale&conversation_kind=joint_thinking&timing_strategy=llm');
+      await page.click('#start');
+      session5 = await waitFor('fifth session', () => {
+        const s = server.current();
+        return s !== null && s !== session4 ? s : null;
+      }, 30_000);
+      const spoke5 = session5
+        ? await waitFor('revised candidate speech', () => session5!.history.snapshot().some((h) => h.role === 'assistant' && h.origin.kind === 'candidate') || null, 45_000, 100)
+        : null;
+      await sleep(3000);
+      const breath5 = await page.evaluate(() => window.__participant!.controller.record.breathCommands);
+      results.session5 = session5 ? { candidate_spoken: spoke5 !== null, breath: breath5 } : null;
+      await page.close();
+      await server.endSession('e2e_done');
+
+      // ---- 3e. 話し続ける → 撤回（WITHDRAW）: 声を出さず聞き手に戻る（台本）。方式は immediate --------
+      env.SCRIPTED_INITIATIVE = 'withdraw_on_input';
+      page = await openParticipant(browser, '&condition=initiative_inhale&conversation_kind=joint_thinking&timing_strategy=immediate');
+      await page.click('#start');
+      session6 = await waitFor('sixth session', () => {
+        const s = server.current();
+        return s !== null && s !== session5 ? s : null;
+      }, 30_000);
+      const withdrawn6 = session6
+        ? await waitFor('candidate withdrawn', () => session6!.candidates?.list({ include_resolved: true }).some((c) => c.candidate_id === 'c_0001' && c.state === 'WITHDRAWN') || null, 45_000, 100)
+        : null;
+      await sleep(3000);
+      const breath6 = await page.evaluate(() => window.__participant!.controller.record.breathCommands);
+      results.session6 = session6 ? { withdrawn: withdrawn6 !== null, breath: breath6 } : null;
+      await page.close();
+      await server.endSession('e2e_done');
     }
 
     // ---- 4. ログの検査 -----------------------------------------------------------------
-    for (const [label, session] of [['session1', session1], ['session2', session2], ['session3', session3], ['session4', session4]] as [string, Session | null][]) {
+    for (const [label, session] of [['session1', session1], ['session2', session2], ['session3', session3], ['session4', session4], ['session5', session5], ['session6', session6]] as [string, Session | null][]) {
       if (!session) continue;
       const dir = path.join(config.sessions_dir, session.session_id);
       const report = await checkLog(dir);
@@ -403,6 +453,8 @@ async function main(): Promise<void> {
       const dir4 = path.join(config.sessions_dir, session4.session_id);
       analyseImmediate(readEvents(path.join(dir4, 'events.jsonl')), JSON.parse(readFileSync(path.join(dir4, 'manifest.json'), 'utf8')) as Record<string, unknown>);
     }
+    if (session5) analyseRevise(readEvents(path.join(config.sessions_dir, session5.session_id, 'events.jsonl')), results.session5 as { candidate_spoken: boolean; breath: { type: string }[] } | null);
+    if (session6) analyseWithdraw(readEvents(path.join(config.sessions_dir, session6.session_id, 'events.jsonl')), results.session6 as { withdrawn: boolean; breath: { type: string; reason?: string }[] } | null);
   } finally {
     await browser?.close().catch(() => undefined);
     if (next?.pid) {
@@ -461,7 +513,7 @@ function analyseWaitForTurnEnd(events: ResearchEvent[], manifest: Record<string,
   const initiative = (manifest.initiative ?? {}) as Record<string, unknown>;
   check(
     'manifest に会話の種類（client）、方式、版が残る',
-    initiative.conversation_kind === 'companion' && initiative.conversation_kind_source === 'client' && initiative.timing_strategy === 'llm' && initiative.desire_prompt_version === 'initiative-desire-ja-v2',
+    initiative.conversation_kind === 'companion' && initiative.conversation_kind_source === 'client' && initiative.timing_strategy === 'llm' && initiative.desire_prompt_version === CURRENT_DESIRE_PROMPT_VERSION,
     initiative,
   );
 }
@@ -482,6 +534,40 @@ function analyseImmediate(events: ResearchEvent[], manifest: Record<string, unkn
   check('immediate: 吸気の合図が発声より先', cue !== undefined && speaking !== undefined && cue.t_monotonic_ms < speaking.t_monotonic_ms, results.immediate);
   check('immediate: 合図の後の人の反応が記録される', reaction.length === 1, reaction.map((e) => e.ended_by));
   check('immediate: manifest の方式', ((manifest.initiative ?? {}) as Record<string, unknown>).timing_strategy === 'immediate', manifest.initiative);
+}
+
+/** 話し続けて内容更新（台本 revise_on_input、方式 llm）: 延期の後に REVISE し、新しい版を再吸気なしで話す。古い版の PCM は話さない。 */
+function analyseRevise(events: ResearchEvent[], session5: { candidate_spoken: boolean; breath: { type: string }[] } | null): void {
+  const states = ofType(events, 'candidate.state_changed').filter((e) => e.candidate_id === 'c_0001');
+  const path = states.map((e) => (e.cause_source === 'code' ? `${e.to}:${e.cause}` : `${e.to}:${e.decision}`));
+  const cue = ofType(events, 'signal.sent').filter((e) => e.candidate_id === 'c_0001' && e.phase === 'inhale');
+  const revise = states.find((e) => e.cause_source === 'model_decision' && e.decision === 'REVISE');
+  const speech = ofType(events, 'speech.started').filter((e): e is Extract<Ev<'speech.started'>, { origin: 'candidate' }> => e.origin === 'candidate' && e.candidate_id === 'c_0001');
+  const reaction = ofType(events, 'negotiation.cue_reaction').filter((e) => e.candidate_id === 'c_0001');
+  const llmDesires = ofType(events, 'initiative.desire').map((e) => e.outcome);
+  results.revise = { path, cues: cue.length, desires: llmDesires, reactions: reaction.map((e) => ({ by: e.ended_by, at_cue: e.user_speaking_at_cue })), spoken_version: speech.map((e) => e.candidate_version), breath: session5?.breath.map((c) => c.type) ?? null };
+  check('内容更新: 候補を話した（台本 revise_on_input、延期中の更新の経路）', session5?.candidate_spoken === true && speech.length === 1, results.revise);
+  check('内容更新: 延期（DEFERRED）に入り、その後に REVISE（再吸気なし）', path.some((p) => p.startsWith('DEFERRED:')) && revise !== undefined && cue.length === 1, results.revise);
+  check('内容更新: 話した音声は新しい版（版 2、古い版の PCM は話さない）', speech.length === 1 && speech[0]!.candidate_version === 2 && revise?.candidate_version === 2, results.revise);
+  check('内容更新: DEFERRED からの発話なのでブラウザに breath.prepare（短い準備）が届き、再吸気の breath.cue は 1 回', (session5?.breath.filter((c) => c.type === 'breath.prepare').length ?? 0) === 1 && (session5?.breath.filter((c) => c.type === 'breath.cue').length ?? 0) === 1, results.revise);
+  check('内容更新: 合図の後の人の反応が 1 件（譲ったとは断定しない値）', reaction.length === 1 && !JSON.stringify(reaction[0]).match(/yield|gave_way/), reaction.length);
+}
+
+/** 話し続けて撤回（台本 withdraw_on_input、方式 immediate）: 分類つきで撤回し、声を出さず聞き手に戻る。 */
+function analyseWithdraw(events: ResearchEvent[], session6: { withdrawn: boolean; breath: { type: string; reason?: string }[] } | null): void {
+  const states = ofType(events, 'candidate.state_changed').filter((e) => e.candidate_id === 'c_0001');
+  const path = states.map((e) => (e.cause_source === 'code' ? `${e.to}:${e.cause}` : `${e.to}:${e.decision}`));
+  const withdrawn = states.find((e) => e.to === 'WITHDRAWN');
+  const speech = ofType(events, 'speech.started').filter((e) => e.origin === 'candidate' && e.candidate_id === 'c_0001');
+  const releases = ofType(events, 'signal.sent').filter((e) => e.candidate_id === 'c_0001' && e.parameters.reason !== undefined).map((e) => e.parameters.reason);
+  const reaction = ofType(events, 'negotiation.cue_reaction').filter((e) => e.candidate_id === 'c_0001');
+  const timing = ofType(events, 'initiative.timing').filter((e) => e.candidate_id === 'c_0001');
+  results.withdraw = { path, releases, reactions: reaction.map((e) => e.ended_by), breath: session6?.breath.map((c) => `${c.type}:${c.reason ?? ''}`) ?? null, timing: timing.map((e) => e.timing_strategy) };
+  const kind = withdrawn && withdrawn.cause_source === 'model_decision' ? (withdrawn.withdraw_kind?.value ?? null) : null;
+  check('撤回: 候補は WITHDRAW で閉じ、withdraw_kind が残る（question_resolved）', session6?.withdrawn === true && withdrawn?.cause_source === 'model_decision' && withdrawn.decision === 'WITHDRAW' && kind === 'question_resolved', { ...(results.withdraw as object), kind });
+  check('撤回: 声を出さない（候補の speech.started がない）', speech.length === 0, speech.length);
+  check('撤回: ブラウザへ breath.release(withdrawn) が届き、再吸気なし', releases.includes('withdrawn') && (session6?.breath.filter((c) => c.type === 'breath.cue').length ?? 0) === 1 && (session6?.breath.some((c) => c.type === 'breath.release' && c.reason === 'withdrawn') ?? false), results.withdraw);
+  check('撤回: immediate（タイミング段は LLM を呼ばない）', timing.length >= 1 && timing.every((e) => e.timing_strategy === 'immediate' && e.model_call === false), results.withdraw);
 }
 
 /** 吸気あり（initiative_inhale）のセッション: 合図 → 吸気 → 保留 → 候補の発話 → 話し終わり、が JSONL とブラウザの記録に残る。 */
@@ -559,7 +645,7 @@ function analyse(events: ResearchEvent[], session: Session, gazeSettings: GazeSe
       full_chars: [...DEFAULT_SCRIPTED_REPLY].length,
     });
   }
-  check('割り込み: speech.interrupted が発生（VAP 由来）', interrupted.length >= 1, interrupted.map((e) => e.decision_source));
+  check('割り込み: speech.interrupted が発生（VAP 由来）', interrupted.some((e) => e.decision_source === 'vap'), interrupted.map((e) => e.decision_source));
 
   // VAP が system チャネルの AI 音声に反応する: AI の再生区間とそれ以外で vad[1] を比べる。
   const vap = ofType(events, 'vap.state').filter((e) => e.channel_layout === '2ch') as Extract<Ev<'vap.state'>, { channel_layout: '2ch' }>[];
@@ -592,21 +678,28 @@ function analyse(events: ResearchEvent[], session: Session, gazeSettings: GazeSe
   const changes = decisions.filter((d, i) => d.target !== (i === 0 ? 'user' : decisions[i - 1]!.target));
   // ブラウザは目標の変化ごとに順に報告する（描画、または描画前に上書きされた未描画）。前から順に対応づけ、
   // 1つの報告を2つの判断に使わない（後の同じ向きの描画で、消えた報告を埋め合わせない）。
-  type Outcome = { kind: 'rendered'; lag_ms: number } | { kind: 'superseded' | 'hidden' | 'missing' };
+  // 対応づけと遅れは、orchestrator が受け取った順と時刻で見る。rendered_at はブラウザの時計を換算した値で、
+  // 実測では判断より 0.5〜0.7 秒前になる回があり（報告の受信は判断の後）、時刻で照合すると別の描画に対応してしまう。
+  type Outcome = { kind: 'rendered'; lag_ms: number; rendered_at_minus_decision_ms: number } | { kind: 'superseded' | 'hidden' | 'missing' | 'page_closed' };
+  const logIndex = new Map<ResearchEvent, number>(events.map((e, i) => [e, i]));
   let cursor = 0;
   const outcomes: Outcome[] = changes.map((d) => {
     for (let i = cursor; i < rendered.length; i += 1) {
       const r = rendered[i]!;
       if (r.target !== d.target) continue;
-      const t = r.visible ? r.rendered_at : r.t_monotonic_ms;
-      if (t < d.t_monotonic_ms - 5) continue;
+      if (logIndex.get(r)! < logIndex.get(d)!) continue;
       cursor = i + 1;
-      if (r.visible) return { kind: 'rendered', lag_ms: r.rendered_at - d.t_monotonic_ms };
+      if (r.visible) return { kind: 'rendered', lag_ms: Date.parse(r.wall_clock) - Date.parse(d.wall_clock), rendered_at_minus_decision_ms: r.rendered_at - d.t_monotonic_ms };
       return { kind: r.null_reason === 'superseded_before_render' ? 'superseded' : 'hidden' };
     }
+    if (mainPageClosedAtWall !== null && Date.parse(d.wall_clock) >= mainPageClosedAtWall - 1000) return { kind: 'page_closed' };
     return { kind: 'missing' };
   });
-  const reflected = outcomes.filter((o) => o.kind === 'rendered' && o.lag_ms <= 1000);
+  // 1 秒以内: 受信までの遅れ（描画の遅れの上限。報告の戻りの遅れも含む）か、ブラウザの描画時刻のどちらかで確かめる。
+  // 描画時刻が判断より前になった回は時計の値が信用できないので、描画時刻の根拠には使わない。
+  const reflected = outcomes.filter(
+    (o) => o.kind === 'rendered' && (o.lag_ms <= 1000 || (o.rendered_at_minus_decision_ms >= 0 && o.rendered_at_minus_decision_ms <= 1000)),
+  );
   const superseded = outcomes.filter((o) => o.kind === 'superseded');
   // 保持時間（原著にない、docs/known_gaps.md §7）: 逸らしの長さと、戻してから再び逸らすまでの間。
   const holdAway = gazeSettings.hold_away_min_ms;
@@ -634,6 +727,7 @@ function analyse(events: ResearchEvent[], session: Session, gazeSettings: GazeSe
     reflected_within_1s: reflected.length,
     superseded_before_render: superseded.length,
     outcomes: outcomes.map((o) => (o.kind === 'rendered' ? Math.round(o.lag_ms) : o.kind)),
+    rendered_at_minus_decision_ms: outcomes.flatMap((o) => (o.kind === 'rendered' ? [Math.round(o.rendered_at_minus_decision_ms)] : [])),
     away_ms: awayMs,
     away_returned_immediately: changes.filter((c, i) => c.target === 'user' && changes[i - 1]?.target === 'away' && IMMEDIATE_RETURN.test(c.reason)).map((c) => c.reason),
     hold_away_min_ms: holdAway,
@@ -643,7 +737,7 @@ function analyse(events: ResearchEvent[], session: Session, gazeSettings: GazeSe
   check('視線: AI 発話中のポーズで gaze.decision が発生', inPause.length >= 1, results.gaze);
   check(
     '視線: 向きの変わった gaze.decision ごとに、1 秒以内の描画（同じ向き）か「未描画で上書き」の報告がある',
-    changes.length > 0 && reflected.length + superseded.length === changes.length,
+    changes.length > 0 && reflected.length + superseded.length + outcomes.filter((o) => o.kind === 'page_closed').length === changes.length,
     results.gaze,
   );
   check('視線: 逸らしが保持時間より短く戻らない（人の発話、割り込み、発話の終わり、鮮度切れを除く）', shortAway.length === 0, { hold_away_min_ms: holdAway, short: shortAway });

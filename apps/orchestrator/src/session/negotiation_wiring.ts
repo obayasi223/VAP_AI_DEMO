@@ -12,10 +12,15 @@
  * 候補の発話の文は候補の proposed_utterance をそのまま TTS に渡す（作り直す LLM の呼び出しはしない）。
  * 撤回と改訂のときの未再生の PCM の破棄は E2a（ledger の discardCandidate）が行う。
  * 吸気の長さは orchestrator が決め、完了は orchestrator の時計で判定する（ブラウザの報告は記録だけ）。
+ *
+ * 重複発言の防止（docs/initiative_v3_design.md §9）。候補を話す直前（select）と AI の発話の後（onAiSpeechFinished）に、
+ * AI がすでに話した文（履歴の発話済みの部分）と候補を比べる。すでに話した内容なら話さず撤回し、聞き手へ戻す。
+ * どちらもコードの比較だけで、通常応答の開始も準備も待たせない。通常応答に渡した材料の反映の推定も発話の後に出す。
  */
-import { absent, modelOutput, present } from '@llm-vap/contracts';
+import { absent, modelOutput, present, verified } from '@llm-vap/contracts';
 import type {
   Condition,
+  ConversationHistoryReader,
   EventEmitter,
   NodeToBrowser,
   PrepareRequest,
@@ -30,6 +35,7 @@ import {
   observeCueReaction,
   reasonKey,
   releaseForSpeech,
+  releaseForWithdrawal,
   selectSpeech,
   startCueReaction,
 } from '../control/negotiator';
@@ -44,7 +50,9 @@ import type {
   Selection,
 } from '../control/negotiator';
 import type { TurnState } from '../control';
-import type { SpeechGeneratorImpl, SpeechStateChange } from '../speech';
+import { estimateReflection, findAlreadySaid, matchSpoken } from '../cognition/initiative/already_said';
+import type { AlreadySaidMatch } from '../cognition/initiative/already_said';
+import type { SpeechFinished, SpeechGeneratorImpl, SpeechStateChange } from '../speech';
 import type { PendingResponseMaterial } from '../speech/response_prompt';
 import { PENDING_MATERIAL_PROMPT_VERSION, RESPONSE_PROMPT_VERSION } from '../speech/response_prompt';
 import type { InitiativeWiring } from './initiative_wiring';
@@ -79,6 +87,22 @@ export interface NegotiationWiringOptions {
   speech: () => SpeechPort | null;
   /** ブラウザへ送る。送れなかったら false（送れなかった合図は signal.sent に残さない）。 */
   send: (message: NodeToBrowser) => boolean;
+  /** 時刻（D の状態の通知の時点の記録に使う）。 */
+  now: () => number;
+  /** AI の発話の履歴（実際に話した部分）。発話の直前のガードが読む。省略は比べない。 */
+  history?: Pick<ConversationHistoryReader, 'snapshot'>;
+  /** 重複発言の防止と反映の推定の基準（policy.initiative.staged の暫定値）。省略はそれぞれ行わない。 */
+  repeat_guard?: { already_said_min_similarity?: number; reflection_min_containment?: number };
+}
+
+/** 通常応答に渡した材料（initiative.response_material）。その応答の再生の結果と結ぶ。 */
+interface GivenMaterial {
+  candidate_id: string;
+  candidate_version: number;
+  segment_id: number;
+  transcript_revision: number;
+  proposed_utterance: string;
+  played: boolean;
 }
 
 export interface BeforeStepContext {
@@ -86,6 +110,8 @@ export interface BeforeStepContext {
   ai_speaking: boolean;
   avatar_available: boolean;
   user_speaking: boolean;
+  /** 前の tick の許可（TurnManager の permitted_to_speak）。 */
+  permitted?: boolean;
   /** VAP の AI 側の p_now（合図の後の反応の観測）。使えないときは null。 */
   p_now_ai?: number | null;
 }
@@ -120,6 +146,9 @@ export class NegotiationWiring {
   private lastNotStartedKey = '';
   /** 観測中の合図の後の反応（合図ごと。窓の満了か AI の発話の開始か候補の解決で閉じる）。 */
   private readonly reactions = new Map<string, CueReaction>();
+  /** 材料を渡した応答の準備の要求。D の状態の通知（同じ要求のオブジェクト）で再生の番号と結ぶ。 */
+  private readonly givenMaterials = new WeakMap<PrepareRequest, GivenMaterial>();
+  private readonly materialByPlayback = new Map<number, GivenMaterial>();
   /** 棄てた候補の未再生の音声（撤回、改訂、期限）。D の状態の通知から。試験と研究者向け（JSONL には専用の項目がない）。 */
   readonly discardedAudio: { candidate_id: string; candidate_version: number; reason: string; chunks: number; samples: number }[] = [];
   /** 試験と研究者向けの数。 */
@@ -143,12 +172,14 @@ export class NegotiationWiring {
       ai_speaking: ctx.ai_speaking,
       avatar_available: ctx.avatar_available,
       user_speaking: ctx.user_speaking,
+      permitted: ctx.permitted ?? false,
     });
     this.state = step.state;
     for (const action of step.actions) this.apply(action, ctx.now, ctx);
     if (step.gate !== null) this.logGate(step.gate);
     this.observeReactions(ctx);
-    return step.hold_start === null || this.state.cue === null ? null : step.hold_start;
+    // 合図を E2a が拒否した（apply で cue を消した）なら吸気の保留は要らない。延期中の音声待ちは cue を持たない。
+    return step.state.cue !== null && this.state.cue === null ? null : step.hold_start;
   }
 
   /** 未解決の候補があるか（選択の前の計算を省くため）。 */
@@ -174,6 +205,16 @@ export class NegotiationWiring {
       transcript_revision: record?.transcript_revision ?? null,
       user_text: turn.asr_result,
     };
+    // 候補を話す直前のガード（コードの比較だけ）。すでに話した内容なら話さず撤回して、通常応答の経路へ渡す。
+    if (selection.choice === 'candidate' && record !== null) {
+      const said = this.findAlreadySaid(record.proposed_utterance);
+      if (said !== null) {
+        this.withdrawAlreadySaid(record.candidate_id, record.candidate_version, record.proposed_utterance, said, 'before_speech', now);
+        const withdrawn: CandidateChoice = { ...choice, choice: 'response', reasons: [`already_said:similarity=${said.similarity.toFixed(3)}`], cause: null };
+        this.emitSelection(withdrawn);
+        return withdrawn;
+      }
+    }
     // 許可がない間と、候補のない通常の応答は記録しない（tick ごとに出さない）。
     if (selection.choice === 'none') this.lastNotStartedKey = '';
     else if (view !== null) this.logSelection(choice, false);
@@ -219,10 +260,13 @@ export class NegotiationWiring {
     return null;
   }
 
-  /** D の状態の通知。候補の音声を取り消した（未再生の PCM を棄てた）ものを記録する。 */
+  /** D の状態の通知。候補の音声を取り消した（未再生の PCM を棄てた）ものを記録する。材料を渡した応答の取り消しも記録する。 */
   onSpeechState(change: SpeechStateChange): void {
     const origin = change.request.origin;
-    if (origin.kind !== 'candidate') return;
+    if (origin.kind !== 'candidate') {
+      this.noteResponseState(change);
+      return;
+    }
     if (change.state === 'ready' || change.state === 'failed') {
       this.emitAudio(origin.candidate_id, origin.candidate_version, change.state, change.audio_playback_id, change.reason);
       return;
@@ -324,14 +368,117 @@ export class NegotiationWiring {
         proposed_utterance: modelOutput(record.proposed_utterance),
         at: now,
       });
+      this.givenMaterials.set(request, {
+        candidate_id: record.candidate_id,
+        candidate_version: record.candidate_version,
+        segment_id: request.segment_id,
+        transcript_revision: request.transcript_revision,
+        proposed_utterance: record.proposed_utterance,
+        played: false,
+      });
       return { intent_type: record.intent_type, proposed_utterance: record.proposed_utterance };
     }
     return null;
   }
 
+  /** AI の発話の終わり（履歴へ確定した後）。反映の推定を記録し、すでに話した内容になった保留中の候補を撤回する。通常応答を待たせない。 */
+  onAiSpeechFinished(finished: SpeechFinished, now: number): void {
+    this.emitReflection(finished, now);
+    this.reconcilePending(finished, now);
+  }
+
   /** セッションの終わりで、観測中の反応を閉じる。 */
   finishReactions(now: number): void {
     for (const [cue_id, reaction] of [...this.reactions]) this.closeReaction(cue_id, reaction, now, 'session_ended');
+  }
+
+  // ---- 重複発言の防止と反映の推定（コードの比較） ------------------------------------------
+
+  /** すでに AI が話した内容か（履歴の発話済みの部分と比べる）。基準か履歴がなければ比べない。 */
+  private findAlreadySaid(utterance: string): AlreadySaidMatch | null {
+    const threshold = this.options.repeat_guard?.already_said_min_similarity;
+    const history = this.options.history;
+    if (threshold === undefined || !history) return null;
+    return findAlreadySaid(utterance, history.snapshot(), threshold);
+  }
+
+  /** すでに話した内容なので撤回する。音声は E2a が棄て、合図は解く（聞き手に戻す）。 */
+  private withdrawAlreadySaid(candidate_id: string, candidate_version: number, utterance: string, said: AlreadySaidMatch, stage: 'before_speech' | 'after_ai_speech', now: number): void {
+    const moved = this.options.initiative.ledger.transition(candidate_id, 'WITHDRAWN', 'already_said', now, candidate_version);
+    if (!moved.ok) return;
+    this.options.emitter.emit({
+      event: 'initiative.already_said',
+      candidate_id,
+      candidate_version,
+      stage,
+      candidate_state: moved.from,
+      proposed_utterance: modelOutput(utterance),
+      comparison: verified({ method: said.method, similarity: said.similarity, threshold: said.threshold, matched_text: said.matched_text }, 'negotiation_already_said_comparison'),
+      matched_audio_playback_id: said.audio_playback_id,
+      matched_origin: said.origin,
+      at: now,
+    });
+    const released = releaseForWithdrawal(this.state, candidate_id);
+    this.state = released.state;
+    for (const action of released.actions) this.apply(action, now);
+  }
+
+  /** AI の発話の後の照合。保留中の候補と、この発話で話した部分を比べる。話していない発話（1 音も出ない）は見ない。 */
+  private reconcilePending(finished: SpeechFinished, now: number): void {
+    const threshold = this.options.repeat_guard?.already_said_min_similarity;
+    if (threshold === undefined || finished.no_audio || finished.spoken_text === '') return;
+    const ledger = this.options.initiative.ledger;
+    for (const record of ledger.list()) {
+      if (record.state === 'SPEAKING') continue;
+      const match = matchSpoken(record.proposed_utterance, finished.spoken_text, { threshold, audio_playback_id: finished.audio_playback_id, origin: finished.origin.kind });
+      if (match !== null) this.withdrawAlreadySaid(record.candidate_id, record.candidate_version, record.proposed_utterance, match, 'after_ai_speech', now);
+    }
+  }
+
+  /** 通常応答の D の状態。材料を渡した応答を再生の番号と結び、再生しないまま取り消されたら not_spoken を記録する。 */
+  private noteResponseState(change: SpeechStateChange): void {
+    const material = this.givenMaterials.get(change.request);
+    if (material === undefined) return;
+    this.materialByPlayback.set(change.audio_playback_id, material);
+    while (this.materialByPlayback.size > 64) this.materialByPlayback.delete(this.materialByPlayback.keys().next().value as number);
+    if (change.state === 'playing') material.played = true;
+    if (change.state !== 'cancelled' && !(change.state === 'failed' && !material.played)) return;
+    this.materialByPlayback.delete(change.audio_playback_id);
+    this.givenMaterials.delete(change.request);
+    this.emitReflectionEvent(material, change.audio_playback_id, null, this.options.now());
+  }
+
+  /** 発話の終わりで、材料の応答の結果を記録する。割り込みは話した部分だけで比べる。 */
+  private emitReflection(finished: SpeechFinished, now: number): void {
+    const material = this.materialByPlayback.get(finished.audio_playback_id);
+    if (material === undefined) return;
+    this.materialByPlayback.delete(finished.audio_playback_id);
+    this.emitReflectionEvent(material, finished.audio_playback_id, finished, now);
+  }
+
+  private emitReflectionEvent(material: GivenMaterial, audio_playback_id: number, finished: SpeechFinished | null, now: number): void {
+    const threshold = this.options.repeat_guard?.reflection_min_containment;
+    const spokenText = finished !== null && !finished.no_audio ? finished.spoken_text : '';
+    const spoken = spokenText !== '';
+    const outcome = !spoken ? ('not_spoken' as const) : finished?.interrupted ? ('partly_spoken' as const) : ('spoken' as const);
+    const result = spoken && threshold !== undefined ? estimateReflection(material.proposed_utterance, spokenText, threshold) : null;
+    const missing = !spoken ? 'not_spoken' : 'reflection_threshold_unset';
+    this.options.emitter.emit({
+      event: 'initiative.response_reflection',
+      candidate_id: material.candidate_id,
+      candidate_version: material.candidate_version,
+      segment_id: material.segment_id,
+      transcript_revision: material.transcript_revision,
+      audio_playback_id: finished === null && !material.played ? absent('not_played') : present(audio_playback_id),
+      proposed_utterance: modelOutput(material.proposed_utterance),
+      spoken_text: spokenText,
+      spoken_text_precision: finished !== null && spoken ? present(finished.spoken_text_precision) : absent(missing),
+      interrupted: finished?.interrupted ?? false,
+      spoken_outcome: outcome,
+      estimated_reflected: result ? present(result.estimated_reflected) : absent(missing),
+      estimate: result ? present(result.estimate) : absent(missing),
+      at: now,
+    });
   }
 
   private phaseMatches(cue: SentCue, phase: SignalReport['phase']): boolean {
@@ -344,6 +491,8 @@ export class NegotiationWiring {
   private observeReactions(ctx: BeforeStepContext): void {
     const ledger = this.options.initiative.ledger;
     for (const [cue_id, reaction] of [...this.reactions]) {
+      // 合図を出した tick は startCueReaction が数えた（同じ tick を二重に数えない）。
+      if (ctx.now === reaction.cue_sent_at) continue;
       const record = ledger.get(reaction.candidate_id);
       const state = record?.state ?? null;
       const next = observeCueReaction(reaction, ctx.now, { user_speaking: ctx.user_speaking, p_now_ai: ctx.p_now_ai ?? null, candidate_state: state });
