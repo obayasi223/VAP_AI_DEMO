@@ -7,15 +7,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NodeToBrowser } from '@llm-vap/contracts/browser_rpc';
 import type { Avatar } from '../../src/avatar';
 import type { BreathController, InhaleCue, ReleaseReason } from '../../src/avatar/breath';
-import { CONDITION_LABELS, DEFERRED_SPEECH_PREP_MS, ParticipantController, breathOf, withCondition } from '../../src/session/participant';
+import { CONDITION_LABELS, DEFERRED_SPEECH_PREP_MS, ParticipantController, breathOf, withCondition, withInitiativeChoice } from '../../src/session/participant';
 
 class FakeBreath implements BreathController {
   readonly calls: (InhaleCue | ReleaseReason)[] = [];
-  startInhale(cue: InhaleCue): void {
+  /** startInhale／release の戻り値（false はアバターが受け付けなかった）。 */
+  accept = true;
+  startInhale(cue: InhaleCue): boolean {
     this.calls.push(cue);
+    return this.accept;
   }
-  release(reason: ReleaseReason): void {
+  release(reason: ReleaseReason): boolean {
     this.calls.push(reason);
+    return this.accept;
   }
   phase() {
     return 'idle' as const;
@@ -57,6 +61,18 @@ describe('吸気の合図をアバターへ', () => {
     expect(controller.record.breathCommands.map((c) => c.breath)).toEqual([true, true, true]);
   });
 
+  it('アバターが受け付けなかった吸気と解除は visible:false で報告する（描いていないのに描いたと記録しない）', () => {
+    const breath = new FakeBreath();
+    breath.accept = false;
+    const { sent, deliver } = controllerWith({ breath } as unknown as Avatar);
+    deliver({ type: 'breath.cue', cue_id: 'cue_0001', candidate_id: 'c_0001', duration_ms: 450 });
+    deliver({ type: 'breath.release', cue_id: 'cue_0001', candidate_id: 'c_0001', reason: 'withdrawn' });
+    expect(sent).toEqual([
+      { type: 'signal.report', candidate_id: 'c_0001', phase: 'inhale', state: 'started', visible: false, client_t_ms: { value: null, null_reason: 'avatar_did_not_apply' } },
+      { type: 'signal.report', candidate_id: 'c_0001', phase: 'relax', state: 'started', visible: false, client_t_ms: { value: null, null_reason: 'avatar_did_not_apply' } },
+    ]);
+  });
+
   it('breath.prepare → prepareShort の後、短い準備の長さだけ置いて release(speech_started)', () => {
     vi.useFakeTimers();
     try {
@@ -87,6 +103,11 @@ describe('研究条件', () => {
     expect(withCondition('ws://127.0.0.1:8787/ws', 'initiative_inhale')).toBe('ws://127.0.0.1:8787/ws?condition=initiative_inhale');
     expect(withCondition('ws://h:1/ws?token=x', 'reactive')).toBe('ws://h:1/ws?token=x&condition=reactive');
     expect(withCondition('ws://h:1/ws', null)).toBe('ws://h:1/ws');
+  });
+  it('WS の URL に会話の種類と方式を足す。null の項目は足さない', () => {
+    expect(withInitiativeChoice('ws://h:1/ws', { conversation_kind: 'companion', timing_strategy: 'immediate' })).toBe('ws://h:1/ws?conversation_kind=companion&timing_strategy=immediate');
+    expect(withInitiativeChoice('ws://h:1/ws?token=x', { conversation_kind: null, timing_strategy: 'llm' })).toBe('ws://h:1/ws?token=x&timing_strategy=llm');
+    expect(withInitiativeChoice('ws://h:1/ws', { conversation_kind: null, timing_strategy: null })).toBe('ws://h:1/ws');
   });
   it('表示名', () => {
     expect(CONDITION_LABELS).toEqual({ reactive: '通常応答（ベースライン）', initiative_inhale: '吸気あり（提案）', initiative_no_cue: '吸気なし' });

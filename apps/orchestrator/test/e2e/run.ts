@@ -211,9 +211,15 @@ async function main(): Promise<void> {
     let page = await openParticipant(browser);
     if (browserPid) reniceTree(browserPid);
     results.avatar_error = await page.evaluate(() => window.__participant!.avatarError());
+    // ?condition= も NEXT_PUBLIC_DEFAULT_CONDITION もないとき、開始画面は未選択（条件を送らず orchestrator の CONDITION に任せる）。
+    const pickedDefault = await page.evaluate(() => (document.querySelector('input[name="condition"]:checked') as HTMLInputElement | null)?.value ?? null);
     await page.click('#start');
     const session1 = await waitFor('session', () => server.current(), 30_000);
     if (session1 === null) throw new Error('session did not start');
+    check('条件を選ばなければ送らず、Node の既定（CONDITION、この試験では reactive）になる', pickedDefault === '' && session1.condition === 'reactive', {
+      picked: pickedDefault,
+      session: session1.condition,
+    });
     if (browserPid) reniceTree(browserPid);
     console.log(`  session 1: ${session1.session_id}; running ${MAIN_SECONDS}s`);
     await sleep(MAIN_SECONDS * 1000);
@@ -316,8 +322,30 @@ async function main(): Promise<void> {
     await page.close();
     await server.endSession('e2e_done');
 
+    // ---- 3b. 二段判定の WAIT_FOR_TURN_END（台本のときだけ）: 合図なしで話し終わりに話す。方式と種類は URL で選ぶ --------
+    let session3: Session | null = null;
+    if (!REAL) {
+      env.SCRIPTED_INITIATIVE = 'wait_on_input';
+      page = await openParticipant(browser, '&condition=initiative_inhale&conversation_kind=companion&timing_strategy=llm');
+      const pickedKind = await page.evaluate(() => (document.querySelector('input[name="conversation_kind"]:checked') as HTMLInputElement | null)?.value ?? null);
+      await page.click('#start');
+      session3 = await waitFor('third session', () => {
+        const s = server.current();
+        return s !== null && s !== session2 ? s : null;
+      }, 30_000);
+      check('開始画面の会話の種類の選択が ?conversation_kind= の値', pickedKind === 'companion', { pickedKind });
+      const waited = session3
+        ? await waitFor('candidate speech without cue', () => session3!.history.snapshot().some((h) => h.role === 'assistant' && h.origin.kind === 'candidate') || null, 45_000, 100)
+        : null;
+      await sleep(3000);
+      const breath3 = await page.evaluate(() => window.__participant!.controller.record.breathCommands);
+      results.session3 = session3 ? { candidate_spoken: waited !== null, breath: breath3 } : null;
+      await page.close();
+      await server.endSession('e2e_done');
+    }
+
     // ---- 4. ログの検査 -----------------------------------------------------------------
-    for (const [label, session] of [['session1', session1], ['session2', session2]] as [string, Session | null][]) {
+    for (const [label, session] of [['session1', session1], ['session2', session2], ['session3', session3]] as [string, Session | null][]) {
       if (!session) continue;
       const dir = path.join(config.sessions_dir, session.session_id);
       const report = await checkLog(dir);
@@ -341,6 +369,11 @@ async function main(): Promise<void> {
       const vap2 = ofType(e2, 'vap.state');
       check('新しいセッションでも VAP_STATE が届く（CONFIGURE をやり直した）', vap2.length > 10 && vap2[0]!.audio_frame < 16000 * 5, { n: vap2.length, first_frame: vap2[0]?.audio_frame });
       analyseInhale(e2, results.session2 as { breath: { commands: { type: string; breath: boolean }[]; reports: { phase: string }[] } } | null);
+      if (!REAL) analyseOfferNow(e2);
+    }
+    if (session3) {
+      const dir3 = path.join(config.sessions_dir, session3.session_id);
+      analyseWaitForTurnEnd(readEvents(path.join(dir3, 'events.jsonl')), JSON.parse(readFileSync(path.join(dir3, 'manifest.json'), 'utf8')) as Record<string, unknown>, results.session3 as { breath: unknown[] } | null);
     }
   } finally {
     await browser?.close().catch(() => undefined);
@@ -360,6 +393,41 @@ async function main(): Promise<void> {
     console.log(failures.length === 0 ? 'ALL OK' : `FAILED: ${failures.join(', ')}`);
     process.exitCode = failures.length === 0 ? 0 : 1;
   }
+}
+
+/** 二段判定で OFFER_NOW のとき: 生成段 → タイミング段 → 合図の順に記録が残る（台本）。 */
+function analyseOfferNow(events: ResearchEvent[]): void {
+  const desire = ofType(events, 'initiative.desire').find((e) => e.outcome === 'registered');
+  const timing = ofType(events, 'initiative.timing').find((e) => e.timing === 'OFFER_NOW');
+  const cue = ofType(events, 'signal.sent').find((e) => e.phase === 'inhale');
+  results.offer_now = { desire: desire?.request_id ?? null, timing: timing?.timing_strategy ?? null, cue_sent_at: cue?.sent_at ?? null };
+  check(
+    '二段判定 OFFER_NOW: 生成段（registered）→ タイミング段（OFFER_NOW）→ 吸気の合図の順',
+    desire !== undefined && timing !== undefined && cue !== undefined && desire.t_monotonic_ms <= timing.t_monotonic_ms && timing.t_monotonic_ms <= cue.t_monotonic_ms,
+    results.offer_now,
+  );
+}
+
+/** 二段判定で WAIT_FOR_TURN_END のとき: 合図なしで話し終わりに候補を話し、種類と方式が manifest に残る（台本）。 */
+function analyseWaitForTurnEnd(events: ResearchEvent[], manifest: Record<string, unknown>, session3: { breath: unknown[] } | null): void {
+  const states = ofType(events, 'candidate.state_changed');
+  const spoken = states.find((e) => e.to === 'SPOKEN');
+  const id = spoken?.candidate_id;
+  const path = id ? states.filter((e) => e.candidate_id === id).map((e) => e.to) : [];
+  const timing = ofType(events, 'initiative.timing').filter((e) => e.candidate_id === id);
+  const signals = ofType(events, 'signal.sent').filter((e) => e.candidate_id === id);
+  const selection = ofType(events, 'negotiation.decision').find((e) => e.stage === 'speech_selection' && e.outcome === 'candidate' && e.candidate_id.value === id);
+  results.wait_for_turn_end = { path, timing: timing.map((e) => e.timing), signals: signals.length, reasons: selection?.reasons ?? null, breath: session3?.breath ?? null };
+  check('二段判定 WAIT_FOR_TURN_END: 候補は INTENT_READY → SPEAKING → SPOKEN（吸気を経ない）', path.join('>') === 'INTENT_READY>SPEAKING>SPOKEN', path);
+  check('二段判定 WAIT_FOR_TURN_END: タイミング段の判定はすべて WAIT_FOR_TURN_END', timing.length >= 1 && timing.every((e) => e.timing === 'WAIT_FOR_TURN_END'), timing.map((e) => e.timing));
+  check('二段判定 WAIT_FOR_TURN_END: 合図（signal.sent）もブラウザの呼吸の指示もない', signals.length === 0 && (session3?.breath.length ?? 1) === 0, results.wait_for_turn_end);
+  check('二段判定 WAIT_FOR_TURN_END: 発話の選択の理由に残る', selection?.reasons.includes('timing_wait_for_turn_end') === true, selection?.reasons);
+  const initiative = (manifest.initiative ?? {}) as Record<string, unknown>;
+  check(
+    'manifest に会話の種類（client）、方式、版が残る',
+    initiative.conversation_kind === 'companion' && initiative.conversation_kind_source === 'client' && initiative.timing_strategy === 'llm' && initiative.desire_prompt_version === 'initiative-desire-ja-v1',
+    initiative,
+  );
 }
 
 /** 吸気あり（initiative_inhale）のセッション: 合図 → 吸気 → 保留 → 候補の発話 → 話し終わり、が JSONL とブラウザの記録に残る。 */

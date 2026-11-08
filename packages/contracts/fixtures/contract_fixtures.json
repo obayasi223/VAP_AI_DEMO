@@ -730,6 +730,202 @@
         }
       },
       {
+        "name": "initiative.desire",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "segment_id": 3,
+          "transcript_revision": 42,
+          "request_id": "r_2",
+          "sent_at": 1000,
+          "received_at": 1200,
+          "latency_ms": 200,
+          "model_version": "gemini-3.5-flash-lite",
+          "prompt_version": "initiative-desire-ja-v1",
+          "conversation_kind": "joint_thinking",
+          "profile_version": 1,
+          "history_version": {
+            "value": 4
+          },
+          "input_segment_ids": [
+            7
+          ],
+          "recent_turn_count": 2,
+          "event": "initiative.desire",
+          "desire": "NEW",
+          "candidate_id": {
+            "value": "c_0007"
+          },
+          "candidate_version": {
+            "value": 1
+          },
+          "intent_type": {
+            "source": "model_output",
+            "value": "QUESTION"
+          },
+          "proposed_utterance": {
+            "source": "model_output",
+            "value": "それは月額料金にも含まれていますか？"
+          },
+          "evidence_span": {
+            "source": "model_output",
+            "value": "月額料金の話"
+          },
+          "reason": {
+            "source": "model_output",
+            "value": "料金の範囲が話に出ていない"
+          },
+          "evidence_segment_ids": {
+            "value": {
+              "source": "verified",
+              "value": [
+                7
+              ],
+              "method": "normalized_substring_of_listed_segments"
+            }
+          },
+          "prior_turn_evidence_span": {
+            "source": "model_output",
+            "value": null,
+            "null_reason": "model_left_empty"
+          },
+          "prior_turn_evidence": {
+            "value": null,
+            "null_reason": "no_prior_turn_evidence"
+          },
+          "gate": {
+            "source": "verified",
+            "value": {
+              "passed": true,
+              "reasons": []
+            },
+            "method": "stage_gate"
+          },
+          "outcome": "registered",
+          "ledger_reason": {
+            "value": null,
+            "null_reason": "accepted"
+          }
+        }
+      },
+      {
+        "name": "initiative.timing/llm",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "segment_id": 3,
+          "transcript_revision": 42,
+          "request_id": "r_2_timing",
+          "sent_at": 1000,
+          "received_at": 1200,
+          "latency_ms": 200,
+          "model_version": "gemini-3.5-flash-lite",
+          "prompt_version": "initiative-desire-ja-v1",
+          "conversation_kind": "joint_thinking",
+          "profile_version": 1,
+          "history_version": {
+            "value": 4
+          },
+          "input_segment_ids": [
+            7
+          ],
+          "recent_turn_count": 2,
+          "event": "initiative.timing",
+          "timing_strategy": "llm",
+          "timing": "WAIT_FOR_TURN_END",
+          "candidate_id": "c_0007",
+          "candidate_version": 1,
+          "desire_request_id": "r_2",
+          "reason": {
+            "source": "model_output",
+            "value": "話し終わってからで内容が変わらない"
+          },
+          "why_now": {
+            "source": "model_output",
+            "value": null,
+            "null_reason": "model_left_empty"
+          },
+          "cost_of_waiting": {
+            "source": "model_output",
+            "value": null,
+            "null_reason": "model_left_empty"
+          },
+          "withdraw_reason": {
+            "source": "model_output",
+            "value": null,
+            "null_reason": "model_left_empty"
+          },
+          "withdraw_evidence_segment_ids": {
+            "value": null,
+            "null_reason": "not_withdraw"
+          },
+          "gate": {
+            "source": "verified",
+            "value": {
+              "passed": true,
+              "reasons": []
+            },
+            "method": "stage_gate"
+          },
+          "outcome": "kept",
+          "ledger_reason": {
+            "value": null,
+            "null_reason": "accepted"
+          }
+        }
+      },
+      {
+        "name": "initiative.timing/immediate",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "initiative.timing",
+          "timing_strategy": "immediate",
+          "timing": "OFFER_NOW",
+          "candidate_id": "c_0007",
+          "candidate_version": 1,
+          "desire_request_id": "r_2",
+          "segment_id": 3,
+          "transcript_revision": 42,
+          "conversation_kind": "companion",
+          "profile_version": 1,
+          "decided_at": 1200,
+          "model_call": false,
+          "outcome": "kept",
+          "ledger_reason": {
+            "value": null,
+            "null_reason": "accepted"
+          }
+        }
+      },
+      {
         "name": "candidate.state_changed/code",
         "value": {
           "schema_version": 1,

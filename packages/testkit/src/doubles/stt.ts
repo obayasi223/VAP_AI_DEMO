@@ -21,6 +21,8 @@ export interface ScriptedSttInput {
   stability_source?: StabilitySource;
   /** 省略時は現在の ASR 区間（final で次へ進む）。 */
   asr_segment_id?: number;
+  /** 省略時は今の segment。音声位置が前の segment の結果が遅れて届く状況を作る。 */
+  segment_id?: number;
 }
 
 /** 試験が明示的に結果を流し込む STT。音声認識はしない。 */
@@ -73,7 +75,7 @@ export class ScriptedSttSession implements SttSession {
       stable_text,
       unstable_text: input.text.slice(stable_text.length),
       parts: [{ text: input.text, stability }],
-      segment_id: this.segmentId,
+      segment_id: input.segment_id ?? this.segmentId,
       asr_segment_id: input.asr_segment_id ?? this.asrSegmentId,
       asr_segment_frame_start: this.asrFrameStart,
       transcript_revision: ++this.revision,

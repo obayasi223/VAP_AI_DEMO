@@ -105,6 +105,8 @@ export interface SpeechFinished {
   spoken_text: string;
   spoken_text_precision: SpokenTextPrecision;
   interrupted: boolean;
+  /** 開始はしたが 1 音も書き込まれなかった（playback.started がなく samples_written も 0）。spoken_text は空。 */
+  no_audio: boolean;
 }
 
 export type StartRefusal = SpeechStartRefusal;
@@ -790,6 +792,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     const { text, precision } = this.spokenText(entry, message.samples_written, completed);
     const planned = entry.plannedStop;
     const interrupted = !completed && planned?.decision_source != null;
+    const no_audio = entry.firstWrittenAt === null && message.samples_written === 0;
 
     if (entry.firstWrittenAt === null) {
       if (message.samples_written > 0) this.counters.ended_without_started += 1;
@@ -821,9 +824,11 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     const finished: SpeechFinished = {
       audio_playback_id: entry.id,
       origin: entry.request.origin,
-      spoken_text: text,
+      // 聞こえていない文を発話済みにしない（completed の報告でも）。
+      spoken_text: no_audio ? '' : text,
       spoken_text_precision: precision,
       interrupted,
+      no_audio,
     };
     for (const listener of this.finishedListeners) listener(finished);
   }

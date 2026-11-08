@@ -12,6 +12,7 @@
  *  - 状態: server.hello、session.status、playback.begin／stop、リンクの状態。
  */
 import type { Condition } from '@llm-vap/contracts/common';
+import type { ConversationKind, TimingStrategy } from '@llm-vap/contracts';
 import type {
   BreathCue,
   BreathRelease,
@@ -31,6 +32,29 @@ export const CONDITION_LABELS: Record<Condition, string> = {
   initiative_inhale: '吸気あり（提案）',
   initiative_no_cue: '吸気なし',
 };
+
+/** 会話の種類の表示名（開始画面。隠すときは NEXT_PUBLIC_HIDE_CONDITION_PICKER）。 */
+export const CONVERSATION_KIND_LABELS: Record<ConversationKind, string> = {
+  joint_thinking: '共同思考',
+  companion: 'コンパニオン',
+};
+
+/** 申し出るタイミングの方式の表示名。 */
+export const TIMING_STRATEGY_LABELS: Record<TimingStrategy, string> = {
+  llm: 'LLM が判定（既定）',
+  immediate: 'すぐ申し出る（比較用）',
+  v2: '従来の1段判定（比較用）',
+};
+
+/** WS の URL に会話の種類と方式を足す。null の項目は足さない（Node の既定）。 */
+export function withInitiativeChoice(wsUrl: string, choice: { conversation_kind?: ConversationKind | null; timing_strategy?: TimingStrategy | null }): string {
+  const { conversation_kind = null, timing_strategy = null } = choice;
+  if (conversation_kind === null && timing_strategy === null) return wsUrl;
+  const url = new URL(wsUrl);
+  if (conversation_kind !== null) url.searchParams.set('conversation_kind', conversation_kind);
+  if (timing_strategy !== null) url.searchParams.set('timing_strategy', timing_strategy);
+  return url.toString();
+}
 
 /** WS の URL に研究条件を足す。null なら URL のまま（Node の既定 CONDITION）。 */
 export function withCondition(wsUrl: string, condition: Condition | null): string {
@@ -182,12 +206,15 @@ export class ParticipantController {
    * クリックのハンドラの中で呼ぶこと（自動再生の制限）。condition は開始画面で選んだ研究条件（null は Node の既定）。
    * 再接続も同じ URL を使うので、同じセッションの間は条件が変わらない。
    */
-  async start(options: { condition?: Condition | null } = {}): Promise<void> {
+  async start(options: { condition?: Condition | null; conversation_kind?: ConversationKind | null; timing_strategy?: TimingStrategy | null } = {}): Promise<void> {
     if (this.view.phase === 'starting' || this.view.phase === 'running') return;
     this.update({ phase: 'starting', error: null });
     try {
       this.audio = await startBrowserAudio({
-        wsUrl: withCondition(this.options.wsUrl, options.condition ?? null),
+        wsUrl: withInitiativeChoice(withCondition(this.options.wsUrl, options.condition ?? null), {
+          conversation_kind: options.conversation_kind ?? null,
+          timing_strategy: options.timing_strategy ?? null,
+        }),
         onMessage: (message) => this.onMessage(message),
         // 再生の始まりと終わりは Worker が Node へ送る報告で知る（主スレッドには別に届かない）。
         onSent: (message) => {
@@ -300,26 +327,30 @@ export class ParticipantController {
       client_t_ms: performance.now(),
       breath: breath !== null,
     });
-    if (message.type === 'breath.cue') breath?.startInhale({ cue_id: message.cue_id, duration_ms: message.duration_ms });
-    else breath?.release(message.reason);
     // アバターがなければ描いていないので報告しない（Node は合図を出した記録だけを持つ）。
     if (breath === null) return;
+    // アバターが受け付けなかった合図（吸気中の二重の吸気、話している間の吸気、もう戻っている脱力など）は描かれていない。
+    const applied =
+      message.type === 'breath.cue'
+        ? breath.startInhale({ cue_id: message.cue_id, duration_ms: message.duration_ms })
+        : breath.release(message.reason);
     const phase: SignalReport['phase'] =
       message.type === 'breath.cue' ? 'inhale' : message.reason === 'speech_started' ? 'pre_speech' : 'relax';
-    const report = (visible: boolean, t: number | null) => {
+    const report = (visible: boolean, t: number | null, nullReason = 'not_visible') => {
       const signal: SignalReport = {
         type: 'signal.report',
         candidate_id: message.candidate_id,
         phase,
         state: 'started',
         visible,
-        client_t_ms: t === null ? { value: null, null_reason: 'not_visible' } : { value: t },
+        client_t_ms: t === null ? { value: null, null_reason: nullReason } : { value: t },
       };
       this.record.signalReports.push(signal);
       this.audio?.send(signal);
     };
+    if (!applied) report(false, null, 'avatar_did_not_apply');
     // 背景タブでは rAF が来ないので、見えていなければその場で visible=false を返す。
-    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') report(false, null);
+    else if (typeof document !== 'undefined' && document.visibilityState !== 'visible') report(false, null);
     else requestAnimationFrame((t) => report(true, t));
   }
 

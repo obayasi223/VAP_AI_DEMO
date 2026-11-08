@@ -3,31 +3,41 @@
  * 失敗は例外にせず理由として返す（音声の経路と画面を止めない。黙って台本へ切り替えない）。
  */
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { absent } from '@llm-vap/contracts';
 import type {
   Condition,
+  ConversationKind,
   EventEmitter,
   LlmProvider,
   Policy,
   ProviderClass,
   SttProvider,
   TimeSource,
+  TimingStrategy,
   TtsProvider,
   TurnCompletionEstimator,
 } from '@llm-vap/contracts';
 import { NullTurnCompletionEstimator, createCompletionEstimator } from '../cognition/completion';
-import { CURRENT_PROMPT_VERSION, parsePersona } from '../cognition/initiative';
-import type { InitiativePersona } from '../cognition/initiative';
+import { CURRENT_PROMPT_VERSION, parseConversationKindProfile, parsePersona } from '../cognition/initiative';
+import type { ConversationKindProfile, InitiativePersona } from '../cognition/initiative';
+import { REPO_ROOT } from '../maai';
 import { createGeminiProviderFromEnv } from '../providers/llm';
 import { createGoogleSttProviderFromEnv } from '../providers/stt';
 import { chooseTtsProvider, createElevenLabsTtsProviderFromEnv, createGeminiTtsProviderFromEnv } from '../providers/tts';
 import type { OrchestratorConfig } from './config';
 import { EnergyScriptedSttProvider, INITIATIVE_STT_SCRIPT, ScriptedReplyLlm, WavScriptedTtsProvider } from './scripted';
+import type { ScriptedInitiativeMode } from './scripted';
 
-/** 台本の発話希望（SCRIPTED_INITIATIVE。E2E 用、app/scripted.ts）。台本の STT と LLM のとき、STT の台本は reactive 以外のセッションだけ変える。 */
-function scriptedInitiative(env: NodeJS.ProcessEnv): 'none' | 'new_on_input' {
+/**
+ * 台本の発話希望（SCRIPTED_INITIATIVE。E2E 用、app/scripted.ts）。台本の STT と LLM のとき、STT の台本は reactive 以外のセッションだけ変える。
+ * wait_on_input は new_on_input と同じ入力で、タイミング段だけ WAIT_FOR_TURN_END を返す。
+ */
+function scriptedInitiative(env: NodeJS.ProcessEnv): ScriptedInitiativeMode {
   const value = env.SCRIPTED_INITIATIVE || 'none';
-  if (value !== 'none' && value !== 'new_on_input') throw new Error(`SCRIPTED_INITIATIVE must be none or new_on_input, got ${value}`);
+  if (value !== 'none' && value !== 'new_on_input' && value !== 'wait_on_input') {
+    throw new Error(`SCRIPTED_INITIATIVE must be none, new_on_input or wait_on_input, got ${value}`);
+  }
   return value;
 }
 
@@ -63,6 +73,35 @@ export interface InitiativeSetup {
   prompt_version: string;
   /** 求めたモデル（Gemini）。台本では test_double。 */
   model: string;
+  /** 二段判定の設定。省略は1段判定（v2）で、会話の種類は使っていない。 */
+  staged?: StagedSetup;
+  /** このセッションの選択とその由来（manifest に残す）。判定を作れなかったときも入る。 */
+  choice?: InitiativeChoice;
+}
+
+/** 実際に適用した二段判定の設定（manifest はこの値だけを書く）。 */
+export interface StagedSetup {
+  timing_strategy: Exclude<TimingStrategy, 'v2'>;
+  conversation_kind: ConversationKind;
+  profile: ConversationKindProfile;
+  desire_prompt_version: string;
+  timing_prompt_version: string;
+  recent_context: { max_turns: number; max_chars_per_turn: number };
+}
+
+/** client は画面の求め、default は設定の既定、fixed は *_FROM_CLIENT=0 で画面の求めを断った。 */
+export type ChoiceSource = 'client' | 'default' | 'fixed';
+
+export interface InitiativeChoice {
+  conversation_kind: ConversationKind | null;
+  conversation_kind_source: ChoiceSource;
+  timing_strategy: TimingStrategy;
+  timing_strategy_source: ChoiceSource;
+}
+
+/** 会話の種類の設定ファイル（config/conversation_kind.<kind>.ja.json）。 */
+export function conversationKindFile(kind: ConversationKind): string {
+  return path.join(REPO_ROOT, 'config', `conversation_kind.${kind}.ja.json`);
 }
 
 function message(error: unknown): string {
@@ -76,6 +115,8 @@ export async function createSessionProviders(input: {
   env?: NodeJS.ProcessEnv;
   /** このセッションの研究条件。省略は config.condition（起動時の既定）。 */
   condition?: Condition;
+  /** このセッションの会話の種類と方式。省略は設定の既定。 */
+  choice?: InitiativeChoice;
 }): Promise<SessionProviders> {
   const { config, time, emitter } = input;
   const condition = input.condition ?? config.condition;
@@ -84,7 +125,7 @@ export async function createSessionProviders(input: {
   let stt: Built<SttProvider>;
   if (config.stt === 'test_double') {
     // 台本の発話希望は候補を話しうる条件のセッションだけ（reactive のセッションの台本は変えない）。
-    const scripted = scriptedInitiative(env) === 'new_on_input' && condition !== 'reactive';
+    const scripted = scriptedInitiative(env) !== 'none' && condition !== 'reactive';
     stt = {
       ok: true,
       value: new EnergyScriptedSttProvider({ time, emitter, ...(scripted ? { stable_interim: true, script: INITIATIVE_STT_SCRIPT } : {}) }),
@@ -132,7 +173,13 @@ export async function createSessionProviders(input: {
   }
 
   const completion = completionFor(config.policy, llm.ok ? llm.value : null);
-  const initiative = initiativeFor({ config, condition, time, emitter, env });
+  const choice: InitiativeChoice = input.choice ?? {
+    conversation_kind: config.conversation_kind,
+    conversation_kind_source: 'default',
+    timing_strategy: config.timing_strategy,
+    timing_strategy_source: 'default',
+  };
+  const initiative = initiativeFor({ config, condition, time, emitter, env, choice });
   if (completion.error !== null) console.error(`[orchestrator] completion estimator unavailable: ${completion.error}`);
   const cls = (b: Built<{ provider_class: ProviderClass }>) => (b.ok ? b.value.provider_class : 'unavailable');
   const name = (b: Built<{ provider: string }>) => (b.ok ? b.value.provider : 'unavailable');
@@ -164,8 +211,9 @@ function initiativeFor(input: {
   time: TimeSource;
   emitter: EventEmitter;
   env: NodeJS.ProcessEnv;
+  choice: InitiativeChoice;
 }): InitiativeSetup {
-  const { config, condition, time, emitter, env } = input;
+  const { config, condition, time, emitter, env, choice } = input;
   const off = (reason: string): InitiativeSetup => ({
     enabled: false,
     reason,
@@ -173,17 +221,44 @@ function initiativeFor(input: {
     persona: null,
     prompt_version: CURRENT_PROMPT_VERSION,
     model: config.llm === 'test_double' ? 'test_double' : config.initiative_model,
+    choice,
   });
   if (config.policy.policy_id !== 'ja') return off('policy_has_no_initiative_section');
   if (!config.initiative_conditions.includes(condition)) {
     return off(`disabled_for_condition:${condition}`);
   }
   const unavailable = (reason: string): InitiativeSetup => ({ ...off(reason), enabled: true });
+  // 二段判定は会話の種類の設定（persona の項目を含む）を使う。v2 は従来どおり PERSONA_FILE。
   let persona: InitiativePersona;
-  try {
-    persona = parsePersona(JSON.parse(readFileSync(config.persona_file, 'utf8')));
-  } catch (error) {
-    return unavailable(`persona: ${message(error).slice(0, 200)}`);
+  let staged: StagedSetup | undefined;
+  if (choice.timing_strategy === 'v2') {
+    try {
+      persona = parsePersona(JSON.parse(readFileSync(config.persona_file, 'utf8')));
+    } catch (error) {
+      return unavailable(`persona: ${message(error).slice(0, 200)}`);
+    }
+  } else {
+    const section = config.policy.initiative.staged;
+    if (!section) return unavailable('policy_has_no_staged_section');
+    if (choice.conversation_kind === null) return unavailable('conversation_kind_not_set');
+    let profile: ConversationKindProfile;
+    try {
+      profile = parseConversationKindProfile(JSON.parse(readFileSync(conversationKindFile(choice.conversation_kind), 'utf8')));
+    } catch (error) {
+      return unavailable(`conversation_kind: ${message(error).slice(0, 200)}`);
+    }
+    if (profile.conversation_kind !== choice.conversation_kind) {
+      return unavailable(`conversation_kind: file is for ${profile.conversation_kind}, not ${choice.conversation_kind}`);
+    }
+    persona = profile;
+    staged = {
+      timing_strategy: choice.timing_strategy,
+      conversation_kind: choice.conversation_kind,
+      profile,
+      desire_prompt_version: section.desire_prompt_version,
+      timing_prompt_version: section.timing_prompt_version,
+      recent_context: section.recent_context,
+    };
   }
   let llm: LlmProvider;
   if (config.llm === 'test_double') {
@@ -205,7 +280,16 @@ function initiativeFor(input: {
       return unavailable(`gemini: ${message(error).slice(0, 200)}`);
     }
   }
-  return { enabled: true, reason: null, llm, persona, prompt_version: CURRENT_PROMPT_VERSION, model: llm.model_version };
+  return {
+    enabled: true,
+    reason: null,
+    llm,
+    persona,
+    prompt_version: CURRENT_PROMPT_VERSION,
+    model: llm.model_version,
+    choice,
+    ...(staged ? { staged } : {}),
+  };
 }
 
 /** 作れなければ Null の推定器へ落とすが、理由を返す（黙って推定器なしにしない）。 */

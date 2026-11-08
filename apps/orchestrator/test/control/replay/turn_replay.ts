@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { TurnInputs, absent, present } from '@llm-vap/contracts';
 import type { Policy, TranscriptSnapshot, Vap2chState } from '@llm-vap/contracts';
 import { createTurnManager } from '../../../src/control';
+import type { ControlOptions } from '../../../src/control';
 import type { TurnState } from '../../../src/control';
 import { repoRoot } from '../helpers';
 
@@ -148,8 +149,25 @@ type Prefetch =
   | { state: 'idle' }
   | { state: 'preparing'; id: number; segment_id: number; revision: number; started_at: number; ready_at: number };
 
-export function replayEpisode(fixture: Fixture, ep: Episode, policy: Policy): ReplayResult {
-  const manager = createTurnManager(policy);
+/**
+ * VAP が使えない区間を再生に作る（ワーカーの停止として渡す）。fixtures に mic のエネルギーがないので、
+ * vad[0] ≥ 0.5 を声のあるエネルギー（-20 dBFS）、それ以外を無音（-70 dBFS）に置き換えた近似を渡す。実測のエネルギーではない。
+ */
+export interface VapOutage {
+  from_ms: number;
+  to_ms: number;
+}
+const OUTAGE_VOICED_DBFS = -20;
+const OUTAGE_QUIET_DBFS = -70;
+
+export function replayEpisode(
+  fixture: Fixture,
+  ep: Episode,
+  policy: Policy,
+  outage: VapOutage | null = null,
+  options: ControlOptions = {},
+): ReplayResult {
+  const manager = createTurnManager(policy, options);
   let state: TurnState = manager.initialState();
   const stream = streamOf(fixture, ep);
   const latency = fixture.prefetch_latency_ms.median;
@@ -187,12 +205,16 @@ export function replayEpisode(fixture: Fixture, ep: Episode, policy: Policy): Re
           };
     const honored = ep.honored_ai !== undefined && now >= ep.honored_ai.from_ms && now < ep.honored_ai.to_ms;
     const ready = prefetch.state === 'preparing' && now >= prefetch.ready_at;
+    const inOutage = outage !== null && now >= outage.from_ms && now < outage.to_ms;
     const inputs = TurnInputs.parse({
       vap: row === null ? absent('no_vap_state_since_ready') : present(vapState(row, now >= ep.contaminated_from_ms ? frozen : null)),
       vap_received_at: row === null ? absent('no_vap_state_since_ready') : present(row[0]),
       received_audio_frame: row?.[1] ?? 0,
-      vap_worker_started_at: present(WORKER_STARTED_AT),
-      fallback_energy: absent('replay_has_no_energy'),
+      vap_worker_started_at: inOutage ? absent('replay_vap_outage') : present(WORKER_STARTED_AT),
+      fallback_energy:
+        inOutage && row !== null
+          ? present(row[2] >= 0.5 ? OUTAGE_VOICED_DBFS : OUTAGE_QUIET_DBFS)
+          : absent('replay_has_no_energy'),
       transcript: transcript === null ? absent('no_transcript_yet') : present(transcript),
       completion_p: stt?.completion_p == null ? absent('no_estimate_yet') : present(stt.completion_p),
       completion_revision: stt?.completion_p == null ? absent('no_estimate_yet') : present(stt.transcript_revision),

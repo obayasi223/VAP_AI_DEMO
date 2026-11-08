@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Condition, NodeToBrowser } from '@llm-vap/contracts';
 import type { Rig } from './helpers';
-import { createRig, ended, productionJaPolicy, started, warmUp } from './helpers';
+import { createRig, ended, position, productionJaPolicy, started, warmUp } from './helpers';
 
 let rig: Rig | null = null;
 afterEach(async () => {
@@ -57,6 +57,9 @@ async function speakMidway(r: Rig, text = STABLE): Promise<void> {
 }
 
 const discarded = (r: Rig) => (r.session.negotiationWiring?.discardedAudio ?? []).map((d) => `${d.candidate_id}@${d.candidate_version}:${d.reason}`);
+const NONE = json({ decision: 'NONE' });
+/** 利用者が話を再開した値。 */
+const USER_BACK: { p: [number, number, boolean]; loud: boolean } = { p: [0.1, 0.1, true], loud: true };
 const candidateContext = (r: Rig) => r.tts().contexts.find((c) => c.sent.join('').includes(UTTERANCE));
 const msgs = <T extends NodeToBrowser['type']>(r: Rig, type: T) => r.link.of(type);
 const states = (r: Rig) =>
@@ -122,7 +125,7 @@ describe('initiative_inhale（提案: 吸気で合図してから話す）', () 
     rig = await setup('initiative_inhale');
     await speakMidway(rig);
     expect(msgs(rig, 'breath.cue')).toHaveLength(1);
-    const cueAt = rig.time.monotonicMs();
+    const cueAt = rig.events.ofType('signal.sent')[0]!.sent_at;
     // 合図の直後に人が黙る。許可（最小の間 900ms）は吸気（700ms）より後なので、この試験では許可の前に吸気が終わる。
     // 吸気中の保留そのものは、許可を先に出す方策で次の試験が確かめる。
     const begin = await untilCandidateBegins(rig);
@@ -140,14 +143,20 @@ describe('initiative_inhale（提案: 吸気で合図してから話す）', () 
     rig = await setup('initiative_inhale', () => NEW, policy);
     await speakMidway(rig);
     expect(msgs(rig, 'breath.cue')).toEqual([expect.objectContaining({ duration_ms: 3000 })]);
-    const cueAt = rig.time.monotonicMs();
+    const cueAt = rig.events.ofType('signal.sent')[0]!.sent_at;
     let permittedDuringInhale = false;
+    let readyDuringInhale = false;
     for (let i = 0; i < 200; i++) {
       await rig.step(YIELD);
-      if (rig.time.monotonicMs() - cueAt < 3000 && rig.session.turnState.permitted_to_speak) permittedDuringInhale = true;
-      if (rig.time.monotonicMs() - cueAt < 3000) expect(msgs(rig, 'playback.begin')).toHaveLength(0);
+      if (rig.time.monotonicMs() - cueAt < 3000) {
+        if (rig.session.turnState.permitted_to_speak) permittedDuringInhale = true;
+        if (rig.events.ofType('prefetch.ready').length > 0) readyDuringInhale = true;
+        expect(msgs(rig, 'playback.begin')).toHaveLength(0);
+      }
     }
     expect(permittedDuringInhale).toBe(true);
+    // 「準備済みの通常応答」が吸気の間に実在した（ready で待っていた）うえで始まっていないこと。
+    expect(readyDuringInhale).toBe(true);
     const ctx = candidateContext(rig)!;
     expect(msgs(rig, 'playback.begin').map((b) => b.audio_playback_id)).toEqual([ctx.audio_playback_id]);
   });
@@ -254,6 +263,232 @@ describe('reactive（ベースライン: 通常応答だけ）', () => {
   });
 });
 
+describe('撤回と失敗、無音の終わり（波3のレビューの追加）', () => {
+  /** 許可が出て候補が話し始めるまで。 */
+  async function candidateSpeaking(condition: Condition = 'initiative_no_cue') {
+    const r = await setup(condition);
+    await speakMidway(r);
+    const begin = await untilCandidateBegins(r);
+    expect(begin).not.toBeNull();
+    return { r, begin: begin! };
+  }
+
+  it('DEFERRED の候補の撤回で breath.release(withdrawn) を送る（cue_id は DEFERRED へ移した合図のもの）', async () => {
+    const policy = productionJaPolicy();
+    policy.initiative.candidate_expiry_ms = 2000;
+    rig = await setup('initiative_inhale', () => NEW, policy);
+    await speakMidway(rig);
+    await rig.steps(120, SPEAKING);
+    expect(states(rig).at(-1)).toBe('DEFERRED->WITHDRAWN:expired');
+    expect(msgs(rig, 'breath.release')).toEqual([
+      { type: 'breath.release', cue_id: 'cue_0001', candidate_id: 'c_0001', reason: 'deferred' },
+      { type: 'breath.release', cue_id: 'cue_0001', candidate_id: 'c_0001', reason: 'withdrawn' },
+    ]);
+    expect(rig.events.ofType('signal.sent').map((e) => e.parameters.reason ?? e.phase)).toEqual(['inhale', 'deferred', 'withdrawn']);
+  });
+
+  it('再生の途中で D が失敗したら候補を SPEAKING に残さず終端し、次の NEW を塞がない。遅れた終わりの報告で拒否は出さない', async () => {
+    const { r, begin } = await candidateSpeaking();
+    rig = r;
+    r.browser(started(begin));
+    const speech = (r.session as unknown as { speech: { entries: Map<number, unknown>; fail(entry: unknown, reason: string): void } }).speech;
+    speech.fail(speech.entries.get(begin.audio_playback_id), 'sink_failed: test');
+    await r.step(YIELD);
+    expect(states(r).at(-1)).toBe('SPEAKING->WITHDRAWN:speech_failed');
+    expect(r.session.candidates?.want()).toEqual({ kind: 'none' });
+    expect(r.session.candidates?.getRecord('c_0001')?.withdraw).toMatchObject({ source: 'code', cause: 'speech_failed' });
+    // 既に再生が始まっていた音声の終わりの報告が遅れて届く（履歴は発話済みの部分だけ）。拒否の記録は出さない。
+    r.browser(ended(begin, 'stopped', 4800));
+    await r.step(YIELD);
+    expect(r.events.ofType('candidate.rejected').filter((e) => e.operation === 'transition')).toHaveLength(0);
+    expect(r.session.history.snapshot().filter((e) => e.role === 'assistant')).toMatchObject([{ origin: { kind: 'candidate', candidate_id: 'c_0001' } }]);
+  });
+
+  it('1 音も出ずに終わった候補は SPOKEN にせず speech_no_audio で閉じ、履歴に入れない', async () => {
+    const { r, begin } = await candidateSpeaking();
+    rig = r;
+    // playback.started なし、samples_written 0（reason は completed でも）。
+    r.browser(ended(begin, 'completed', 0));
+    await r.step(YIELD);
+    expect(states(r).at(-1)).toBe('SPEAKING->WITHDRAWN:speech_no_audio');
+    expect(r.session.candidates?.list({ include_resolved: true })).toMatchObject([{ state: 'WITHDRAWN' }]);
+    expect(r.session.history.snapshot().filter((e) => e.role === 'assistant')).toEqual([]);
+  });
+
+  it('割り込まれた候補は発話済みの部分だけが履歴に入る（SPOKEN、speech_interrupted）', async () => {
+    const { r, begin } = await candidateSpeaking();
+    rig = r;
+    r.browser(started(begin));
+    await r.steps(5, YIELD);
+    // 文の途中まで再生した位置で人が割り込む。
+    r.browser(position(begin, 2 * 16000 * 0.3));
+    await r.step(YIELD);
+    await r.steps(40, USER_BACK);
+    expect(msgs(r, 'playback.stop').map((m) => m.audio_playback_id)).toContain(begin.audio_playback_id);
+    const stop = msgs(r, 'playback.stop').find((m) => m.audio_playback_id === begin.audio_playback_id)!;
+    r.browser(ended({ audio_playback_id: begin.audio_playback_id, generation: stop.generation }, 'stopped', 16000 * 0.3));
+    await r.step(USER_BACK);
+    expect(states(r).at(-1)).toBe('SPEAKING->SPOKEN:speech_interrupted');
+    const assistant = r.session.history.snapshot().filter((e) => e.role === 'assistant');
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.interrupted).toBe(true);
+    expect(assistant[0]?.text.length).toBeGreaterThan(0);
+    expect(assistant[0]?.text.length).toBeLessThan(UTTERANCE.length);
+    expect(UTTERANCE.startsWith(assistant[0]!.text)).toBe(true);
+  });
+});
+
+describe('タイミングの結合（波3のレビューの追加）', () => {
+  it('吸気中に利用者が再開したら、吸気を終えても話し始めず DEFERRED へ移す', async () => {
+    const policy = productionJaPolicy();
+    policy.initiative.negotiation!.inhale_ms = 1400;
+    rig = await setup('initiative_inhale', () => NEW, policy);
+    await speakMidway(rig);
+    const cueAt = rig.time.monotonicMs();
+    await rig.steps(40, YIELD); // 吸気の途中まで人が黙り
+    expect(rig.session.candidates?.list()).toMatchObject([{ state: 'BREATH_INHALE' }]);
+    expect(msgs(rig, 'playback.begin')).toHaveLength(0);
+    await rig.steps(130, USER_BACK); // 再開して話し続ける
+    expect(rig.time.monotonicMs() - cueAt).toBeGreaterThan(1400 + 800);
+    expect(msgs(rig, 'playback.begin')).toHaveLength(0);
+    expect(rig.session.candidates?.list()).toMatchObject([{ state: 'DEFERRED' }]);
+    expect(states(rig)).toContain('BREATH_HOLD_OR_READY->DEFERRED:user_continued');
+    expect(msgs(rig, 'breath.release').map((m) => m.reason)).toEqual(['deferred']);
+  });
+
+  it('吸気の終わりの直前に REVISE が届くと、許可の tick は新しい版の音声がまだなので候補を話さない（古い版の PCM は再生しない）', async () => {
+    let n = 0;
+    const REVISED = '五十万円で足りますか';
+    const REVISE = json({ decision: 'REVISE', target_candidate_id: 'c_0001', evidence_span: '五十万円', evidence_segment_ids: [0], proposed_utterance: REVISED, intent_type: 'CLARIFICATION' });
+    const policy = productionJaPolicy();
+    policy.initiative.negotiation!.inhale_ms = 1400; // 吸気の間に許可が出る長さ（値は試験のため）。
+    rig = await setup('initiative_inhale', () => (n++ === 0 ? NEW : REVISE), policy);
+    await speakMidway(rig);
+    const v1 = candidateContext(rig)!;
+    const inhaleEnds = rig.events.ofType('signal.sent')[0]!.sent_at + 1400;
+    // 吸気が終わる tick の 2 つ前まで。人は黙り、許可は吸気の間に出る。
+    while (rig.time.monotonicMs() + 2 * 20 < inhaleEnds) await rig.step(YIELD);
+    expect(rig.session.turnState.permitted_to_speak).toBe(true);
+    const longer = `${STABLE}。それと日程は十一月の十二日からで会場は東京の予定です`;
+    rig.stt().deliver({ kind: 'interim', text: longer, stable_text: longer, audio_frame_end: rig.frame });
+    await rig.step(YIELD); // REVISE が適用される（新しい版の音声はまだない）
+    expect(rig.session.candidates?.getRecord('c_0001')?.candidate_version).toBe(2);
+    expect(discarded(rig)).toEqual(['c_0001@1:candidate_revised']);
+    await rig.step(YIELD); // 吸気の完了と許可が同じ tick。音声は準備中
+    const selections = rig.events.ofType('negotiation.decision').filter((e) => e.stage === 'speech_selection');
+    expect(selections.at(-1)).toMatchObject({ outcome: 'wait', reasons: ['candidate_audio_preparing'] });
+    expect(states(rig)).toContain('BREATH_INHALE->BREATH_HOLD_OR_READY:inhale_completed');
+    expect(msgs(rig, 'playback.begin')).toHaveLength(0);
+    // 音声は次の tick で届き、新しい版を話す（古い版は再生しない）。通常の応答には切り替わらない。
+    for (let i = 0; i < 20 && msgs(rig, 'playback.begin').length === 0; i++) await rig.step(YIELD);
+    const begun = msgs(rig, 'playback.begin').map((b) => b.audio_playback_id);
+    expect(begun).toHaveLength(1);
+    expect(begun).not.toContain(v1.audio_playback_id);
+    const v2 = rig.tts().contexts.find((c) => c.sent.join('').includes(REVISED))!;
+    expect(begun).toEqual([v2.audio_playback_id]);
+    expect(states(rig).at(-1)).toBe('BREATH_HOLD_OR_READY->SPEAKING:turn_allowed');
+  });
+
+  it('AI の発話中に届いた NEW には合図を出さない。話し終えたら改めてゲートを通す', async () => {
+    let propose = false;
+    const SECOND = 'お尋ねしてもよいですか';
+    const NEW_SECOND = json({ decision: 'NEW', evidence_span: '展示会', evidence_segment_ids: [1], proposed_utterance: SECOND, intent_type: 'CLARIFICATION' });
+    rig = await setup('initiative_inhale', () => (propose ? NEW_SECOND : NONE));
+    // 通常の応答が始まるまで（判定は NONE）。
+    rig.stt().deliver({ kind: 'final', text: `${STABLE}。よろしくお願いします`, stable_text: `${STABLE}。よろしくお願いします`, audio_frame_end: rig.frame });
+    for (let i = 0; i < 200 && msgs(rig, 'playback.begin').length === 0; i++) await rig.step(YIELD);
+    const begin = msgs(rig, 'playback.begin')[0]!;
+    rig.browser(started(begin));
+    await rig.steps(2, YIELD);
+    // AI の発話中に、次の segment の発話で NEW。
+    propose = true;
+    const text = '展示会の話なのですが会場の広さはどのくらいになるのでしょうか教えていただけますかお願いします';
+    rig.stt().deliver({ kind: 'interim', text, stable_text: text, audio_frame_end: rig.frame });
+    // 人が黙っている間の NEW は話の後として保留され、人の再開で候補になる（E2a）。
+    await rig.steps(3, YIELD);
+    await rig.steps(2, SPEAKING);
+    await rig.steps(2, YIELD);
+    expect(rig.session.candidates?.list()).toMatchObject([{ state: 'INTENT_READY', proposed_utterance: SECOND }]);
+    expect(msgs(rig, 'breath.cue')).toHaveLength(0);
+    expect(rig.events.ofType('negotiation.decision').filter((e) => e.stage === 'signal_gate').at(-1)).toMatchObject({ outcome: 'blocked', reasons: expect.arrayContaining(['ai_speaking']) });
+    // 話し終えたらゲートを通って合図が出る。
+    rig.browser(ended(begin, 'completed', 16000));
+    await rig.steps(5, YIELD);
+    expect(msgs(rig, 'breath.cue')).toEqual([expect.objectContaining({ candidate_id: 'c_0001' })]);
+  });
+
+  it('吸気中に close したら合図は送らず、以後の tick でも何も起きない（アバターは保持の上限で自分で戻る）', async () => {
+    rig = await setup('initiative_inhale');
+    await speakMidway(rig);
+    expect(rig.session.candidates?.list()).toMatchObject([{ state: 'BREATH_INHALE' }]);
+    const sent = rig.link.json.length;
+    await rig.session.close('test_close');
+    rig.time.advance(5000);
+    rig.session.tick();
+    await rig.steps(5, YIELD);
+    expect(rig.link.json.slice(sent).filter((m) => m.type.startsWith('breath.'))).toEqual([]);
+    expect(rig.session.counters.tick_errors).toBe(0);
+  });
+});
+
+describe('記録の正しさ（波3のレビューの追加）', () => {
+  it('切断で送れなかった合図は signal.sent に残さず、signal_not_sent として記録する', async () => {
+    rig = await setup('initiative_inhale');
+    await speakMidway(rig);
+    const sentBefore = rig.events.ofType('signal.sent').length;
+    // 吸気中に切断。人は話し続けるので、準備姿勢の後に DEFERRED の脱力を送ろうとする。
+    rig.session.detach('test_detach');
+    await rig.steps(80, SPEAKING);
+    expect(rig.session.candidates?.list()).toMatchObject([{ state: 'DEFERRED' }]);
+    expect(rig.events.ofType('signal.sent').length).toBe(sentBefore);
+    expect(rig.events.ofType('negotiation.decision').filter((e) => e.outcome === 'signal_not_sent')).toMatchObject([
+      { stage: 'signal_gate', candidate_id: { value: 'c_0001' }, reasons: ['phase:relax', 'cue_id:cue_0001'] },
+    ]);
+    expect(rig.session.negotiationWiring?.counters.signals_not_sent).toBe(1);
+  });
+
+  it('開始できない理由は同じ種類が続く間 1 回だけ記録する（毎 tick 出さない）', async () => {
+    rig = await setup('initiative_no_cue');
+    await speakMidway(rig);
+    rig.session.detach('test_detach');
+    await rig.steps(100, YIELD); // 許可が出て候補が選ばれるが、切断中で開始できない。
+    const blocked = rig.events.ofType('negotiation.decision').filter((e) => e.reasons.some((r) => r.startsWith('not_started:')));
+    expect(blocked.length).toBe(1);
+    expect(blocked[0]).toMatchObject({ outcome: 'wait', reasons: expect.arrayContaining(['not_started:start_blocked:browser_detached']) });
+  });
+
+  describe('提案条件で交渉が動かないとき degraded にする', () => {
+    const reasons = (r: Rig) => r.session.status().reasons.filter((x) => x.startsWith('negotiation_unavailable:'));
+
+    it('判定が条件で無効（INITIATIVE_CONDITIONS など）', async () => {
+      rig = await createRig({ condition: 'initiative_inhale', policy: productionJaPolicy(), initiative: { enabled: false, reason: 'disabled_for_condition:initiative_inhale' } });
+      expect(reasons(rig)).toEqual(['negotiation_unavailable:disabled_for_condition:initiative_inhale']);
+      expect(rig.session.status().degraded).toBe(true);
+      expect(rig.described.at(-1)?.initiative).toMatchObject({ candidates_used_for: 'log_and_research_view_only' });
+    });
+
+    it('方策に negotiation がない（negotiatorSettings が null）', async () => {
+      const policy = productionJaPolicy();
+      delete policy.initiative.negotiation;
+      rig = await createRig({ condition: 'initiative_no_cue', policy, initiative: { responder: () => NEW } });
+      expect(reasons(rig)).toEqual(['negotiation_unavailable:negotiation_settings_unavailable']);
+    });
+
+    it('判定の設定がない（initiative を組み立てない）', async () => {
+      rig = await createRig({ condition: 'initiative_inhale', policy: productionJaPolicy() });
+      expect(reasons(rig)).toEqual(['negotiation_unavailable:initiative_not_configured']);
+    });
+
+    it('reactive は交渉がなくても degraded にしない（振る舞いを変えない）。動いていれば理由は出ない', async () => {
+      rig = await createRig({ condition: 'reactive', policy: productionJaPolicy() });
+      expect(reasons(rig)).toEqual([]);
+      await rig.session.close('test_done');
+      rig = await setup('initiative_inhale');
+      expect(reasons(rig)).toEqual([]);
+    });
+  });
+});
+
 describe('ブラウザの描画の報告', () => {
   it('合図の signal.report を signal.started に写し、cue_at（noteCueStarted）を残す。合図と対応しない報告は数だけ', async () => {
     rig = await setup('initiative_inhale');
@@ -267,5 +502,192 @@ describe('ブラウザの描画の報告', () => {
     expect(rig.events.ofType('signal.started')).toMatchObject([{ candidate_id: 'c_0001', visible: true, phase: 'inhale' }]);
     expect(rig.session.candidates?.getRecord('c_0001')?.timeline.cue_at).not.toBeNull();
     expect(rig.session.counters.signal_reports_ignored).toBe(1);
+  });
+});
+
+describe('修正2: 合図と TTS の準備を同時に始める（音声の完成を待たない）', () => {
+  const audioStages = (r: Rig) => r.events.ofType('negotiation.decision').filter((e) => e.stage === 'candidate_audio').map((e) => e.outcome);
+
+  it('NEW の tick で候補の音声の準備と合図を同時に始める（音声はまだ preparing）', async () => {
+    rig = await setup('initiative_inhale');
+    rig.pauseTts = true;
+    rig.stt().deliver({ kind: 'interim', text: STABLE, stable_text: STABLE, audio_frame_end: rig.frame });
+    await rig.step(SPEAKING);
+    await rig.step(SPEAKING); // LLM の結果が届いて候補ができる tick
+    expect(msgs(rig, 'breath.cue')).toHaveLength(1);
+    expect(candidateContext(rig)).toBeDefined(); // TTS は始まっている
+    expect(candidateContext(rig)!.sent.join('')).toBe(UTTERANCE);
+    expect(audioStages(rig)).toEqual(['audio_preparing']); // audio_ready はまだ
+    const cue = rig.events.ofType('negotiation.decision').find((e) => e.stage === 'signal_gate' && e.outcome === 'cue')!;
+    expect(cue.reasons).toContain('candidate_audio_preparing');
+  });
+
+  it('間に合う: 吸気の間に音声が届いたら、吸気の後に候補を話す', async () => {
+    rig = await setup('initiative_inhale');
+    rig.pauseTts = true;
+    await speakMidway(rig);
+    expect(msgs(rig, 'breath.cue')).toHaveLength(1);
+    rig.pauseTts = false; // 吸気の間に TTS が終わる
+    const begin = await untilCandidateBegins(rig);
+    expect(begin).not.toBeNull();
+    expect(audioStages(rig)).toEqual(['audio_preparing', 'audio_ready']);
+    expect(states(rig).at(-1)).toBe('BREATH_HOLD_OR_READY->SPEAKING:turn_allowed');
+  });
+
+  it('間に合わない（遅れる）: 吸気の後の準備姿勢で待ち、その間は通常応答も始めない。期限の前に届けば話す', async () => {
+    rig = await setup('initiative_inhale');
+    rig.pauseTts = true;
+    await speakMidway(rig);
+    const cueAt = rig.events.ofType('signal.sent')[0]!.sent_at;
+    // 吸気（700ms）の後も音声は来ない。人は黙り、許可が出る。
+    while (rig.time.monotonicMs() < cueAt + 1000) await rig.step(YIELD);
+    expect(rig.session.candidates?.list()).toMatchObject([{ state: 'BREATH_HOLD_OR_READY' }]);
+    expect(rig.session.turnState.permitted_to_speak).toBe(true);
+    expect(msgs(rig, 'playback.begin')).toHaveLength(0);
+    const selection = rig.events.ofType('negotiation.decision').filter((e) => e.stage === 'speech_selection').at(-1);
+    expect(selection).toMatchObject({ outcome: 'wait', reasons: ['candidate_audio_preparing'] });
+    // 期限（吸気の完了から 800ms）の前に音声が届く。
+    rig.pauseTts = false;
+    const begin = await untilCandidateBegins(rig, YIELD, 20);
+    expect(begin).not.toBeNull();
+    expect(states(rig).at(-1)).toBe('BREATH_HOLD_OR_READY->SPEAKING:turn_allowed');
+  });
+
+  it('間に合わない（期限切れ）: 吸気の完了から hold_max_ms を過ぎたら候補を撤回し（理由を残す）、脱力して、音声は棄てる', async () => {
+    rig = await setup('initiative_inhale');
+    rig.pauseTts = true;
+    await speakMidway(rig);
+    const ctx = candidateContext(rig)!;
+    const sent = rig.events.ofType('signal.sent')[0]!.sent_at;
+    // 吸気 700ms ＋ 準備姿勢 800ms のあいだ TTS は一度も出さない。
+    while (rig.time.monotonicMs() < sent + 700 + 800 + 60) await rig.step(YIELD);
+    expect(states(rig).at(-1)).toBe('BREATH_HOLD_OR_READY->WITHDRAWN:expired');
+    expect(discarded(rig)).toEqual(['c_0001@1:expired']);
+    expect(msgs(rig, 'breath.release')).toEqual([{ type: 'breath.release', cue_id: 'cue_0001', candidate_id: 'c_0001', reason: 'withdrawn' }]);
+    const abandoned = rig.events.ofType('negotiation.decision').find((e) => e.outcome === 'audio_abandoned');
+    expect(abandoned?.reasons[0]).toMatch(/^audio_not_ready_by_deadline:hold_ms=/);
+    expect(rig.session.negotiationWiring?.negotiatorState().cue).toBeNull();
+    // 以後、候補の音声は再生されない。候補がなくなれば通常の応答が始まる（TTS を再開）。
+    rig.pauseTts = false;
+    for (let i = 0; i < 200 && msgs(rig, 'playback.begin').length === 0; i++) await rig.step(YIELD);
+    expect(msgs(rig, 'playback.begin').every((b) => b.audio_playback_id !== ctx.audio_playback_id)).toBe(true);
+  });
+
+  it('撤回: 音声の準備中に WITHDRAW が届いたら、準備中の音声を棄て、吸気を解く', async () => {
+    let n = 0;
+    const WITHDRAW = json({
+      decision: 'WITHDRAW',
+      target_candidate_id: 'c_0001',
+      withdraw_evidence_span: '来週は中止',
+      withdraw_evidence_segment_ids: [0],
+      withdraw_reason: '本人が取り下げた',
+    });
+    rig = await setup('initiative_inhale', () => (n++ === 0 ? NEW : WITHDRAW));
+    rig.pauseTts = true;
+    await speakMidway(rig);
+    expect(msgs(rig, 'breath.cue')).toHaveLength(1);
+    const more = `${STABLE}。でも来週は中止になりました`;
+    rig.stt().deliver({ kind: 'interim', text: more, stable_text: more, audio_frame_end: rig.frame });
+    await rig.steps(3, SPEAKING);
+    expect(states(rig).at(-1)).toBe('BREATH_INHALE->WITHDRAWN:WITHDRAW');
+    expect(discarded(rig)).toEqual(['c_0001@1:candidate_withdrawn']);
+    expect(msgs(rig, 'breath.release').at(-1)).toMatchObject({ reason: 'withdrawn' });
+    rig.pauseTts = false;
+    await rig.steps(5, SPEAKING);
+    expect(msgs(rig, 'playback.begin')).toHaveLength(0);
+  });
+
+  it('配線: 改訂の新しい版の音声も preparing で測れる（audio_preparing が版ごとに出る）', async () => {
+    let n = 0;
+    const REVISE = json({ decision: 'REVISE', target_candidate_id: 'c_0001', evidence_span: '五十万円', evidence_segment_ids: [0], proposed_utterance: '五十万円で足りますか', intent_type: 'CLARIFICATION' });
+    rig = await setup('initiative_inhale', () => (n++ === 0 ? NEW : REVISE));
+    await speakMidway(rig);
+    const longer = `${STABLE}。それと日程は十一月の十二日からで会場は東京の予定です`;
+    rig.stt().deliver({ kind: 'interim', text: longer, stable_text: longer, audio_frame_end: rig.frame });
+    await rig.steps(3, SPEAKING);
+    const stages = rig.events.ofType('negotiation.decision').filter((e) => e.stage === 'candidate_audio');
+    expect(stages.map((e) => [e.candidate_version.value, e.outcome])).toEqual([
+      [1, 'audio_preparing'],
+      [1, 'audio_ready'],
+      [2, 'audio_preparing'],
+      [2, 'audio_ready'],
+    ]);
+  });
+});
+
+describe('修正1: 区間の変更をまたぐ判定（segment の変更 = AI の発話開始）', () => {
+  const deferred = () => {
+    let resolve!: (s: string) => void;
+    const promise = new Promise<string>((r) => (resolve = r));
+    return { promise, resolve };
+  };
+
+  /** 判定の LLM を応答させずに通常の応答が始まるまで進める（人は話し終え、許可で AI が話し始める）。 */
+  async function startNormalWhileLlmPending(r: Rig): Promise<void> {
+    r.stt().deliver({ kind: 'interim', text: STABLE, stable_text: STABLE, audio_frame_end: r.frame });
+    await r.steps(3, SPEAKING); // 判定を起動（結果は保留）
+    await r.steps(5, SPEAKING);
+    r.stt().deliver({ kind: 'final', text: `${STABLE}。`, stable_text: `${STABLE}。`, audio_frame_end: r.frame });
+    for (let i = 0; i < 200 && msgs(r, 'playback.begin').length === 0; i++) await r.step(YIELD);
+    expect(msgs(r, 'playback.begin').length).toBeGreaterThan(0);
+    expect(r.session.turnState.segment_id).toBe(1);
+  }
+
+  it('NEW: LLM の応答が返る前に AI が話し始めた（区間が進んだ）ら、候補にせず ai_started_speaking を残す', async () => {
+    const pending = deferred();
+    rig = await setup('initiative_inhale', () => pending.promise);
+    await startNormalWhileLlmPending(rig);
+    pending.resolve(NEW);
+    await rig.steps(3, YIELD);
+    expect(rig.events.ofType('candidate.state_changed')).toHaveLength(0);
+    const rejected = rig.events.ofType('candidate.rejected');
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({ reason: 'stale_segment', operation: 'NEW' });
+    expect(rejected[0]!.details[0]).toBe('ai_started_speaking');
+    expect(rejected[0]!.details).toEqual(expect.arrayContaining(['input_segment=0', 'current=1']));
+    expect(rig.events.ofType('initiative.discarded').map((e) => e.reason)).toEqual(['e2a_rejected:stale_segment']);
+    expect(msgs(rig, 'breath.cue')).toHaveLength(0);
+  });
+
+  it('NONE: 同じ状況でも棄却に数えず、initiative.decision の NONE として記録する', async () => {
+    const pending = deferred();
+    rig = await setup('initiative_inhale', () => pending.promise);
+    await startNormalWhileLlmPending(rig);
+    pending.resolve(NONE);
+    await rig.steps(3, YIELD);
+    expect(rig.events.ofType('candidate.rejected')).toHaveLength(0);
+    expect(rig.events.ofType('initiative.discarded')).toHaveLength(0);
+    const decisions = rig.events.ofType('initiative.decision');
+    expect(decisions.map((e) => [e.decision, e.segment_id])).toEqual([['NONE', 0]]);
+  });
+
+  it('古すぎるとき: AI の開始より先に G の鮮度（max_result_age_ms）で落ちる（stale_result_too_old）', async () => {
+    const pending = deferred();
+    const policy = productionJaPolicy();
+    policy.initiative.max_result_age_ms = 100;
+    rig = await setup('initiative_inhale', () => pending.promise, policy);
+    await startNormalWhileLlmPending(rig);
+    await rig.steps(10, YIELD); // 100ms を超える
+    pending.resolve(NEW);
+    await rig.steps(3, YIELD);
+    expect(rig.events.ofType('candidate.state_changed')).toHaveLength(0);
+    expect(rig.events.ofType('initiative.discarded')[0]?.reason).toMatch(/stale_result_too_old/);
+    expect(rig.events.ofType('candidate.rejected')).toHaveLength(0);
+  });
+
+  it('話し終わりの直後（MIN_GAP 未満）に受理した NEW: AI が話していなければ、吸気してから話す（吸気の間は通常応答を保留）', async () => {
+    rig = await setup('initiative_inhale');
+    // 人が話し、黙った直後に final と判定が来る。
+    await rig.steps(30, SPEAKING);
+    await rig.step(YIELD);
+    rig.stt().deliver({ kind: 'final', text: STABLE, stable_text: STABLE, audio_frame_end: rig.frame });
+    await rig.steps(3, YIELD);
+    expect(states(rig)[0]).toBe('null->INTENT_READY:NEW');
+    expect(msgs(rig, 'breath.cue')).toHaveLength(1);
+    expect(rig.events.ofType('signal.sent')[0]?.phase).toBe('inhale');
+    const begin = await untilCandidateBegins(rig);
+    expect(begin).not.toBeNull();
+    expect(states(rig).slice(-2)).toEqual(['BREATH_INHALE->BREATH_HOLD_OR_READY:inhale_completed', 'BREATH_HOLD_OR_READY->SPEAKING:turn_allowed']);
+    expect(msgs(rig, 'breath.release').at(-1)).toMatchObject({ reason: 'speech_started' });
   });
 });

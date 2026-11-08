@@ -70,7 +70,8 @@ import { NegotiationWiring, negotiatorSettings } from './negotiation_wiring';
 import type { CandidateChoice } from './negotiation_wiring';
 
 export interface BrowserLink {
-  sendJson(message: NodeToBrowser): void;
+  /** false は送れなかった（ソケットが閉じているなど）。 */
+  sendJson(message: NodeToBrowser): boolean | void;
   sendBinary(data: Uint8Array): void;
 }
 
@@ -156,6 +157,8 @@ export class Session {
   private initiativeReason: string | null = null;
   /** 発話希望の交渉（波3）。判定が動いていない、または方策に negotiation がなければ null。 */
   private negotiation: NegotiationWiring | null = null;
+  /** 判定は動いているのに交渉だけ作れなかった理由（negotiatorSettings が null）。 */
+  private negotiationReason: string | null = null;
   private readonly unsubscribe: Unsubscribe[] = [];
   private tickTimer: NodeJS.Timeout | null = null;
   private closed = false;
@@ -202,6 +205,7 @@ export class Session {
     }
     // STT の結果より先に作る（最初の発話から判定する）。D の音声は後から作られるので関数で渡す。
     this.buildInitiative();
+    this.noteInactiveNegotiation();
 
     if (providers.stt.ok) {
       try {
@@ -320,10 +324,18 @@ export class Session {
       initiative: {
         running: this.initiative !== null,
         reason: this.initiativeReason,
-        prompt_version: initiative?.prompt_version ?? null,
+        // 二段判定は desire_prompt_version と timing_prompt_version が正本（1段の版は使っていない）。
+        prompt_version: this.initiative !== null && initiative?.staged ? null : (initiative?.prompt_version ?? null),
         model: this.initiative !== null ? (initiative?.llm?.model_version ?? null) : null,
         persona_id: initiative?.persona?.persona_id ?? null,
         persona_version: initiative?.persona?.version ?? null,
+        timing_strategy: this.initiative !== null ? (initiative?.choice?.timing_strategy ?? 'v2') : null,
+        conversation_kind: this.initiative !== null ? (initiative?.staged?.conversation_kind ?? null) : null,
+        desire_prompt_version: this.initiative !== null ? (initiative?.staged?.desire_prompt_version ?? null) : null,
+        timing_prompt_version: this.initiative !== null ? (initiative?.staged?.timing_prompt_version ?? null) : null,
+        profile_version: this.initiative !== null ? (initiative?.staged?.profile.profile_version ?? null) : null,
+        conversation_kind_source: initiative?.choice?.conversation_kind_source ?? null,
+        timing_strategy_source: initiative?.choice?.timing_strategy_source ?? null,
         // 波3: reactive は記録だけ。initiative_no_cue は合図なしで発話、initiative_inhale は吸気の合図の後に発話。
         candidates_used_for:
           this.negotiation === null || this.options.condition === 'reactive'
@@ -408,7 +420,15 @@ export class Session {
     });
     this.speech = speech;
     this.prefetch = new ResponsePrefetch({ speech, time: this.time, emitter: this.emitter });
-    this.unsubscribe.push(speech.onStateChange((change) => this.negotiation?.onSpeechState(change)));
+    this.unsubscribe.push(
+      speech.onStateChange((change) => {
+        this.negotiation?.onSpeechState(change);
+        const origin = change.request.origin;
+        if (change.state === 'failed' && origin.kind === 'candidate') {
+          this.initiative?.onSpeechFailed(origin.candidate_id, change.audio_playback_id, this.time.monotonicMs());
+        }
+      }),
+    );
     this.unsubscribe.push(
       speech.onFinished((finished) => {
         this.initiative?.onSpeechFinished(finished, this.time.monotonicMs());
@@ -448,8 +468,20 @@ export class Session {
         time: this.time,
         speech: () => this.speech,
         prompt_version: setup.prompt_version,
+        ...(setup.staged
+          ? {
+              staged: {
+                timing_strategy: setup.staged.timing_strategy,
+                profile: setup.staged.profile,
+                recent_context: setup.staged.recent_context,
+                desire_prompt_version: setup.staged.desire_prompt_version,
+                timing_prompt_version: setup.staged.timing_prompt_version,
+                history: this.history,
+              },
+            }
+          : {}),
       });
-      const settings = negotiatorSettings(policy, this.options.condition);
+      const settings = negotiatorSettings(policy, this.options.condition, { timing_gate: setup.staged !== undefined });
       if (settings !== null) {
         this.negotiation = new NegotiationWiring({
           settings,
@@ -458,11 +490,22 @@ export class Session {
           speech: () => this.speech,
           send: (message) => this.send(message),
         });
+      } else {
+        this.negotiationReason = 'negotiation_settings_unavailable';
       }
     } catch (error) {
       // policy の未校正（null）など。音声の経路は止めない。
       this.initiativeReason = `initiative_unavailable:${String(error instanceof Error ? error.message : error).slice(0, 200)}`;
     }
+  }
+
+  /**
+   * 提案条件（reactive 以外）なのに交渉が動かない（判定の設定なし、persona の読み込み失敗、INITIATIVE_CONDITIONS で無効、
+   * 方策に negotiation がない、など）。そのまま続くと記録の condition と振る舞いが食い違うので、degraded にして理由を残す。
+   */
+  private noteInactiveNegotiation(): void {
+    if (this.options.condition === 'reactive' || this.negotiation !== null) return;
+    this.fixedReasons.push(`negotiation_unavailable:${this.negotiationReason ?? this.initiativeReason ?? 'unknown'}`);
   }
 
   /** 候補の状態の正本（E2a）。読み出し専用に使う（試験と研究者向け）。判定が動いていなければ null。 */
@@ -493,6 +536,10 @@ export class Session {
       maai.subscribe({
         onReady: (_ready, at) => {
           this.workerReadyAt = at;
+        },
+        onError: (error, at) => {
+          // 文脈を捨てて続行した（READY は来ない）。VAP の助走を数え直す。準備前のワーカーを「準備済み」にはしない。
+          if (error.code === 'process_failed_reset' && this.workerReadyAt !== null) this.workerReadyAt = at;
         },
         onVapState: (message, at) => {
           // 設定し直す前の結果（前のセッションの番号）は使わない。
@@ -916,8 +963,9 @@ export class Session {
     this.options.onStatusChange?.(status);
   }
 
-  private send(message: NodeToBrowser): void {
-    this.link?.sendJson(message);
+  private send(message: NodeToBrowser): boolean {
+    if (this.link === null) return false;
+    return this.link.sendJson(message) !== false;
   }
 
   // ---- 終了 --------------------------------------------------------------------

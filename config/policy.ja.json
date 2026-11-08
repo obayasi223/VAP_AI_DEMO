@@ -3,7 +3,7 @@
   "policy_id": "ja",
   "immutable": false,
   "status": "template",
-  "note": "Template. turn.constants start as a copy of the HRI 2025 values and are uncalibrated for Japanese. null means uncalibrated: do not silently replace it. Owners: turn/gaze E, similarity/completion D, initiative G. vap direction is provisional until R2 measures it. turn.constants.TURNGPT_PREPARE_THRESHOLD and SIMILARITY_PREPARE_THRESHOLD are not read for ja: the source of truth is completion.thresholds and similarity.threshold (docs/known_gaps.md). initiative.trigger values are unverified provisional. turn.start_guard and turn.after_ai_speech are not in HRI 2025: provisional, based only on one real session (s20261108T045055-ca6e12, docs/known_gaps.md section 10).",
+  "note": "Template. turn.constants start as a copy of the HRI 2025 values and are uncalibrated for Japanese. null means uncalibrated: do not silently replace it. Owners: turn/gaze E, similarity/completion D, initiative G. vap direction is provisional until R2 measures it. turn.constants.TURNGPT_PREPARE_THRESHOLD and SIMILARITY_PREPARE_THRESHOLD are not read for ja: the source of truth is completion.thresholds and similarity.threshold (docs/known_gaps.md). initiative.trigger values are unverified provisional. turn.start_guard and turn.after_ai_speech are not in HRI 2025: provisional, based only on one real session (s20261108T045055-ca6e12, docs/known_gaps.md section 10). turn.vap_unavailable is not in HRI 2025: provisional, docs/known_gaps.md section 12.",
   "vap": {
     "channel_layout": "2ch",
     "p_ai_index": 1,
@@ -44,6 +44,12 @@
       "min_gap_ms": 900,
       "completion_timeout_min_p_ai": 0.5,
       "completion_timeout_low_p_min_ms": 1500
+    },
+    "vap_unavailable": {
+      "asr_quiet_after_final_ms": 300,
+      "asr_quiet_without_final_ms": 1200,
+      "interrupt_asr_recent_ms": 1000,
+      "ai_reference_missing_ms": null
     },
     "after_ai_speech": {
       "rebase_user_end_times": true,
@@ -93,6 +99,13 @@
       "hold_max_ms": 800,
       "max_new_stable_chars_since_judgement": null,
       "cue_max_judgement_age_ms": null
+    },
+    "staged": {
+      "timing_strategy": "llm",
+      "conversation_kind": "joint_thinking",
+      "desire_prompt_version": "initiative-desire-ja-v1",
+      "timing_prompt_version": "initiative-timing-ja-v1",
+      "recent_context": { "max_turns": 6, "max_chars_per_turn": 300 }
     }
   },
   "speech": {

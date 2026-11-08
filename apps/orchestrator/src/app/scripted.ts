@@ -12,6 +12,8 @@
  * 発話希望の経路の E2E（SCRIPTED_INITIATIVE=new_on_input、既定は none）: STT の interim も安定テキストとして出し
  * （stable_interim）、判定の LLM は入力の最後の区間から根拠を抜き出した NEW（候補があれば KEEP）を返す。
  * 合図から発話までの配線を通すためのもので、発話希望の判断ではない。
+ * 二段判定の要求（response_json_schema で見分ける）には生成段とタイミング段の形で返す（scriptedStagedReply）。
+ * wait_on_input はタイミング段だけ WAIT_FOR_TURN_END を返す。
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -538,6 +540,57 @@ export function scriptedInitiativeReply(request: LlmRequest): string {
   });
 }
 
+export type ScriptedInitiativeMode = 'none' | 'new_on_input' | 'wait_on_input';
+
+const SCRIPTED_DESIRE_NONE = {
+  reason: '台本の LLM の固定の返答（判定はしていない）',
+  desire: 'NONE',
+  target_candidate_id: '',
+  intent_type: '',
+  proposed_utterance: '',
+  evidence_span: '',
+  evidence_segment_ids: [],
+  prior_turn_evidence_span: '',
+};
+
+function schemaHas(request: LlmRequest, key: string): boolean {
+  const schema = request.response_json_schema as { properties?: Record<string, unknown> } | null;
+  return schema?.properties?.[key] !== undefined;
+}
+
+/**
+ * 二段判定の台本の返答（判断ではない）。要求が二段の形でなければ null。
+ * 生成段: 候補があるか none なら NONE、なければ最後の区間の先頭 8 文字を根拠にした NEW。
+ * タイミング段: 入力の候補へ OFFER_NOW（wait_on_input は WAIT_FOR_TURN_END）。
+ */
+export function scriptedStagedReply(request: LlmRequest, mode: ScriptedInitiativeMode): string | null {
+  const text = request.messages.map((m) => m.text).join('\n');
+  const candidate = /- ID: (c_\d+)/.exec(text);
+  if (schemaHas(request, 'timing')) {
+    return JSON.stringify({
+      reason: '台本の LLM の固定の返答（判定はしていない）',
+      why_now: '',
+      cost_of_waiting: '',
+      timing: mode === 'wait_on_input' ? 'WAIT_FOR_TURN_END' : 'OFFER_NOW',
+      target_candidate_id: candidate?.[1] ?? '',
+      withdraw_reason: '',
+      withdraw_evidence_span: '',
+      withdraw_evidence_segment_ids: [],
+    });
+  }
+  if (!schemaHas(request, 'desire')) return null;
+  const last = [...text.matchAll(/^#(\d+)（[^）]*）: (.+)$/gmu)].at(-1);
+  if (mode === 'none' || candidate || !last || [...(last[2] as string)].length < 8) return JSON.stringify(SCRIPTED_DESIRE_NONE);
+  return JSON.stringify({
+    ...SCRIPTED_DESIRE_NONE,
+    desire: 'NEW',
+    intent_type: 'CLARIFICATION',
+    proposed_utterance: SCRIPTED_CANDIDATE_UTTERANCE,
+    evidence_span: [...(last[2] as string)].slice(0, 8).join(''),
+    evidence_segment_ids: [Number(last[1])],
+  });
+}
+
 export interface ScriptedReplyLlmOptions {
   time: TimeSource;
   emitter?: EventEmitter;
@@ -545,8 +598,8 @@ export interface ScriptedReplyLlmOptions {
   chars_per_delta?: number;
   delta_delay_ms?: number;
   first_delta_delay_ms?: number;
-  /** none（既定）は判定に常に NONE、new_on_input は scriptedInitiativeReply。 */
-  initiative?: 'none' | 'new_on_input';
+  /** none（既定）は判定に常に NONE、new_on_input と wait_on_input は台本の候補（二段のタイミング段だけが違う）。 */
+  initiative?: ScriptedInitiativeMode;
 }
 
 function abortError(): Error {
@@ -585,9 +638,8 @@ export class ScriptedReplyLlm implements LlmProvider {
     const reply =
       request.purpose !== 'initiative'
         ? this.options.reply
-        : this.options.initiative === 'new_on_input'
-          ? scriptedInitiativeReply(request)
-          : SCRIPTED_INITIATIVE_REPLY;
+        : (scriptedStagedReply(request, this.options.initiative) ??
+          (this.options.initiative !== 'none' ? scriptedInitiativeReply(request) : SCRIPTED_INITIATIVE_REPLY));
     const sent_at = time.monotonicMs();
     emitter?.emit({
       event: 'llm.request',

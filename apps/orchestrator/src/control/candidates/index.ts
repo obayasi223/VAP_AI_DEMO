@@ -31,5 +31,6 @@ export function candidateLedgerSettings(policy: PolicyJa): CandidateLedgerSettin
     candidate_expires_on_segment_change: policy.initiative.candidate_expires_on_segment_change,
     post_turn_silence_ms: turnConstants(policy).MIN_GAP_TIME_MS,
     allow_recue: false,
+    max_new_stable_chars_since_input: policy.initiative.max_new_stable_chars_since_input,
   };
 }

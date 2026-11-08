@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>発話希望の評価</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header id="bar">
+    <strong>発話希望の評価</strong>
+    <label>評価者 <input id="reviewer" list="reviewer-names" maxlength="40" autocomplete="off" placeholder="名前を入力"></label>
+    <datalist id="reviewer-names"></datalist>
+    <label>セッション <select id="session"></select></label>
+    <label>会話の種類 <select id="f-conversation"></select></label>
+    <label>プロンプトの版 <select id="f-prompt"></select></label>
+    <label class="check"><input id="unrated" type="checkbox"> 未評価のみ</label>
+    <span id="status" role="status"></span>
+  </header>
+  <main>
+    <nav id="list" aria-label="判定の一覧"></nav>
+    <section id="detail" aria-label="判定の詳細"></section>
+    <aside id="form" aria-label="評価"></aside>
+  </main>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

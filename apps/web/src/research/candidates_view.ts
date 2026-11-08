@@ -1,5 +1,6 @@
 /**
- * 候補イベントのライブ表示の中身（I2）。initiative.decision と candidate.state_changed を表の行にする。
+ * 候補イベントのライブ表示の中身（I2）。initiative.decision（1段判定）、initiative.desire と initiative.timing（二段判定）と
+ * candidate.state_changed を表の行にする。
  * 棄てた判定（initiative.discarded は G のゲート、candidate.rejected は E2a）は理由つきで別の表にする（波2で追加）。
  * 規則: モデル出力（ModelOutput）と、実測の時刻・コードの検証結果（Verified）を別の欄に分ける。
  * 画面はモデル出力の欄に「LLM 生成」と必ず書く（判定に使っていない文で、事実ではない）。
@@ -7,6 +8,8 @@
 import type { EventOf, ResearchEvent } from '@llm-vap/contracts';
 
 type Decision = EventOf<'initiative.decision'>;
+type Desire = EventOf<'initiative.desire'>;
+type Timing = EventOf<'initiative.timing'>;
 type StateChange = EventOf<'candidate.state_changed'>;
 type Discarded = EventOf<'initiative.discarded'>;
 type Rejected = EventOf<'candidate.rejected'>;
@@ -20,7 +23,10 @@ export interface ModelText {
 
 export interface DecisionRow {
   key: string;
-  decision: Decision['decision'];
+  /** initiative.decision の5値、生成段の NONE／NEW／REVISE、タイミング段の OFFER_NOW／WAIT_FOR_TURN_END／WITHDRAW。 */
+  decision: string;
+  /** どの判定の行か。 */
+  stage: 'v2' | 'desire' | 'timing';
   candidate_id: string | null;
   candidate_version: number | null;
   request_id: string;
@@ -39,6 +45,8 @@ export interface DecisionRow {
   /** LLM 生成。 */
   model: ModelText[];
   model_version: string;
+  /** false は LLM を呼ばない判定（immediate）。実測の LLM の時間はなく、model は空。 */
+  model_call: boolean;
 }
 
 export interface StateChangeRow {
@@ -94,8 +102,85 @@ function modelText(label: string, value: { value: string | null; null_reason?: s
   return { label, value: value.value, null_reason: value.value === null ? (value.null_reason ?? '理由なし') : null };
 }
 
+function gateVerified(gate: Desire['gate']): DecisionRow['verified'][number] {
+  return { label: 'ゲート', value: gate.value.passed ? '合格' : `不合格（${gate.value.reasons.join(', ')}）`, method: gate.method };
+}
+
+function outcomeVerified(outcome: string, ledger_reason: { value: string | null }): DecisionRow['verified'][number] {
+  return { label: '結果', value: ledger_reason.value === null ? outcome : `${outcome}（${ledger_reason.value}）`, method: 'candidate_ledger' };
+}
+
+export function desireRow(event: Desire, index: number): DecisionRow {
+  const segments = event.evidence_segment_ids.value;
+  return {
+    key: `${event.request_id}/${event.desire}/${index}`,
+    decision: event.desire,
+    stage: 'desire',
+    candidate_id: event.candidate_id.value,
+    candidate_version: event.candidate_version.value,
+    request_id: event.request_id,
+    segment_id: event.segment_id,
+    transcript_revision: event.transcript_revision,
+    model_version: event.model_version,
+    model_call: true,
+    measured: { sent_at: event.sent_at, received_at: event.received_at, llm_ms: event.latency_ms, decision_time: null },
+    verified: [
+      gateVerified(event.gate),
+      outcomeVerified(event.outcome, event.ledger_reason),
+      ...(segments === null ? [] : [{ label: '根拠の区間', value: segments.value.join(', ') || 'なし', method: segments.method }]),
+    ],
+    model: [
+      modelText('理由', event.reason),
+      modelText('発話案', event.proposed_utterance),
+      modelText('根拠の断片', event.evidence_span),
+      modelText('過去のターンの根拠', event.prior_turn_evidence_span),
+      modelText('意図の種類', event.intent_type),
+    ],
+  };
+}
+
+export function timingRow(event: Timing, index: number): DecisionRow {
+  const common = {
+    decision: event.timing,
+    stage: 'timing' as const,
+    candidate_id: event.candidate_id,
+    candidate_version: event.candidate_version,
+    segment_id: event.segment_id,
+    transcript_revision: event.transcript_revision,
+  };
+  if (event.timing_strategy === 'immediate') {
+    return {
+      ...common,
+      key: `${event.desire_request_id}/immediate/${index}`,
+      request_id: event.desire_request_id,
+      model_version: 'コードの判定（LLM なし）',
+      model_call: false,
+      measured: { sent_at: event.decided_at, received_at: event.decided_at, llm_ms: 0, decision_time: { name: 'decided_at', t_ms: event.decided_at } },
+      verified: [outcomeVerified(event.outcome, event.ledger_reason)],
+      model: [],
+    };
+  }
+  return {
+    ...common,
+    key: `${event.request_id}/${event.timing}/${index}`,
+    request_id: event.request_id,
+    model_version: event.model_version,
+    model_call: true,
+    measured: { sent_at: event.sent_at, received_at: event.received_at, llm_ms: event.latency_ms, decision_time: null },
+    verified: [gateVerified(event.gate), outcomeVerified(event.outcome, event.ledger_reason)],
+    model: [
+      modelText('理由', event.reason),
+      modelText('なぜ今', event.why_now),
+      modelText('待つ損失', event.cost_of_waiting),
+      modelText('撤回の理由', event.withdraw_reason),
+    ],
+  };
+}
+
 export function decisionRow(event: Decision, index: number): DecisionRow {
   const base = {
+    stage: 'v2' as const,
+    model_call: true,
     key: `${event.request_id}/${event.decision}/${index}`,
     decision: event.decision,
     request_id: event.request_id,
@@ -193,6 +278,12 @@ export class CandidateTracker {
         this.decisions.unshift(decisionRow(event, this.seq++));
         if (this.decisions.length > MAX_ROWS) this.decisions.length = MAX_ROWS;
         break;
+      case 'initiative.desire':
+        this.addStage(event.desire, desireRow(event, this.seq++));
+        break;
+      case 'initiative.timing':
+        this.addStage(event.timing_strategy === 'immediate' ? `${event.timing}（immediate）` : event.timing, timingRow(event, this.seq++));
+        break;
       case 'candidate.state_changed':
         this.addChange(event);
         break;
@@ -220,6 +311,12 @@ export class CandidateTracker {
       default:
         break;
     }
+  }
+
+  private addStage(count: string, row: DecisionRow): void {
+    this.counts[count] = (this.counts[count] ?? 0) + 1;
+    this.decisions.unshift(row);
+    if (this.decisions.length > MAX_ROWS) this.decisions.length = MAX_ROWS;
   }
 
   private addDrop(row: DropRow): void {

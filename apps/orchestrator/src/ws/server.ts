@@ -17,12 +17,13 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
-import { BrowserToNode, Condition, SystemTimeSource } from '@llm-vap/contracts';
+import { BrowserToNode, Condition, ConversationKind, SystemTimeSource, TimingStrategy } from '@llm-vap/contracts';
 import type { ClientHello, EmitOptions, EventDraft, EventEmitter, ResearchEvent, TimeSource } from '@llm-vap/contracts';
 import { openSessionLogging } from '../logging';
 import type { MaaiWorkerClient } from '../maai';
 import type { OrchestratorConfig } from '../app/config';
 import { createSessionProviders } from '../app/providers';
+import type { ChoiceSource, InitiativeChoice } from '../app/providers';
 import { Session, type BrowserLink } from '../session/session';
 import { handleResearchMessage, researchConfigMessage, type NoteTarget } from './research_channel';
 import { TuneChannel } from './tune_channel';
@@ -61,6 +62,13 @@ function newSessionId(): string {
   return `s${stamp}-${randomBytes(3).toString('hex')}`;
 }
 
+/** 参加者画面の WS の URL の ?conversation_kind= と ?timing_strategy=。新しいセッションを作るときだけ使う。 */
+interface RequestedInitiative {
+  conversation_kind: string | null;
+  timing_strategy: string | null;
+}
+const NO_REQUEST: RequestedInitiative = { conversation_kind: null, timing_strategy: null };
+
 export class OrchestratorServer {
   readonly http: Server;
   private readonly browserWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
@@ -95,7 +103,12 @@ export class OrchestratorServer {
         return;
       }
       if (url.pathname === '/ws') {
-        this.browserWss.handleUpgrade(req, socket, head, (ws) => this.onBrowser(ws, url.searchParams.get('condition')));
+        this.browserWss.handleUpgrade(req, socket, head, (ws) =>
+          this.onBrowser(ws, url.searchParams.get('condition'), {
+            conversation_kind: url.searchParams.get('conversation_kind'),
+            timing_strategy: url.searchParams.get('timing_strategy'),
+          }),
+        );
       } else if (url.pathname === '/research') {
         this.researchWss.handleUpgrade(req, socket, head, (ws) => this.onResearch(ws, url.searchParams.get('tune') === '1'));
       } else {
@@ -199,11 +212,13 @@ export class OrchestratorServer {
   // ---- 参加者 --------------------------------------------------------------------
 
   /** requestedCondition は WS の URL の ?condition=（参加者画面の選択）。新しいセッションを作るときだけ使う。 */
-  private onBrowser(ws: WebSocket, requestedCondition: string | null = null): void {
+  private onBrowser(ws: WebSocket, requestedCondition: string | null = null, requestedInitiative: RequestedInitiative = NO_REQUEST): void {
     let session: Session | null = null;
     const link: BrowserLink = {
       sendJson: (message) => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+        if (ws.readyState !== WebSocket.OPEN) return false;
+        ws.send(JSON.stringify(message));
+        return true;
       },
       sendBinary: (data) => {
         if (ws.readyState === WebSocket.OPEN) ws.send(data, { binary: true });
@@ -229,7 +244,7 @@ export class OrchestratorServer {
       if (message.type === 'client.hello') {
         // 届いた時点で列につなぐ。await の間に別の hello が割り込まない。
         this.helloQueue = this.helloQueue
-          .then(() => this.onHello(ws, link, message, requestedCondition))
+          .then(() => this.onHello(ws, link, message, requestedCondition, requestedInitiative))
           .then((s) => {
             session = s;
           })
@@ -263,6 +278,7 @@ export class OrchestratorServer {
     link: BrowserLink,
     hello: ClientHello,
     requestedCondition: string | null = null,
+    requestedInitiative: RequestedInitiative = NO_REQUEST,
   ): Promise<Session | null> {
     // 列で待つ間に閉じた接続は扱わない。
     if (ws.readyState !== WebSocket.OPEN) return null;
@@ -294,7 +310,7 @@ export class OrchestratorServer {
     if (current !== null) await this.endSession('new_client_session');
     let session: Session | null = null;
     try {
-      session = await this.createSession(requestedCondition);
+      session = await this.createSession(requestedCondition, requestedInitiative);
       this.session = session;
       this.sessionSocket = ws;
       await session.start(link, hello);
@@ -334,7 +350,40 @@ export class OrchestratorServer {
     return parsed.data;
   }
 
-  private async createSession(requestedCondition: string | null = null): Promise<Session> {
+  /** 会話の種類と方式の選択。画面の求めが正しく *_FROM_CLIENT が有効ならそれ、なければ既定。理由は起動ログと manifest の由来に残す。 */
+  private sessionInitiativeChoice(requested: RequestedInitiative): InitiativeChoice {
+    const { config } = this.options;
+    const kind = this.resolveChoice('conversation_kind', requested.conversation_kind, ConversationKind, config.conversation_kind, config.conversation_kind_from_client);
+    const timing = this.resolveChoice('timing_strategy', requested.timing_strategy, TimingStrategy, config.timing_strategy, config.timing_strategy_from_client);
+    return {
+      conversation_kind: kind.value,
+      conversation_kind_source: kind.source,
+      timing_strategy: timing.value,
+      timing_strategy_source: timing.source,
+    };
+  }
+
+  private resolveChoice<T, F>(
+    name: string,
+    requested: string | null,
+    schema: { safeParse(v: unknown): { success: true; data: T } | { success: false } },
+    fallback: F,
+    fromClient: boolean,
+  ): { value: T | F; source: ChoiceSource } {
+    if (requested === null || requested === '') return { value: fallback, source: 'default' };
+    const parsed = schema.safeParse(requested);
+    if (!parsed.success) {
+      this.log(`ignored an invalid ${name} request (${requested.slice(0, 40)}); using ${String(fallback)}`);
+      return { value: fallback, source: 'default' };
+    }
+    if (!fromClient) {
+      if (parsed.data !== (fallback as unknown)) this.log(`ignored the participant's ${name} request (${name.toUpperCase()}_FROM_CLIENT=0); using ${String(fallback)}`);
+      return { value: fallback, source: 'fixed' };
+    }
+    return { value: parsed.data, source: 'client' };
+  }
+
+  private async createSession(requestedCondition: string | null = null, requestedInitiative: RequestedInitiative = NO_REQUEST): Promise<Session> {
     const { config } = this.options;
     const condition = this.sessionCondition(requestedCondition);
     const session_id = newSessionId();
@@ -364,7 +413,14 @@ export class OrchestratorServer {
     logging.log.describe = (details) =>
       describe({ ...details, policy_file: config.policy_file, policy_override: config.policy_override } as typeof details);
     this.options.maaiTime?.use(time);
-    const providers = await createSessionProviders({ config, condition, time, emitter, ...(this.options.env ? { env: this.options.env } : {}) });
+    const providers = await createSessionProviders({
+      config,
+      condition,
+      time,
+      emitter,
+      choice: this.sessionInitiativeChoice(requestedInitiative),
+      ...(this.options.env ? { env: this.options.env } : {}),
+    });
     return new Session({
       session_id,
       condition,

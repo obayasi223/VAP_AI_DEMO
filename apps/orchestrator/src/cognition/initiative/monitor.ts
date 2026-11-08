@@ -32,11 +32,14 @@ import type {
   DecisionResult,
   ModelDecision,
 } from '../../control/candidates/types';
+import { failureReason } from './failure';
 import { checkEvidence, checkFreshness, checkWithdrawEvidence } from './gate';
 import { INITIATIVE_JSON_SCHEMA, parseModelOutput } from './model_output';
 import type { InitiativeModelOutput } from './model_output';
 import type { InitiativePersona } from './persona';
 import { CURRENT_PROMPT_VERSION, getPrompt } from './prompt';
+import { StagedPipeline } from './staged';
+import type { LatestTiming, StagedHost, StagedInput, StagedOptions } from './staged';
 import { normalizeForMatch } from './text';
 import { StableTranscriptView } from './transcript_view';
 import type { AsrSegmentSnapshot, StableMode, SttEvent, SttInput } from './transcript_view';
@@ -86,18 +89,17 @@ export interface InitiativeMonitorDeps {
   /** 入力に載せる直近の区間の文字数の上限。長い話で要求が際限なく大きくならないように。 */
   max_input_chars?: number;
   failure_backoff?: FailureBackoff;
+  /**
+   * 二段判定（生成段とタイミング段。staged.ts）。省略と timing_strategy=v2 は既存の1段判定（initiative-ja-v2）。
+   * 第2段階で InitiativeWiring が policy.initiative.staged から渡す。
+   */
+  staged?: StagedOptions;
 }
 
-interface RunInput {
-  request_id: string;
+interface RunInput extends StagedInput {
   /** 要求の前の「判定済み」の印。失敗したらここへ戻す（失敗した入力を判定済みにしない）。 */
   previous: InputMark;
-  segments: AsrSegmentSnapshot[];
   candidates: CandidateRecord[];
-  stable_chars: number;
-  transcript_revision: number;
-  segment_id: number;
-  sent_at: number;
 }
 
 interface InputMark {
@@ -132,16 +134,6 @@ function required(value: number | null, name: string): number {
   return value;
 }
 
-/** 例外から理由の文字列を作る。GeminiProviderError は kind を持つ。キーはプロバイダ側で伏せてある。 */
-function failureReason(error: unknown): string {
-  if (error && typeof error === 'object' && 'kind' in error && typeof (error as { kind: unknown }).kind === 'string') {
-    const message = error instanceof Error ? error.message : '';
-    return `provider_error:${(error as { kind: string }).kind}:${message.slice(0, 160)}`;
-  }
-  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return `provider_error:${message.slice(0, 160)}`;
-}
-
 export class InitiativeMonitor {
   private readonly view: StableTranscriptView;
   private readonly trigger: TriggerOptions;
@@ -151,6 +143,8 @@ export class InitiativeMonitor {
   private readonly maxRequests: number;
   private readonly maxInputChars: number;
   private readonly backoff: FailureBackoff;
+  /** 二段判定の本体。v2（1段判定）は null で、既存の経路を通る。 */
+  private readonly staged: StagedPipeline<RunInput> | null;
 
   private running: Promise<void> | null = null;
   private abort: AbortController | null = null;
@@ -162,10 +156,13 @@ export class InitiativeMonitor {
   private lastInputBoundaries = 0;
   private lastInputSegment = 0;
   private requestSeq = 0;
+  private timingCalls = 0;
   private limitReported = false;
   private consecutiveFailures = 0;
   private retryAfter: number | null = null;
   private stopped = false;
+  /** 最後に AI が話し始めた segment。これより前の segment の文は、判定しても E2a が棄てる（送るだけ無駄）。 */
+  private aiStartedSegment = 0;
   /** 要求ごとの入力の安定文字数（stableCharsSinceInput）。最近の INPUT_MARKS_KEPT 件だけ。 */
   private readonly inputMarks = new Map<string, { stable_chars: number; segment_id: number }>();
 
@@ -185,14 +182,27 @@ export class InitiativeMonitor {
     this.maxInputChars = deps.max_input_chars ?? 2000;
     this.backoff = deps.failure_backoff ?? DEFAULT_FAILURE_BACKOFF;
     getPrompt(this.promptVersion);
+    this.staged =
+      deps.staged && deps.staged.timing_strategy !== 'v2'
+        ? new StagedPipeline<RunInput>(
+            { llm: deps.llm, ledger: deps.ledger, emitter: deps.emitter, time: deps.time, options: deps.staged },
+            this.stagedHost(),
+          )
+        : null;
   }
 
   get prompt_version(): string {
     return this.promptVersion;
   }
 
+  /** LLM の呼び出しの回数（二段判定はタイミング段の呼び出しも数える）。 */
   requestCount(): number {
-    return this.requestSeq;
+    return this.requestSeq + this.timingCalls;
+  }
+
+  /** 候補の最新のタイミング段の判定（第2段階で negotiator が読む）。1段判定と未判定は null。 */
+  latestTiming(candidate_id: string, candidate_version: number): LatestTiming | null {
+    return this.staged?.latestTiming(candidate_id, candidate_version) ?? null;
   }
 
   /** E2a の stable に渡す（根拠の照合と sweep が同じ安定テキストを見る）。 */
@@ -221,7 +231,8 @@ export class InitiativeMonitor {
     if (this.stopped) return;
     const applied = this.view.apply(event);
     // final は増分が小さくても1回判定する（ターンの終わりの判定を抜かさない）。増分がなければ立てない。
-    if (event.event === 'stt.final') this.boundaryPending = this.newStableChars() > 0;
+    // AI が話し始めた後に届いた前の segment の final は起動にしない（E2a が ai_started_speaking で棄てる判定になる）。
+    if (event.event === 'stt.final' && event.segment_id >= this.aiStartedSegment) this.boundaryPending = this.newStableChars() > 0;
     // ASR が書き換わって根拠が消えた候補は、モデルを待たずに E2a がコード由来で撤回する。
     if (applied.rewrote_stable) this.deps.ledger.sweepEvidence(this.deps.time.monotonicMs());
     this.maybeStart();
@@ -233,6 +244,15 @@ export class InitiativeMonitor {
    */
   poll(): void {
     if (this.retryAfter !== null) this.maybeStart();
+  }
+
+  /**
+   * AI が話し始めた（segment_id が進むのはこの時だけ）。以後、前の segment の文では判定を起動しない。
+   * 安定テキストの更新（根拠の sweep を含む）は続ける。実行中の要求の結果は今までどおり E2a が裁く。
+   */
+  noteAiStarted(segment_id: number): void {
+    this.aiStartedSegment = Math.max(this.aiStartedSegment, segment_id);
+    this.boundaryPending = false;
   }
 
   /** 以後は起動せず、実行中の要求は中断し、結果も適用しない（セッションの終わり）。 */
@@ -265,6 +285,10 @@ export class InitiativeMonitor {
    * 保留の理由（post_turn_new_held）は受け取った時点で initiative.discarded に残してある。
    */
   onHeldPromoted(promotion: HeldPromotion, at: number): void {
+    if (this.staged) {
+      if (!this.stopped) this.staged.onHeldPromoted(promotion, at);
+      return;
+    }
     const held = this.held;
     this.held = null;
     if (this.stopped || !held || held.input.request_id !== promotion.request_id) return;
@@ -281,7 +305,7 @@ export class InitiativeMonitor {
       ...this.base(held.input, held.result, held.received_at),
       ...this.candidateBody(ref, held.output, this.content(held.output), applied),
     });
-    this.prepareSpeech(ref, held.input, held.output);
+    this.prepareSpeech(ref, held.input, held.output.proposed_utterance);
   }
 
 
@@ -297,6 +321,8 @@ export class InitiativeMonitor {
   }
 
   private shouldRun(): boolean {
+    // ASR の最新がまだ AI の開始より前の segment（AI の開始の後に届いた、人の前のターンの文）。
+    if (this.view.segmentId() < this.aiStartedSegment) return false;
     const newChars = this.newStableChars();
     if (newChars <= 0) return false;
     if (this.forceRerun) return true;
@@ -314,20 +340,8 @@ export class InitiativeMonitor {
       if (this.deps.time.monotonicMs() < this.retryAfter) return;
       this.retryAfter = null;
     }
-    if (this.requestSeq >= this.maxRequests) {
-      if (!this.limitReported) {
-        this.limitReported = true;
-        this.deps.emitter.emit({
-          event: 'provider.status',
-          // 判定用の LLM の行（応答用と同じ名前）ではなく、監視の行へ出す。
-          provider: INITIATIVE_MONITOR_STATUS,
-          provider_class: this.deps.llm.provider_class,
-          status: 'degraded',
-          reason: present('initiative_request_limit_reached'),
-          retry_attempt: 0,
-          next_retry_ms: absent('limit_is_per_session'),
-        });
-      }
+    if (this.requestCount() >= this.maxRequests) {
+      this.reportLimitOnce();
       return;
     }
     this.running = this.runOnce()
@@ -338,6 +352,48 @@ export class InitiativeMonitor {
         this.abort = null;
         this.maybeStart();
       });
+  }
+
+  private reportLimitOnce(): void {
+    if (this.limitReported) return;
+    this.limitReported = true;
+    this.deps.emitter.emit({
+      event: 'provider.status',
+      // 判定用の LLM の行（応答用と同じ名前）ではなく、監視の行へ出す。
+      provider: INITIATIVE_MONITOR_STATUS,
+      provider_class: this.deps.llm.provider_class,
+      status: 'degraded',
+      reason: present('initiative_request_limit_reached'),
+      retry_attempt: 0,
+      next_retry_ms: absent('limit_is_per_session'),
+    });
+  }
+
+  /** 二段判定へ渡す監視の口（起動、失敗の待ち、回数の上限、鮮度の再判定は監視が持つ）。 */
+  private stagedHost(): StagedHost<RunInput> {
+    return {
+      isStopped: () => this.stopped,
+      snapshot: () => this.view.snapshot(),
+      totalStableChars: () => this.view.totalStableChars(),
+      limits: { max_new_stable_chars_since_input: this.maxNewChars, max_result_age_ms: this.maxAgeMs },
+      clearFailures: () => {
+        this.consecutiveFailures = 0;
+      },
+      onDesireFailure: (input, reason) => this.fail(input, reason),
+      onTimingFailure: (input, reason, candidate_id) => this.failTiming(input, reason, candidate_id),
+      markStale: () => {
+        this.forceRerun = true;
+      },
+      prepareSpeech: (ref, input, utterance) => this.prepareSpeech(ref, input, utterance),
+      newTimingInput: (desire_request_id) => {
+        if (this.requestCount() >= this.maxRequests) {
+          this.reportLimitOnce();
+          return null;
+        }
+        this.timingCalls += 1;
+        return this.buildSnapshotInput(`${desire_request_id}_timing`, this.current!.previous);
+      },
+    };
   }
 
   /** 判定の外で起きた例外（E2a、emit の検証など）。止めずに理由を残す。 */
@@ -377,6 +433,11 @@ export class InitiativeMonitor {
     }
     this.requestSeq += 1;
     const request_id = `ini_${String(this.requestSeq).padStart(4, '0')}`;
+    return this.buildSnapshotInput(request_id, previous, segments);
+  }
+
+  /** 要求の入力を今の安定テキストから作り、鮮度の印を覚える。 */
+  private buildSnapshotInput(request_id: string, previous: InputMark, segments = this.view.snapshot()): RunInput {
     this.inputMarks.set(request_id, { stable_chars: this.view.totalStableChars(), segment_id: this.view.segmentId() });
     if (this.inputMarks.size > INPUT_MARKS_KEPT) this.inputMarks.delete(this.inputMarks.keys().next().value as string);
     return {
@@ -409,6 +470,10 @@ export class InitiativeMonitor {
     const prompt = getPrompt(this.promptVersion);
     const abort = new AbortController();
     this.abort = abort;
+    if (this.staged) {
+      await this.staged.run(input, abort.signal);
+      return;
+    }
     let result: LlmResult;
     try {
       result = await this.deps.llm.generate({
@@ -450,6 +515,17 @@ export class InitiativeMonitor {
     const wait = Math.min(this.backoff.max_ms, this.backoff.base_ms * 2 ** (this.consecutiveFailures - 1));
     this.retryAfter = this.deps.time.monotonicMs() + wait;
     this.discard(input, null, `${reason};backoff_ms=${wait}`);
+  }
+
+  /**
+   * タイミング段の失敗。生成段の結果は有効なので入力の印は戻さない（再度の起動は次の増分で）。
+   * 連続した失敗の待ちだけを伸ばす。候補は残り、タイミング段の判定は前のままになる。
+   */
+  private failTiming(input: RunInput, reason: string, candidate_id: string): void {
+    this.consecutiveFailures += 1;
+    const wait = Math.min(this.backoff.max_ms, this.backoff.base_ms * 2 ** (this.consecutiveFailures - 1));
+    this.retryAfter = this.deps.time.monotonicMs() + wait;
+    this.discard(input, candidate_id, `${reason};backoff_ms=${wait}`);
   }
 
   private applyDecision(input: RunInput, output: InitiativeModelOutput, result: LlmResult, received_at: number): void {
@@ -580,7 +656,7 @@ export class InitiativeMonitor {
       ...this.base(input, result, received_at),
       ...this.candidateBody(ref, output, content, applied),
     });
-    this.prepareSpeech(ref, input, output);
+    this.prepareSpeech(ref, input, output.proposed_utterance);
   }
 
   private candidateBody(
@@ -668,7 +744,7 @@ export class InitiativeMonitor {
       ...this.candidateBody(ref, output, content, applied),
     });
     // 旧い版の未再生の PCM は E2a が D の discardCandidate で棄てた。新しい版の準備だけをする。
-    this.prepareSpeech(ref, input, output);
+    this.prepareSpeech(ref, input, output.proposed_utterance);
   }
 
   private applyWithdraw(input: RunInput, output: InitiativeModelOutput, result: LlmResult, received_at: number): void {
@@ -738,12 +814,12 @@ export class InitiativeMonitor {
     });
   }
 
-  private prepareSpeech(ref: CandidateRef, input: RunInput, output: InitiativeModelOutput): void {
+  private prepareSpeech(ref: CandidateRef, input: RunInput, utterance: string): void {
     if (!this.deps.speech) return;
     this.deps.speech.prepare({
       segment_id: input.segment_id,
       transcript_revision: input.transcript_revision,
-      text: output.proposed_utterance,
+      text: utterance,
       origin: { kind: 'candidate', candidate_id: ref.candidate_id, candidate_version: ref.candidate_version },
     });
   }

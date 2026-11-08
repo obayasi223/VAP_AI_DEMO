@@ -25,7 +25,7 @@ export const MODEL_APPLICABLE_STATES: readonly CandidateState[] = [
   'DEFERRED',
 ];
 
-/** 期限切れ、通常応答の開始、根拠の消失で撤回する対象。SPEAKING は話し終えるまで撤回しない。 */
+/** 期限切れ、通常応答の開始、根拠の消失で撤回する対象。SPEAKING は話し終えるまで撤回しない（再生の失敗と無音の終了は finishSpeech）。 */
 export const WITHDRAWABLE_STATES = MODEL_APPLICABLE_STATES;
 
 /** 撤回の原因。コード由来のもの。 */
@@ -76,6 +76,8 @@ function table(options: TransitionOptions): Table {
     },
     SPEAKING: {
       SPOKEN: ['speech_finished', 'speech_interrupted'],
+      // 話し終えていない終わり方。通常の撤回（WITHDRAWABLE_STATES）とは別で、D の報告だけが通す。
+      WITHDRAWN: ['speech_failed', 'speech_no_audio'],
     },
   };
 }

@@ -18,12 +18,13 @@ import type {
   TurnInputs,
   TurnManager,
   TranscriptSnapshot,
+  VapUnavailable,
 } from '@llm-vap/contracts';
 import { normalizeForSimilarity } from '../cognition/similarity';
 import { judgeGaze } from './gaze';
 import { NO_INVITATION, detectInvitation } from './invitation';
 import { prepareTrigger, similarityGate } from './prepare';
-import { START_ACK_TIMEOUT_MS, controlSettings } from './settings';
+import { START_ACK_TIMEOUT_MS, asrSettleMs, controlSettings, vapUnavailableInvitationWaitMs, vapUnavailableStartWaitMs } from './settings';
 import type { AfterAiSpeechSettings, ControlOptions, ControlSettings, YieldTimeout } from './settings';
 import { createInitialState } from './state';
 import type { IgnoredFragment, Speaking, TurnState, UtteranceBuffer, WantToSpeak } from './state';
@@ -106,6 +107,8 @@ interface Permission {
   source: TurnAllowedPayload['decision_source'];
   reason: string;
   gap_ms: Maybe<number>;
+  /** turn_allowed を出し直す単位（数値を除いた判断の種類）。省略は allowed と source の変化だけで出す。 */
+  logKey?: string;
 }
 
 function isAiSpeaking(s: TurnState): boolean {
@@ -145,6 +148,7 @@ function observeTranscript(s: TurnState, tick: Tick): void {
     if (s.ignored_fragment !== null && !isIgnoredFragment(s, text)) s.ignored_fragment = null;
     s.asr_revision = t.transcript_revision;
     s.last_asr_time = now;
+    s.asr_is_final = t.is_final;
     const detection = detectInvitation(text, t);
     s.invitation = detection.invitation;
     s.invitation_rule_id = detection.rule_id;
@@ -272,6 +276,7 @@ function decideWithVap(s: TurnState, tick: Tick, view: VapView): Permission {
   const c = settings.constants;
   const speaking = debounceUserSpeaking(s, view.user_speaking, now, settings.user_speaking_min_ms);
   s.user_speaking = speaking;
+  if (view.user_speaking && settings.vap_unavailable !== null) s.voice_evidence_segment = s.segment_id;
   if (speaking) {
     const voicedAt = s.user_last_voiced_at ?? now;
     s.user_speak_end_time = voicedAt; // L57
@@ -384,14 +389,122 @@ function onAiSpeechEnded(s: TurnState, tick: Tick, natural: boolean): void {
   s.ignored_fragment = { segment_id: s.segment_id, text, transcript_revision: s.asr_revision, reason, at: now };
 }
 
+/** 受信済み音声の先頭の進みを見る（ja の vap_unavailable）。上りが止まると fallback_energy は最後の値のまま変わらない。 */
+function observeUplink(s: TurnState, tick: Tick): void {
+  if (tick.inputs.received_audio_frame !== s.uplink_frame) {
+    s.uplink_frame = tick.inputs.received_audio_frame;
+    s.uplink_advanced_at = tick.now;
+  }
+}
+
+function uplinkFresh(s: TurnState, tick: Tick): boolean {
+  return s.uplink_advanced_at !== null && tick.now - s.uplink_advanced_at <= tick.settings.vap_stale_ms;
+}
+
+interface StartBlock {
+  /** ログの出し直しの単位（数値を含まない）。 */
+  key: string;
+  detail: string;
+}
+
+/**
+ * VAP が使えないときに開始してよいか（ja の vap_unavailable）。人の発話が確かに終わったと音声と ASR で言えるまで止める。
+ * 止める理由を返し、許可なら null。VAP の値は見ない。
+ */
+function vapUnavailableStartBlock(
+  s: TurnState,
+  tick: Tick,
+  guard: VapUnavailable,
+  energy: { known: boolean; voiced: boolean; silenceMs: number },
+  requiredSilenceMs: number,
+): StartBlock | null {
+  if (!energy.known) return { key: 'energy_unavailable', detail: 'energy_unavailable' };
+  // 文のない許可を出さない。発話候補も turn_allowed で話し始める。
+  if (s.asr_result === null) return { key: 'no_utterance', detail: 'no_utterance' };
+  if (s.voice_evidence_segment !== s.segment_id) return { key: 'no_voice_evidence', detail: 'no_voice_evidence' };
+  if (energy.voiced || energy.silenceMs < requiredSilenceMs) {
+    return { key: 'wait_silence', detail: `wait_silence:${energy.silenceMs}ms<${requiredSilenceMs}ms` };
+  }
+  const quietMs = tick.now - (s.last_asr_time as number);
+  const needMs = asrSettleMs(guard, s.asr_is_final);
+  if (quietMs < needMs) return { key: 'wait_asr', detail: `wait_asr:${quietMs}ms<${needMs}ms` };
+  return null;
+}
+
+/** fallback の割り込みを止める理由（新しい発話の内容がない、相槌だけ）。ja の vap_unavailable のときだけ見る。 */
+function fallbackInterruptHold(s: TurnState, tick: Tick, guard: VapUnavailable): StartBlock | null {
+  const quietMs = tick.now - (s.last_asr_time as number);
+  if (quietMs > guard.interrupt_asr_recent_ms) {
+    return { key: 'asr_not_recent', detail: `asr_not_recent:${quietMs}ms>${guard.interrupt_asr_recent_ms}ms` };
+  }
+  const after = tick.settings.after_ai_speech;
+  const fragment = after === null ? null : fragmentReason(s.asr_result ?? '', after);
+  return fragment === null ? null : { key: 'backchannel_only', detail: `backchannel_only:${fragment}` };
+}
+
+/** ja の vap_unavailable の開始の判断。hri2025 と省略のときは decideDegraded の元の分岐のまま。 */
+function decideVapUnavailableStart(
+  s: TurnState,
+  tick: Tick,
+  guard: VapUnavailable,
+  energy: { known: boolean; voiced: boolean; silenceMs: number },
+  interruptHold: StartBlock | null,
+): Permission {
+  const { settings } = tick;
+  const gap_ms = present(energy.silenceMs);
+  const note = `vap_unavailable:${tick.freshnessReason}`;
+  if (isAiSpeaking(s)) {
+    const held = interruptHold === null ? '' : `|interrupt_held:${interruptHold.detail}`;
+    return {
+      allowed: false,
+      source: 'fallback',
+      reason: `degraded:${tick.freshnessReason}|ai_speaking${held}`,
+      gap_ms,
+      logKey: `ai_speaking:${interruptHold?.key ?? 'none'}`,
+    };
+  }
+  const asrNote = `asr_${s.asr_is_final ? 'final' : 'quiet'}`;
+  if (settings.invitation_grants_turn && s.invitation.detected) {
+    const wait = vapUnavailableInvitationWaitMs(settings);
+    if (vapUnavailableStartBlock(s, tick, guard, energy, wait) === null) {
+      return {
+        allowed: true,
+        source: 'invitation',
+        reason: `invitation:${s.invitation_rule_id}+wait=${wait}ms+${asrNote}+${note}`,
+        gap_ms,
+        logKey: 'invitation',
+      };
+    }
+  }
+  let block: StartBlock = { key: 'uncalibrated', detail: 'fallback_silence_max_uncalibrated' };
+  if (settings.fallback_silence_max_ms !== null) {
+    const wait = vapUnavailableStartWaitMs(settings);
+    const blocked = vapUnavailableStartBlock(s, tick, guard, energy, wait);
+    if (blocked === null) {
+      return {
+        allowed: true,
+        source: 'fallback',
+        reason: `fallback_silence_max+wait=${wait}ms+${asrNote}+${note}`,
+        gap_ms,
+        logKey: 'fallback_start',
+      };
+    }
+    block = blocked;
+  }
+  return { allowed: false, source: 'fallback', reason: `degraded:${tick.freshnessReason}|${block.detail}`, gap_ms, logKey: block.key };
+}
+
 /** 鮮度切れの間（計画 §4.1 の表）。fallback_energy は VAP として扱わず、別の decision_source で残す。 */
 function decideDegraded(s: TurnState, tick: Tick): Permission {
   const { inputs, now, settings } = tick;
+  const guard = settings.vap_unavailable;
   const energy = inputs.fallback_energy.value;
   const silenceThreshold = settings.fallback_energy_silence_threshold;
-  const energyKnown = energy !== null && silenceThreshold !== null;
+  // 上りが止まったら古いエネルギーを無音や声の根拠にしない（ja）。
+  const energyKnown = energy !== null && silenceThreshold !== null && (guard === null || uplinkFresh(s, tick));
   const voiced = energyKnown && energy >= silenceThreshold;
-  if (voiced || s.fallback_last_voiced_at === null) s.fallback_last_voiced_at = now;
+  if (voiced || s.fallback_last_voiced_at === null || (guard !== null && !energyKnown)) s.fallback_last_voiced_at = now;
+  if (voiced && guard !== null) s.voice_evidence_segment = s.segment_id;
   const silenceMs = now - s.fallback_last_voiced_at;
   const asrQuietMs = now - (s.last_asr_time as number);
   // user_speaking は推定。エネルギーの尺度がなければ、ASR の更新が続いているかで見る。
@@ -399,11 +512,19 @@ function decideDegraded(s: TurnState, tick: Tick): Permission {
 
   const minWords = settings.fallback_interrupt_min_words;
   const t = inputs.transcript.value;
-  if (voiced && minWords !== null && t !== null && t.segment_id === s.segment_id) {
+  let interruptHold: StartBlock | null = null;
+  if (minWords !== null && t !== null && t.segment_id === s.segment_id) {
     const words = countWords(s.asr_result ?? '');
     if (words >= minWords) {
-      pushInterrupt(s, tick, 'fallback', `fallback_energy_with_new_interim:words=${words}`);
+      interruptHold = guard === null ? null : fallbackInterruptHold(s, tick, guard);
+      if (voiced && interruptHold === null) {
+        const detail = guard === null ? '' : `+asr_quiet=${asrQuietMs}ms+vap_unavailable:${tick.freshnessReason}`;
+        pushInterrupt(s, tick, 'fallback', `fallback_energy_with_new_interim:words=${words}${detail}`);
+      }
     }
+  }
+  if (guard !== null) {
+    return decideVapUnavailableStart(s, tick, guard, { known: energyKnown, voiced, silenceMs }, interruptHold);
   }
   const gap_ms = present(silenceMs);
   if (settings.invitation_grants_turn && s.invitation.detected && !voiced && asrQuietMs >= settings.constants.MIN_GAP_TIME_MS) {
@@ -484,11 +605,15 @@ function step(settings: ControlSettings, previous: TurnState, inputs: TurnInputs
   s.user_turn_end_time ??= now;
   s.last_asr_time ??= now;
 
-  const freshness = assessVapFreshness(inputs, now, settings);
+  const trust = settings.vap_unavailable === null
+    ? null
+    : { direction_status: settings.direction.direction_status, ai_reference_missing_ms: settings.vap_unavailable.ai_reference_missing_ms };
+  const freshness = assessVapFreshness(inputs, now, settings, trust);
   const vap = inputs.vap.value;
   const view = freshness.freshness === 'fresh' && vap !== null ? readVap(vap, settings.direction) : null;
   const tick: Tick = { inputs, now, settings, view, freshnessReason: freshness.reason, decisions, completionAdopted: false };
 
+  if (settings.vap_unavailable !== null) observeUplink(s, tick);
   applyFreshness(s, tick, freshness.freshness);
   const speakingBefore: Speaking['phase'] = s.speaking.phase;
   s.speaking = syncSpeaking(s.speaking, inputs.playback, now);
@@ -523,7 +648,10 @@ function step(settings: ControlSettings, previous: TurnState, inputs: TurnInputs
   // L78。再生を始められない間（切断中など）は is_ready と同じく偽にする。segment を進めず、応答を失わない。
   const startBlocked = inputs.start_blocked_reason ?? null;
   const starting = s.permitted_to_speak && usable.kind !== 'none' && startBlocked === null;
-  const key = `${permission.allowed}:${permission.source}`;
+  const key =
+    permission.logKey === undefined
+      ? `${permission.allowed}:${permission.source}`
+      : `${permission.allowed}:${permission.source}:${s.vap_freshness}:${permission.logKey}`;
   if (key !== s.last_turn_allowed_key || starting) {
     decisions.push({ kind: 'turn_allowed', payload: buildTurnAllowed(s, tick, permission) });
     s.last_turn_allowed_key = key;
@@ -538,6 +666,7 @@ function step(settings: ControlSettings, previous: TurnState, inputs: TurnInputs
       at_audio_frame: inputs.received_audio_frame,
     }); // L80（U-3）
     s.utterance = null;
+    s.asr_is_final = false;
     s.ignored_fragment = null;
     s.invitation = NO_INVITATION;
     s.invitation_rule_id = null;

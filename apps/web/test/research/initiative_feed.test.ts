@@ -142,3 +142,55 @@ describe('本実装の候補イベントが研究者画面へ届く', () => {
     wiring.close();
   });
 });
+
+describe('二段判定の行（initiative.desire と initiative.timing）', () => {
+  const event = (name: string, fields: Record<string, unknown>) => ({ event: name, t_monotonic_ms: 500, ...fields }) as never;
+  const stage = {
+    segment_id: 1,
+    transcript_revision: 2,
+    sent_at: 100,
+    received_at: 500,
+    latency_ms: 400,
+    model_version: 'm',
+    gate: { source: 'verified', value: { passed: true, reasons: [] }, method: 'gate' },
+    ledger_reason: { value: null, null_reason: 'x' },
+  };
+  const text = (value: string) => ({ source: 'model_output', value });
+
+  it('生成段: LLM 生成の文と、ゲートと実測を別の欄に出す', () => {
+    const tracker = new CandidateTracker();
+    tracker.add(
+      event('initiative.desire', {
+        ...stage,
+        request_id: 'ini_0001',
+        desire: 'NEW',
+        candidate_id: { value: 'c_0001' },
+        candidate_version: { value: 1 },
+        outcome: 'registered',
+        reason: text('理由'),
+        proposed_utterance: text('発話案'),
+        evidence_span: text('根拠'),
+        prior_turn_evidence_span: { source: 'model_output', value: null, null_reason: 'none' },
+        intent_type: text('CLARIFICATION'),
+        evidence_segment_ids: { value: { value: [1], method: 'm' } },
+      }),
+    );
+    const { decisions, counts } = tracker.summary();
+    expect(counts).toEqual({ NEW: 1 });
+    expect(decisions[0]).toMatchObject({ stage: 'desire', decision: 'NEW', candidate_id: 'c_0001', measured: { llm_ms: 400 }, model_call: true });
+    expect(decisions[0]?.verified.map((v) => v.label)).toEqual(['ゲート', '結果', '根拠の区間']);
+    expect(decisions[0]?.model.find((m) => m.label === '発話案')?.value).toBe('発話案');
+    expect(decisions[0]?.verified.some((v) => v.value.includes('発話案'))).toBe(false);
+  });
+
+  it('タイミング段: llm の判定と、LLM を呼ばない immediate を区別する', () => {
+    const tracker = new CandidateTracker();
+    const body = { segment_id: 1, transcript_revision: 2, candidate_id: 'c_0001', candidate_version: 1, desire_request_id: 'ini_0001', outcome: 'kept', ledger_reason: { value: null, null_reason: 'x' } };
+    tracker.add(event('initiative.timing', { ...stage, ...body, timing_strategy: 'llm', timing: 'WAIT_FOR_TURN_END', request_id: 'ini_0001_timing', reason: text('r'), why_now: text('w'), cost_of_waiting: text('c'), withdraw_reason: { value: null, null_reason: 'x' } }));
+    tracker.add(event('initiative.timing', { ...body, timing_strategy: 'immediate', timing: 'OFFER_NOW', decided_at: 600, model_call: false }));
+    const { decisions, counts } = tracker.summary();
+    expect(counts).toEqual({ WAIT_FOR_TURN_END: 1, 'OFFER_NOW（immediate）': 1 });
+    expect(decisions[0]).toMatchObject({ stage: 'timing', decision: 'OFFER_NOW', model_call: false, model: [] });
+    expect(decisions[1]).toMatchObject({ stage: 'timing', decision: 'WAIT_FOR_TURN_END', model_call: true, request_id: 'ini_0001_timing' });
+  });
+});

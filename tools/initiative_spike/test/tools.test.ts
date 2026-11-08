@@ -295,3 +295,46 @@ describe('設定', () => {
     expect(scenarioText(loadScenarios().find((s) => s.id === 'C3a')!, loadScenarios())).toContain('五十万円');
   });
 });
+
+describe('二段判定の集計', () => {
+  const model = (value: unknown) => ({ source: 'model_output', value });
+  const req = (id: string, t: number) => ({ event: 'llm.request', t_monotonic_ms: t, request_id: id, purpose: 'initiative', sent_at: t, input: { messages: [{ text: '#0（確定）: 入力の文' }] } });
+  const res = (id: string, t: number, o: Record<string, unknown>) => ({ event: 'llm.response', t_monotonic_ms: t, request_id: id, purpose: 'initiative', received_at: t, output: model({ text: JSON.stringify(o) }) });
+  const stage = (event: string, id: string, t: number, fields: Record<string, unknown>) => ({ event, t_monotonic_ms: t, request_id: id, gate: { source: 'verified', value: { passed: true, reasons: [] } }, ledger_reason: { value: null }, ...fields });
+  const events = [
+    req('ini_0001', 100),
+    res('ini_0001', 500, { desire: 'NEW', proposed_utterance: '発話案' }),
+    stage('initiative.desire', 'ini_0001', 501, { desire: 'NEW', outcome: 'registered', candidate_id: { value: 'c_0001' } }),
+    req('ini_0001_timing', 501),
+    res('ini_0001_timing', 900, { timing: 'WAIT_FOR_TURN_END', why_now: '' }),
+    stage('initiative.timing', 'ini_0001_timing', 901, { timing_strategy: 'llm', timing: 'WAIT_FOR_TURN_END', outcome: 'kept', candidate_id: 'c_0001' }),
+    req('ini_0002', 1000),
+    res('ini_0002', 1400, { desire: 'NEW', proposed_utterance: '棄却の案' }),
+    stage('initiative.desire', 'ini_0002', 1401, { desire: 'NEW', outcome: 'gate_rejected', candidate_id: { value: null }, gate: { source: 'verified', value: { passed: false, reasons: ['evidence_not_found'] } } }),
+    req('ini_0002_timing', 1500),
+    res('ini_0002_timing', 1800, { timing: 'WITHDRAW' }),
+    stage('initiative.timing', 'ini_0002_timing', 1801, { timing_strategy: 'llm', timing: 'WITHDRAW', outcome: 'withdrawn', candidate_id: 'c_0001' }),
+  ];
+  const summary = summarizeRun(events, 10_000);
+
+  it('生成段とタイミング段を別の行にして、判定の値と受け付けの結果を読む', () => {
+    expect(summary.rows.map((r) => [r.request_id, r.stage, r.decision, r.gate])).toEqual([
+      ['ini_0001', 'desire', 'NEW', 'passed'],
+      ['ini_0001_timing', 'timing', 'WAIT_FOR_TURN_END', 'passed'],
+      ['ini_0002', 'desire', 'NEW', 'rejected'],
+      ['ini_0002_timing', 'timing', 'WITHDRAW', 'passed'],
+    ]);
+    expect(summary.rows[2]?.gate_reasons).toContain('evidence_not_found');
+    expect(summary.model_new).toBe(2);
+    expect(summary.gate_rejected_new).toBe(1);
+    expect(summary.withdrawn_by_model).toBe(1);
+    expect(summary.active_at_end).toBe(0);
+  });
+
+  it('評価シートのタイミング段の行に同じ起動の発話案と段を出す', () => {
+    const csv = buildEvalCsv([{ scenario: 'C2', asr_origin: 'a', model: 'm', prompt_version: 'v', summary, full_text: '全文' }]);
+    const line = csv.split('\r\n').find((l) => l.includes('"ini_0001_timing"'));
+    expect(line).toContain('"timing"');
+    expect(line).toContain('"発話案"');
+  });
+});

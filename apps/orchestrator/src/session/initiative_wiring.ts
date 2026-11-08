@@ -21,7 +21,7 @@ import type {
   TimeSource,
 } from '@llm-vap/contracts';
 import { InitiativeMonitor } from '../cognition/initiative';
-import type { FailureBackoff, InitiativePersona, SttInput, TriggerOptions } from '../cognition/initiative';
+import type { FailureBackoff, InitiativePersona, StagedOptions, SttInput, TriggerOptions } from '../cognition/initiative';
 import { CandidateLedger, candidateLedgerSettings } from '../control/candidates';
 import type { CandidateSpeechPort } from '../control/candidates';
 
@@ -58,6 +58,8 @@ export interface InitiativeWiringOptions {
   /** policy.initiative.trigger より優先する（スパイクとの比較用）。 */
   trigger?: TriggerOptions;
   failure_backoff?: FailureBackoff;
+  /** 二段判定（生成段とタイミング段）。省略と timing_strategy=v2 は1段判定。 */
+  staged?: StagedOptions;
 }
 
 export class InitiativeWiring {
@@ -88,6 +90,7 @@ export class InitiativeWiring {
       ...(options.trigger ? { trigger: options.trigger } : {}),
       ...(options.prompt_version ? { prompt_version: options.prompt_version } : {}),
       ...(options.failure_backoff ? { failure_backoff: options.failure_backoff } : {}),
+      ...(options.staged ? { staged: options.staged } : {}),
     });
     this.monitor = monitor;
   }
@@ -114,6 +117,7 @@ export class InitiativeWiring {
   onSegmentChanged(segment_id: number, now: number): void {
     if (this.closed) return;
     this.ledger.onSegmentChanged(segment_id, now);
+    this.monitor.noteAiStarted(segment_id);
   }
 
   onNormalResponseStarted(now: number): void {
@@ -121,18 +125,29 @@ export class InitiativeWiring {
     this.ledger.onNormalResponseStarted(now);
   }
 
-  /** speech.ended／interrupted。候補の発話だけを E2a へ伝える。 */
+  /** speech.ended／interrupted。候補の発話だけを E2a へ伝える。1 音も出なかった終わりは no_audio で区別する。 */
   onSpeechFinished(
-    finished: { audio_playback_id: number; interrupted: boolean; origin: { kind: string; candidate_id?: string } },
+    finished: { audio_playback_id: number; interrupted: boolean; no_audio?: boolean; origin: { kind: string; candidate_id?: string } },
     now: number,
   ): void {
     if (this.closed || finished.origin.kind !== 'candidate' || !finished.origin.candidate_id) return;
+    const record = this.ledger.getRecord(finished.origin.candidate_id);
+    // 再生の失敗で先に閉じた候補の、遅れて届いた終わりの報告（履歴には session 側で発話済みの部分だけが入る）。
+    if (record?.state === 'WITHDRAWN' && record.audio_playback_id === finished.audio_playback_id) return;
     this.ledger.finishSpeech(
       finished.origin.candidate_id,
       finished.audio_playback_id,
-      finished.interrupted ? 'speech_interrupted' : 'speech_finished',
+      finished.no_audio ? 'speech_no_audio' : finished.interrupted ? 'speech_interrupted' : 'speech_finished',
       now,
     );
+  }
+
+  /** D が再生中の音声を失敗にした。SPEAKING の候補を終端する（残すと以後の NEW を塞ぐ）。発話中でない候補には何もしない。 */
+  onSpeechFailed(candidate_id: string, audio_playback_id: number, now: number): void {
+    if (this.closed) return;
+    const record = this.ledger.getRecord(candidate_id);
+    if (record?.state !== 'SPEAKING' || record.audio_playback_id !== audio_playback_id) return;
+    this.ledger.finishSpeech(candidate_id, audio_playback_id, 'speech_failed', now);
   }
 
   close(): void {

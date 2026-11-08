@@ -85,6 +85,13 @@ export interface TurnState extends TurnStateCore {
   user_last_voiced_at: number | null;
   /** degraded 時の無音の起点。fallback_energy から求めた値で VAP ではない。 */
   fallback_last_voiced_at: number | null;
+  /** 直近に処理した ASR の結果が final か（turn.vap_unavailable）。final の後に interim が来れば false に戻る。 */
+  asr_is_final: boolean;
+  /** 人の声を観測した segment（VAP の vad または声のエネルギー）。ASR の文に声の裏付けがあるかを見る。 */
+  voice_evidence_segment: number | null;
+  /** 受信済み音声の先頭が最後に進んだ時刻。上りが止まると fallback_energy は古い値のままになるので確かめる。 */
+  uplink_frame: number | null;
+  uplink_advanced_at: number | null;
 
   invitation: Invitation;
   invitation_rule_id: string | null;
@@ -130,6 +137,10 @@ export function createInitialState(): TurnState {
     user_speaking_raw_since: null,
     user_last_voiced_at: null,
     fallback_last_voiced_at: null,
+    asr_is_final: false,
+    voice_evidence_segment: null,
+    uplink_frame: null,
+    uplink_advanced_at: null,
     invitation: NO_INVITATION,
     invitation_rule_id: null,
     last_prepare_gate: null,

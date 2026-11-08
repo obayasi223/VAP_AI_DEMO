@@ -159,6 +159,39 @@ describe('checkLog', () => {
     });
   });
 
+  describe('提案条件で交渉が動かなかったセッション', () => {
+    const initiative = (candidates_used_for: string, reason: string | null = null) => ({
+      running: reason === null,
+      reason,
+      prompt_version: null,
+      model: null,
+      persona_id: null,
+      persona_version: null,
+      candidates_used_for,
+    });
+
+    it('condition が initiative_inhale でも交渉が動いていなければ証拠に数えない', async () => {
+      const paths = await session(undefined, {
+        ...PRODUCTION_MANIFEST,
+        condition: 'initiative_inhale',
+        initiative: initiative('log_and_research_view_only', 'persona_not_loaded'),
+      });
+      const report = await checkLog(paths.dir);
+      expect(report.acceptance_evidence.eligible).toBe(false);
+      expect(report.acceptance_evidence.reasons).toEqual(['条件 initiative_inhale で交渉が動いていない（log_and_research_view_only: persona_not_loaded）']);
+    });
+
+    it('manifest に交渉の記録がなければ提案条件は証拠に数えない', async () => {
+      const paths = await session(undefined, { ...PRODUCTION_MANIFEST, condition: 'initiative_no_cue' });
+      expect((await checkLog(paths.dir)).acceptance_evidence.reasons).toEqual(['条件 initiative_no_cue で交渉が動いていない（manifest に記録なし）']);
+    });
+
+    it('交渉が動いていれば証拠に数える。reactive は交渉の有無を問わない', async () => {
+      const paths = await session(undefined, { ...PRODUCTION_MANIFEST, condition: 'initiative_inhale', initiative: initiative('negotiation:initiative_inhale') });
+      expect((await checkLog(paths.dir)).acceptance_evidence.eligible).toBe(true);
+    });
+  });
+
   it('manifest にプロバイダの区分がなければ、provider.status が production でも証拠に数えない', async () => {
     const paths = await session(undefined, null);
     const report = await checkLog(paths.dir);

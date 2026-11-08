@@ -29,6 +29,8 @@ export const EVENT_ROUTES = {
   'initiative.decision': { origin: 'node' },
   'initiative.discarded': { origin: 'node' },
   'initiative.aborted': { origin: 'node' },
+  'initiative.desire': { origin: 'node' },
+  'initiative.timing': { origin: 'node' },
   'candidate.state_changed': { origin: 'node' },
   'candidate.rejected': { origin: 'node' },
   'signal.sent': { origin: 'node' },

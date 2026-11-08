@@ -9,6 +9,8 @@ export interface RawEvent {
 
 export interface DecisionRow {
   request_id: string;
+  /** v2 は1段判定、desire と timing は二段判定の段。 */
+  stage: 'v2' | 'desire' | 'timing';
   t_ms: number;
   latency_ms: number | null;
   decision: string;
@@ -75,6 +77,27 @@ export function modelJsonOf(response: RawEvent | undefined): Record<string, unkn
   return o;
 }
 
+/** モデルの出力の判定（1段の decision、生成段の desire、タイミング段の timing）。 */
+function modelLabelOf(output: Record<string, unknown>): string | undefined {
+  return (output.decision ?? output.desire ?? output.timing) as string | undefined;
+}
+
+const unwrapValue = (v: unknown): unknown => (v && typeof v === 'object' && 'value' in v ? (v as { value: unknown }).value : v);
+
+/** 生成段とタイミング段のイベントを1段の行と同じ形（decision と candidate_id）に揃える。受け付けなかったものは null。 */
+function acceptedStage(e: RawEvent): RawEvent | null {
+  const accepted = e.event === 'initiative.desire' ? ['none', 'registered', 'revised', 'held_promoted'] : ['kept', 'withdrawn'];
+  if (!accepted.includes(e.outcome as string)) return null;
+  const candidate = unwrapValue(e.candidate_id);
+  return { ...e, decision: (e.event === 'initiative.desire' ? e.desire : e.timing) as string, candidate_id: candidate ?? '' };
+}
+
+function stageRejectReason(e: RawEvent): string {
+  const reasons = ((unwrapValue(e.gate) as { reasons?: string[] } | undefined)?.reasons ?? []).join(';');
+  const ledger = unwrapValue(e.ledger_reason);
+  return [e.outcome, reasons, typeof ledger === 'string' ? ledger : ''].filter((x) => x !== '').join(':');
+}
+
 /**
  * llm.request の入力の安定テキスト。スパイクは segments を、本実装はプロンプトの文（#番号（…）: 文）を残す。
  */
@@ -95,6 +118,8 @@ export function summarizeRun(events: readonly RawEvent[], speech_end_ms: number)
   const responses = new Map<string, RawEvent>();
   const decisions = new Map<string, RawEvent>();
   const discards: RawEvent[] = [];
+  /** 生成段とタイミング段の棄却の理由（request_id を持つので位置で対応づけない）。 */
+  const stageRejected = new Map<string, string>();
   let withdrawn_by_code = 0;
   let withdrawn_by_model = 0;
   const open = new Set<string>();
@@ -112,6 +137,19 @@ export function summarizeRun(events: readonly RawEvent[], speech_end_ms: number)
         open.delete(e.candidate_id as string);
         withdrawn_by_model += 1;
       }
+    } else if (e.event === 'initiative.desire' || (e.event === 'initiative.timing' && e.timing_strategy === 'llm')) {
+      const stage = acceptedStage(e);
+      const request_id = e.request_id as string;
+      if (stage === null) {
+        stageRejected.set(request_id, stageRejectReason(e));
+        continue;
+      }
+      decisions.set(request_id, stage);
+      if (e.outcome === 'registered' || e.outcome === 'held_promoted') open.add(stage.candidate_id as string);
+      if (e.outcome === 'withdrawn') {
+        open.delete(stage.candidate_id as string);
+        withdrawn_by_model += 1;
+      }
     } else if (e.event === 'initiative.discarded') discards.push(e);
     else if (e.event === 'candidate.state_changed' && e.cause_source === 'code' && e.to === 'WITHDRAWN') {
       open.delete(e.candidate_id as string);
@@ -125,7 +163,7 @@ export function summarizeRun(events: readonly RawEvent[], speech_end_ms: number)
   for (const e of events) {
     if (e.event === 'llm.response') current = e.request_id as string;
     if (e.event === 'initiative.discarded' && current) discardFor.set(current, e);
-    if (e.event === 'initiative.decision') current = null;
+    if (e.event === 'initiative.decision' || e.event === 'initiative.desire' || e.event === 'initiative.timing') current = null;
   }
 
   const rows: DecisionRow[] = order.map((id) => {
@@ -137,15 +175,17 @@ export function summarizeRun(events: readonly RawEvent[], speech_end_ms: number)
     const segments = inputSegmentsOf(request);
     const received = (response?.received_at as number | undefined) ?? null;
     const sent = request.sent_at as number;
-    const label = (decision?.decision as string) ?? (output.decision as string) ?? 'ERROR';
+    const label = (decision?.decision as string) ?? modelLabelOf(output) ?? 'ERROR';
+    const stage: DecisionRow['stage'] = decision?.event === 'initiative.timing' || id.endsWith('_timing') ? 'timing' : decision?.event === 'initiative.desire' || output.desire !== undefined ? 'desire' : 'v2';
     const isError = !response || (response.output as { value: unknown }).value === null;
     return {
       request_id: id,
+      stage,
       t_ms: received ?? sent,
       latency_ms: received === null || isError ? null : received - sent,
       decision: label,
       gate: isError ? 'error' : decision ? (label === 'NONE' ? 'not_applicable' : 'passed') : 'rejected',
-      gate_reasons: discard ? (discard.reason as string) : '',
+      gate_reasons: stageRejected.get(id) ?? (discard ? (discard.reason as string) : ''),
       candidate_id: (decision?.candidate_id as string) ?? '',
       after_speech_end: received !== null && received > speech_end_ms,
       stable_input: segments.map((s) => `#${s.asr_segment_id} ${s.stable_text}`).join(' / '),
@@ -162,7 +202,8 @@ export function summarizeRun(events: readonly RawEvent[], speech_end_ms: number)
   const news = rows.filter((r) => r.decision === 'NEW' && r.gate === 'passed');
   const hold: HoldRow[] = news.map((row) => {
     const index = rows.indexOf(row);
-    const next = rows.slice(index + 1).find((r) => r.gate !== 'error' && (r.candidate_id === row.candidate_id || r.decision === 'NONE'));
+    // タイミング段は同じ起動の別の問いなので、持続の確認の「次の判定」には数えない。
+    const next = rows.slice(index + 1).find((r) => r.stage !== 'timing' && r.gate !== 'error' && (r.candidate_id === row.candidate_id || r.decision === 'NONE'));
     const codeWithdrawnAt = events.find(
       (e) => e.event === 'candidate.state_changed' && e.cause_source === 'code' && e.candidate_id === row.candidate_id,
     )?.t_monotonic_ms as number | undefined;
@@ -185,11 +226,11 @@ export function summarizeRun(events: readonly RawEvent[], speech_end_ms: number)
     llm_errors: rows.filter((r) => r.gate === 'error').length,
     latency_ms: rows.map((r) => r.latency_ms).filter((x): x is number => x !== null),
     counts,
-    model_new: rows.filter((r) => r.output.decision === 'NEW').length,
-    gate_rejected_new: rows.filter((r) => r.output.decision === 'NEW' && r.gate === 'rejected').length,
+    model_new: rows.filter((r) => modelLabelOf(r.output) === 'NEW').length,
+    gate_rejected_new: rows.filter((r) => modelLabelOf(r.output) === 'NEW' && r.gate === 'rejected').length,
     new_during_speech: news.filter((r) => !r.after_speech_end).length,
     new_after_speech: news.filter((r) => r.after_speech_end).length,
-    new_held_post_turn: rows.filter((r) => r.output.decision === 'NEW' && r.gate_reasons.includes('post_turn_new_held')).length,
+    new_held_post_turn: rows.filter((r) => modelLabelOf(r.output) === 'NEW' && r.gate_reasons.includes('post_turn_new_held')).length,
     withdrawn_by_model,
     withdrawn_by_code,
     active_at_end: open.size,
@@ -221,6 +262,7 @@ const EVAL_COLUMNS = [
   'モデル',
   'プロンプト版',
   '要求ID',
+  '段(v2/desire/timing)',
   '受信時刻(秒)',
   '話し終わった後か',
   '判定',
@@ -260,6 +302,8 @@ export function buildEvalCsv(runs: readonly EvalRunInput[]): string {
   for (const run of runs) {
     for (const row of run.summary.rows) {
       const o = row.output;
+      // タイミング段の行には同じ起動の生成段の内容を並べる（内容の評価は生成段の行で、時点の評価はタイミング段の行で）。
+      const desire = row.stage === 'timing' ? run.summary.rows.find((r) => r.request_id === row.request_id.replace(/_timing$/, ''))?.output : undefined;
       lines.push(
         [
           run.scenario,
@@ -267,13 +311,14 @@ export function buildEvalCsv(runs: readonly EvalRunInput[]): string {
           run.model,
           run.prompt_version,
           row.request_id,
+          row.stage,
           (row.t_ms / 1000).toFixed(1),
           row.after_speech_end ? 'はい' : 'いいえ',
           row.decision,
           row.gate,
           row.gate_reasons,
-          o.evidence_span,
-          o.proposed_utterance,
+          o.evidence_span ?? desire?.evidence_span,
+          o.proposed_utterance ?? desire?.proposed_utterance,
           o.reason,
           o.why_now,
           o.cost_of_waiting,

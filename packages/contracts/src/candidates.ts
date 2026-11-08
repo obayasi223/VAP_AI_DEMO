@@ -38,6 +38,10 @@ export const CandidateCause = z.enum([
   'normal_response_started',
   'speech_finished',
   'speech_interrupted',
+  /** 再生の途中で D が失敗した（SPEAKING を終端する）。 */
+  'speech_failed',
+  /** 開始はしたが 1 音も出ずに終わった（SPOKEN にしない）。 */
+  'speech_no_audio',
   'woz',
 ]);
 export type CandidateCause = z.infer<typeof CandidateCause>;
@@ -71,6 +75,21 @@ export const CandidateRejectReason = z.enum([
   'speech_start_refused',
 ]);
 export type CandidateRejectReason = z.infer<typeof CandidateRejectReason>;
+
+/**
+ * 発話希望の二段判定（docs/initiative_v3_design.md）。
+ * 会話の種類。種類ごとの persona と観点は config/conversation_kind.*.ja.json。
+ */
+export const ConversationKind = z.enum(['joint_thinking', 'companion']);
+export type ConversationKind = z.infer<typeof ConversationKind>;
+
+/** タイミング段の方式。llm=希望があるときだけ2回目の LLM、immediate=希望が出たら次の機会に申し出る、v2=既存の1段判定。 */
+export const TimingStrategy = z.enum(['llm', 'immediate', 'v2']);
+export type TimingStrategy = z.infer<typeof TimingStrategy>;
+
+/** タイミング段の判定（話の途中で申し出る／話し終わりまで待つ／取り下げる）。NONE/NEW/KEEP/REVISE/WITHDRAW とは別の軸。 */
+export const TimingVerdict = z.enum(['OFFER_NOW', 'WAIT_FOR_TURN_END', 'WITHDRAW']);
+export type TimingVerdict = z.infer<typeof TimingVerdict>;
 
 export interface CandidateRegistration {
   segment_id: number;

@@ -24,13 +24,29 @@ describe('発話希望の判定を動かす条件', () => {
       expect(config.initiative_conditions).toEqual(['reactive', 'initiative_no_cue', 'initiative_inhale']);
       expect(initiative).toMatchObject({ enabled: true, reason: null, prompt_version: 'initiative-ja-v2' });
       expect(initiative?.llm).toBeInstanceOf(ScriptedReplyLlm);
-      // 既定の persona は自由な会話向けの暫定のもの（PERSONA_FILE で展示会の同僚へ戻せる）。
-      expect(initiative?.persona?.persona_id).toBe('conversation_partner');
+      // 既定は二段判定（llm）で、会話の種類の設定が persona を兼ねる（1段判定に戻すのは TIMING_STRATEGY=v2）。
+      expect(initiative?.staged).toMatchObject({ timing_strategy: 'llm', conversation_kind: 'joint_thinking', desire_prompt_version: 'initiative-desire-ja-v1' });
+      expect(initiative?.persona?.persona_id).toBe('joint_thinking_partner');
     }
   });
 
+  it('v2 は従来の persona（PERSONA_FILE の既定）で、会話の種類を使わない', async () => {
+    const { initiative } = await setupFor({ TIMING_STRATEGY: 'v2' });
+    expect(initiative?.staged).toBeUndefined();
+    expect(initiative?.persona?.persona_id).toBe('conversation_partner');
+    expect(initiative?.choice).toMatchObject({ timing_strategy: 'v2' });
+  });
+
+  it('会話の種類と方式を環境変数で選べる。不正な値は起動時に落とす', async () => {
+    const { initiative } = await setupFor({ CONVERSATION_KIND: 'companion', TIMING_STRATEGY: 'immediate' });
+    expect(initiative?.staged).toMatchObject({ timing_strategy: 'immediate', conversation_kind: 'companion' });
+    expect(initiative?.staged?.profile.persona_id).toBe('companion_partner');
+    expect(() => readConfig({ ...base, CONVERSATION_KIND: 'nonsense' })).toThrow();
+    expect(() => readConfig({ ...base, TIMING_STRATEGY: 'nonsense' })).toThrow();
+  });
+
   it('PERSONA_FILE で展示会の同僚（反例の予備実験用）を選べる', async () => {
-    const { initiative } = await setupFor({ PERSONA_FILE: 'config/persona.ja.json' });
+    const { initiative } = await setupFor({ TIMING_STRATEGY: 'v2', PERSONA_FILE: 'config/persona.ja.json' });
     expect(initiative?.persona?.persona_id).toBe('exhibition_colleague');
   });
 

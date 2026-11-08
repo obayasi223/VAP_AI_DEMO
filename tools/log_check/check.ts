@@ -212,6 +212,7 @@ export async function checkLog(input: string, options: CheckOptions = {}): Promi
     condition?: string;
     policy_id?: string;
     providers?: Record<string, { provider?: string; provider_class?: string; reason?: string | null }>;
+    initiative?: { running?: boolean; reason?: string | null; candidates_used_for?: string };
   } | null;
   if (!manifestFile.found) warnings.push('manifest.json がない');
   else if (manifestFile.error !== null) failures.push(`manifest.json が読めない: ${manifestFile.error}`);
@@ -273,6 +274,14 @@ export async function checkLog(input: string, options: CheckOptions = {}): Promi
     }
   }
   if (manifest !== null && manifest.condition === undefined) evidenceReasons.push('manifest に条件がない');
+  // 提案条件なのに交渉が動いていないセッションは、condition が名ばかりなので数えない（session.ts の noteInactiveNegotiation）。
+  if (manifest?.condition !== undefined && manifest.condition !== 'reactive') {
+    const used = manifest.initiative?.candidates_used_for;
+    if (used !== `negotiation:${manifest.condition}`) {
+      const reason = manifest.initiative?.reason;
+      evidenceReasons.push(`条件 ${manifest.condition} で交渉が動いていない（${used ?? 'manifest に記録なし'}${reason ? `: ${reason}` : ''}）`);
+    }
+  }
   for (const row of providers.values()) {
     if (row.provider_class !== 'production') evidenceReasons.push(`${row.provider} は ${row.provider_class}`);
   }

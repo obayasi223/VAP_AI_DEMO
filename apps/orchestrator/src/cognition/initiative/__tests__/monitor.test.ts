@@ -529,3 +529,46 @@ describe('失敗の扱い', () => {
     expect(discards(sink)).toEqual(['model_output_unknown_decision;backoff_ms=2000']);
   });
 });
+
+describe('AI の開始の後に届いた文（noteAiStarted）', () => {
+  const inSegment = <T extends { segment_id?: number }>(event: T, segment_id: number): T => ({ ...event, segment_id });
+
+  it('前の segment の final と interim では起動しない', async () => {
+    const { monitor, llm } = makeMonitor(() => output({}));
+    monitor.noteAiStarted(1);
+    monitor.onStt(inSegment(final('あいうえお。'), 0));
+    monitor.onStt(inSegment(interim('あいうえおかきくけこさしすせそたちつてと'), 0));
+    await monitor.whenIdle();
+    expect(llm.requests).toHaveLength(0);
+  });
+
+  it('AI の開始の前に受けた final の「話し終わり」も、開始の後の segment へ持ち越さない', async () => {
+    const gate = deferred<string>();
+    const { monitor, llm } = makeMonitor(() => gate.promise);
+    monitor.onStt(inSegment(final('あいうえお。'), 0));
+    // 実行中に次の final（完了後に1回判定する印が立つ）。ここで AI が話し始める。
+    monitor.onStt(inSegment(final('かきくけこ。', 1), 0));
+    monitor.noteAiStarted(1);
+    gate.resolve(output({}));
+    await monitor.whenIdle();
+    monitor.onStt(inSegment(interim('さしす', '', 2), 1));
+    await monitor.whenIdle();
+    expect(llm.requests).toHaveLength(1);
+  });
+
+  it('AI の開始の後の segment の文は起動する。前の segment の final の「話し終わり」は持ち越さない', async () => {
+    const { monitor, llm } = makeMonitor(() => output({}));
+    monitor.onStt(inSegment(final('あいうえお。'), 0));
+    await monitor.whenIdle();
+    expect(llm.requests).toHaveLength(1);
+    monitor.noteAiStarted(1);
+    monitor.onStt(inSegment(final('かきくけこ。', 1), 0));
+    // 新しい segment の短い interim。final 扱いが残っていれば起動してしまう。
+    monitor.onStt(inSegment(interim('さしす', '', 2), 1));
+    await monitor.whenIdle();
+    expect(llm.requests).toHaveLength(1);
+    monitor.onStt(inSegment(final('さしすせそ。', 2), 1));
+    await monitor.whenIdle();
+    expect(llm.requests).toHaveLength(2);
+  });
+});

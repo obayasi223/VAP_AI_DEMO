@@ -6,7 +6,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { Condition, Policy, type PolicyOverrideInfo } from '@llm-vap/contracts';
+import { Condition, ConversationKind, Policy, TimingStrategy, type PolicyOverrideInfo } from '@llm-vap/contracts';
 import { loadOverrideFile } from '../dev/policy_override';
 import { REPO_ROOT } from '../maai';
 
@@ -29,6 +29,17 @@ export interface OrchestratorConfig {
    * false なら画面の求めを無視して CONDITION に固定する（本番の実験で参加者に条件を選ばせない運用）。
    */
   condition_from_client: boolean;
+  /**
+   * 会話の種類の既定（CONVERSATION_KIND、なければ policy.initiative.staged.conversation_kind）。
+   * 二段判定の節がない方策では null（1段判定のままで、会話の種類を使わない）。
+   */
+  conversation_kind: ConversationKind | null;
+  /** 申し出るタイミングの方式の既定（TIMING_STRATEGY、なければ policy.initiative.staged.timing_strategy、節がなければ v2）。 */
+  timing_strategy: TimingStrategy;
+  /** 画面の ?conversation_kind= を使うか（CONVERSATION_KIND_FROM_CLIENT、既定 true）。false なら既定に固定する。 */
+  conversation_kind_from_client: boolean;
+  /** 画面の ?timing_strategy= を使うか（TIMING_STRATEGY_FROM_CLIENT、既定 true）。false なら既定に固定する。 */
+  timing_strategy_from_client: boolean;
   sessions_dir: string;
   stt: ProviderMode;
   tts: ProviderMode;
@@ -91,6 +102,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
   const overrideFile = env.POLICY_OVERRIDE_FILE ? path.resolve(REPO_ROOT, env.POLICY_OVERRIDE_FILE) : null;
   const overridden = overrideFile === null ? null : loadOverrideFile(basePolicy, overrideFile);
   const policy = overridden?.policy ?? basePolicy;
+  const staged = policy.policy_id === 'ja' ? (policy.initiative.staged ?? null) : null;
   return {
     // WSL2 の localhost 転送は 127.0.0.1 の待ち受けにも届く（Windows の curl.exe で確認、2026-11-08）。
     // LAN へ公開しないため既定は 127.0.0.1。
@@ -101,6 +113,10 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
     policy_override: overridden?.info ?? null,
     condition: Condition.parse(env.CONDITION || 'reactive'),
     condition_from_client: flag(env.CONDITION_FROM_CLIENT, true),
+    conversation_kind: env.CONVERSATION_KIND ? ConversationKind.parse(env.CONVERSATION_KIND) : (staged?.conversation_kind ?? null),
+    timing_strategy: TimingStrategy.parse(env.TIMING_STRATEGY || staged?.timing_strategy || 'v2'),
+    conversation_kind_from_client: flag(env.CONVERSATION_KIND_FROM_CLIENT, true),
+    timing_strategy_from_client: flag(env.TIMING_STRATEGY_FROM_CLIENT, true),
     sessions_dir: path.resolve(REPO_ROOT, env.SESSIONS_DIR || 'sessions'),
     stt: mode('STT_PROVIDER_CLASS', env),
     tts: mode('TTS_PROVIDER_CLASS', env),

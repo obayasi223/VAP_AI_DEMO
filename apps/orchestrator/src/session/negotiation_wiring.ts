@@ -4,7 +4,8 @@
  *
  *   tick の始め（TurnManager の step の前）: beforeStep
  *     候補の先行音声の準備（条件 reactive では作らない）→ negotiate（合図、吸気の完了、DEFERRED、合図の解除）
- *     → 吸気中なら通常の応答を含めて開始を保留する理由を返す（TurnInputs.start_blocked_reason へ）
+ *     合図と音声の準備は同じ tick で始める（音声の完成を待たない。known_gaps §11）
+ *     → 吸気中と吸気の後に音声を待つ間は、通常の応答を含めて開始を保留する理由を返す（TurnInputs.start_blocked_reason へ）
  *   step の後: select（許可が出ていれば候補と通常の応答のどちらを話すか）
  *   候補の発話を始めたら: startCandidate（E2a の startSpeech が D の版と PCM の一致を確かめる）
  *
@@ -43,7 +44,7 @@ import type { SpeechGeneratorImpl, SpeechStateChange } from '../speech';
 import type { InitiativeWiring } from './initiative_wiring';
 
 /** 方策と条件から交渉の設定を作る。negotiation の節がなければ null（候補を記録するだけ、波2の振る舞い）。 */
-export function negotiatorSettings(policy: PolicyJa, condition: Condition): NegotiatorSettings | null {
+export function negotiatorSettings(policy: PolicyJa, condition: Condition, options: { timing_gate?: boolean } = {}): NegotiatorSettings | null {
   const n = policy.initiative.negotiation;
   if (!n) return null;
   const maxChars = n.max_new_stable_chars_since_judgement ?? policy.initiative.max_new_stable_chars_since_input;
@@ -57,6 +58,7 @@ export function negotiatorSettings(policy: PolicyJa, condition: Condition): Nego
     max_active_candidates: policy.initiative.max_active_candidates,
     max_new_stable_chars_since_judgement: maxChars,
     cue_max_judgement_age_ms: maxAge,
+    ...(options.timing_gate ? { timing_gate: true } : {}),
   };
 }
 
@@ -68,7 +70,8 @@ export interface NegotiationWiringOptions {
   emitter: EventEmitter;
   /** D。後から作られるので関数で渡す。null なら候補の音声は作れない（候補は話さない）。 */
   speech: () => SpeechPort | null;
-  send: (message: NodeToBrowser) => void;
+  /** ブラウザへ送る。送れなかったら false（送れなかった合図は signal.sent に残さない）。 */
+  send: (message: NodeToBrowser) => boolean;
 }
 
 export interface BeforeStepContext {
@@ -94,7 +97,6 @@ interface SentCue {
   cue_id: string;
   candidate_id: string;
   parameters: Record<string, number | string | boolean>;
-  started_reported: boolean;
 }
 
 export class NegotiationWiring {
@@ -104,10 +106,12 @@ export class NegotiationWiring {
   private readonly cues = new Map<string, SentCue>();
   private lastGateKey = '';
   private lastSelectionKey = '';
+  /** 開始できなかった理由の最後（同じ理由を tick ごとに記録しない。lastSelectionKey とは別に持つ）。 */
+  private lastNotStartedKey = '';
   /** 棄てた候補の未再生の音声（撤回、改訂、期限）。D の状態の通知から。試験と研究者向け（JSONL には専用の項目がない）。 */
   readonly discardedAudio: { candidate_id: string; candidate_version: number; reason: string; chunks: number; samples: number }[] = [];
   /** 試験と研究者向けの数。 */
-  readonly counters = { cues: 0, deferred: 0, candidate_speech_started: 0, candidate_speech_refused: 0, signal_reports_unmatched: 0 };
+  readonly counters = { cues: 0, deferred: 0, candidate_speech_started: 0, candidate_speech_refused: 0, signal_reports_unmatched: 0, signals_not_sent: 0 };
 
   constructor(private readonly options: NegotiationWiringOptions) {
     this.settings = options.settings;
@@ -120,7 +124,7 @@ export class NegotiationWiring {
   /** tick の始め。吸気中なら開始を保留する理由を返す。 */
   beforeStep(ctx: BeforeStepContext): string | null {
     this.prepareAudio();
-    const views = this.views(ctx.now);
+    const views = this.views();
     const step = negotiate(this.settings, this.state, {
       now: ctx.now,
       candidates: views,
@@ -141,7 +145,7 @@ export class NegotiationWiring {
 
   /** step の後。許可が出ていれば、候補と通常の応答のどちらを話すかを決め、判断が変わったら記録する。 */
   select(now: number, turn: TurnState): CandidateChoice {
-    const view = this.views(now)[0] ?? null;
+    const view = this.views()[0] ?? null;
     const selection = selectSpeech(this.settings, {
       candidate: view,
       permitted: turn.permitted_to_speak,
@@ -157,13 +161,18 @@ export class NegotiationWiring {
       transcript_revision: record?.transcript_revision ?? null,
     };
     // 許可がない間と、候補のない通常の応答は記録しない（tick ごとに出さない）。
-    if (selection.choice !== 'none' && view !== null) this.logSelection(choice, false);
+    if (selection.choice === 'none') this.lastNotStartedKey = '';
+    else if (view !== null) this.logSelection(choice, false);
     return choice;
   }
 
-  /** 選んだ候補を話せなかった（TurnManager が開始しなかった、など）。理由を記録する。 */
+  /** 選んだ候補を話せなかった（TurnManager が開始しなかった、など）。同じ理由が続く間は1回だけ記録する。 */
   noteSelectionNotStarted(choice: CandidateChoice, reason: string): void {
-    this.logSelection({ ...choice, choice: 'wait', reasons: [...choice.reasons, `not_started:${reason}`] }, true);
+    // reason の頭2語（start_blocked:another_playback_active など）が理由の種類。残りは ID や数値。
+    const key = `${choice.candidate?.candidate_id ?? '-'}@${choice.candidate?.candidate_version ?? '-'}|${reason.split(':').slice(0, 2).join(':')}`;
+    if (key === this.lastNotStartedKey) return;
+    this.lastNotStartedKey = key;
+    this.emitSelection({ ...choice, choice: 'wait', reasons: [...choice.reasons, `not_started:${reason}`] });
   }
 
   /**
@@ -185,6 +194,7 @@ export class NegotiationWiring {
       return result.speech_refusal ?? result.reason;
     }
     this.counters.candidate_speech_started += 1;
+    this.lastNotStartedKey = '';
     this.audio.delete(view.candidate_id);
     this.logSelection(choice, true);
     const released = releaseForSpeech(this.state, view.candidate_id);
@@ -198,7 +208,12 @@ export class NegotiationWiring {
   /** D の状態の通知。候補の音声を取り消した（未再生の PCM を棄てた）ものを記録する。 */
   onSpeechState(change: SpeechStateChange): void {
     const origin = change.request.origin;
-    if (origin.kind !== 'candidate' || change.state !== 'cancelled') return;
+    if (origin.kind !== 'candidate') return;
+    if (change.state === 'ready' || change.state === 'failed') {
+      this.emitAudio(origin.candidate_id, origin.candidate_version, change.state, change.audio_playback_id, change.reason);
+      return;
+    }
+    if (change.state !== 'cancelled') return;
     this.discardedAudio.push({
       candidate_id: origin.candidate_id,
       candidate_version: origin.candidate_version,
@@ -278,6 +293,7 @@ export class NegotiationWiring {
         origin: { kind: 'candidate', candidate_id: record.candidate_id, candidate_version: record.candidate_version },
       });
       this.audio.set(record.candidate_id, { candidate_version: record.candidate_version, audio_playback_id });
+      this.emitAudio(record.candidate_id, record.candidate_version, 'preparing', audio_playback_id, null);
     }
     for (const id of [...this.audio.keys()]) if (!live.has(id)) this.audio.delete(id);
   }
@@ -291,8 +307,7 @@ export class NegotiationWiring {
     return 'failed';
   }
 
-  private views(now: number): CandidateView[] {
-    void now;
+  private views(): CandidateView[] {
     const { ledger, monitor } = this.options.initiative;
     return ledger.list().map((c) => {
       const record = ledger.getRecord(c.candidate_id);
@@ -303,6 +318,7 @@ export class NegotiationWiring {
         judged_at: record?.received_at ?? c.decided_at,
         new_chars_since_judgement: record ? monitor.stableCharsSinceInput(record.last_request_id) : null,
         audio: this.audioOf(c.candidate_id, c.candidate_version),
+        timing: monitor.latestTiming(c.candidate_id, c.candidate_version)?.timing ?? null,
       };
     });
   }
@@ -319,14 +335,30 @@ export class NegotiationWiring {
         }
         this.counters.cues += 1;
         const parameters = { cue_id: action.cue_id, duration_ms: action.duration_ms, inhale_completion: 'orchestrator_clock', phase_sent: 'inhale' };
-        this.cues.set(`${action.cue_id}:inhale`, { cue_id: action.cue_id, candidate_id: action.candidate_id, parameters, started_reported: false });
-        this.options.send({ type: 'breath.cue', cue_id: action.cue_id, candidate_id: action.candidate_id, duration_ms: action.duration_ms });
-        this.options.emitter.emit({ event: 'signal.sent', candidate_id: action.candidate_id, phase: 'inhale', parameters, sent_at: now });
+        this.cues.set(`${action.cue_id}:inhale`, { cue_id: action.cue_id, candidate_id: action.candidate_id, parameters });
+        if (this.options.send({ type: 'breath.cue', cue_id: action.cue_id, candidate_id: action.candidate_id, duration_ms: action.duration_ms })) {
+          this.options.emitter.emit({ event: 'signal.sent', candidate_id: action.candidate_id, phase: 'inhale', parameters, sent_at: now });
+        } else {
+          this.noteSignalNotSent(action.candidate_id, action.cue_id, 'inhale');
+        }
         return;
       }
       case 'inhale_completed':
         ledger.transition(action.candidate_id, 'BREATH_HOLD_OR_READY', 'inhale_completed', now);
         return;
+      case 'audio_abandoned': {
+        const record = ledger.transition(action.candidate_id, 'WITHDRAWN', 'expired', now, action.candidate_version);
+        this.options.emitter.emit({
+          event: 'negotiation.decision',
+          stage: 'candidate_audio',
+          candidate_id: present(action.candidate_id),
+          candidate_version: present(action.candidate_version),
+          candidate_state: record.ok ? record.to : null,
+          outcome: 'audio_abandoned',
+          reasons: action.reasons,
+        });
+        return;
+      }
       case 'defer':
         this.counters.deferred += 1;
         ledger.transition(action.candidate_id, 'DEFERRED', 'user_continued', now);
@@ -334,14 +366,45 @@ export class NegotiationWiring {
       case 'release': {
         const phase = action.reason === 'speech_started' ? 'pre_speech' : 'relax';
         const parameters = { cue_id: action.cue_id, reason: action.reason, phase_sent: phase };
-        this.cues.set(`${action.cue_id}:release`, { cue_id: action.cue_id, candidate_id: action.candidate_id, parameters, started_reported: false });
-        this.options.send({ type: 'breath.release', cue_id: action.cue_id, candidate_id: action.candidate_id, reason: action.reason });
-        this.options.emitter.emit({ event: 'signal.sent', candidate_id: action.candidate_id, phase, parameters, sent_at: now });
+        this.cues.set(`${action.cue_id}:release`, { cue_id: action.cue_id, candidate_id: action.candidate_id, parameters });
+        if (this.options.send({ type: 'breath.release', cue_id: action.cue_id, candidate_id: action.candidate_id, reason: action.reason })) {
+          this.options.emitter.emit({ event: 'signal.sent', candidate_id: action.candidate_id, phase, parameters, sent_at: now });
+        } else {
+          this.noteSignalNotSent(action.candidate_id, action.cue_id, phase);
+        }
         // 覚えておく合図は直近のものだけ（報告の照合用）。
         while (this.cues.size > 16) this.cues.delete(this.cues.keys().next().value as string);
         return;
       }
     }
+  }
+
+  /** 合図を送れなかった（切断など）。signal.sent には残さず、送れなかったことを別に記録する。候補の状態は変えない。 */
+  private noteSignalNotSent(candidate_id: string, cue_id: string, phase: string): void {
+    this.counters.signals_not_sent += 1;
+    const record = this.options.initiative.ledger.get(candidate_id);
+    this.options.emitter.emit({
+      event: 'negotiation.decision',
+      stage: 'signal_gate',
+      candidate_id: present(candidate_id),
+      candidate_version: record ? present(record.candidate_version) : absent('candidate_not_found'),
+      candidate_state: record?.state ?? null,
+      outcome: 'signal_not_sent',
+      reasons: [`phase:${phase}`, `cue_id:${cue_id}`],
+    });
+  }
+
+  /** 候補の先行音声の段階（準備の開始、完成、失敗）。合図と TTS の遅れの測定に使う（JSONL で確かめられるように）。 */
+  private emitAudio(candidate_id: string, candidate_version: number, state: 'preparing' | 'ready' | 'failed', audio_playback_id: number, reason: string | null): void {
+    this.options.emitter.emit({
+      event: 'negotiation.decision',
+      stage: 'candidate_audio',
+      candidate_id: present(candidate_id),
+      candidate_version: present(candidate_version),
+      candidate_state: this.options.initiative.ledger.get(candidate_id)?.state ?? null,
+      outcome: `audio_${state}`,
+      reasons: [`audio_playback_id=${audio_playback_id}`, ...(reason !== null ? [`reason:${reason}`] : [])],
+    });
   }
 
   private logGate(gate: GateResult): void {
@@ -364,6 +427,11 @@ export class NegotiationWiring {
     const key = `${c?.candidate_id ?? '-'}@${c?.candidate_version ?? '-'}|${choice.choice}|${reasonKey(choice.reasons)}`;
     if (!force && key === this.lastSelectionKey) return;
     this.lastSelectionKey = key;
+    this.emitSelection(choice);
+  }
+
+  private emitSelection(choice: CandidateChoice): void {
+    const c = choice.candidate;
     this.options.emitter.emit({
       event: 'negotiation.decision',
       stage: 'speech_selection',

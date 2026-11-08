@@ -58,6 +58,17 @@ export interface SessionManifestDetails {
     persona_id: string | null;
     persona_version: number | null;
     candidates_used_for: string;
+    /** 申し出るタイミングの方式（適用したもの）。判定が動いていなければ null。 */
+    timing_strategy?: string | null;
+    /** 会話の種類（適用したもの）。v2 と未適用は null。 */
+    conversation_kind?: string | null;
+    /** 二段判定の版。v2 と未適用は null。 */
+    desire_prompt_version?: string | null;
+    timing_prompt_version?: string | null;
+    profile_version?: number | null;
+    /** 選択の由来（client、default、fixed）。 */
+    conversation_kind_source?: string | null;
+    timing_strategy_source?: string | null;
   };
 }
 /** session.log の状態を provider.status に出すときの名前。 */

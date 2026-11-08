@@ -3,7 +3,7 @@
  * 準備の閾値は prepareThresholds() だけから読む（docs/known_gaps.md §1）。
  */
 import { prepareThresholds, turnConstants, turnInterpretation } from '@llm-vap/contracts';
-import type { AfterAiSpeech, Policy, PrepareThresholds, StartGuard, TurnConstants, TurnInterpretation } from '@llm-vap/contracts';
+import type { AfterAiSpeech, Policy, PrepareThresholds, StartGuard, TurnConstants, TurnInterpretation, VapUnavailable } from '@llm-vap/contracts';
 import { normalizeForSimilarity } from '../cognition/similarity';
 import { vapDirectionSettings } from './vap_direction';
 import type { VapDirectionSettings } from './vap_direction';
@@ -69,6 +69,24 @@ export interface ControlSettings {
   start_guard: StartGuard | null;
   /** AI の発話の終わりの扱い（原著にない）。null は原著どおり。hri2025 は常に null。 */
   after_ai_speech: AfterAiSpeechSettings | null;
+  /** VAP が使えないときの安全側の開始と割り込み（原著にない）。null は今までどおり。hri2025 は常に null。 */
+  vap_unavailable: VapUnavailable | null;
+}
+
+/** VAP が使えないときの fallback の開始の待ち。VAP が AI 側を支持しない場合と同じ扱いにするので start_guard の両方の値以上。 */
+export function vapUnavailableStartWaitMs(settings: ControlSettings): number {
+  const guard = settings.start_guard;
+  return Math.max(settings.fallback_silence_max_ms ?? 0, guard?.min_gap_ms ?? 0, guard?.completion_timeout_low_p_min_ms ?? 0);
+}
+
+/** VAP が使えないときの招待の待ち。VAP があるときの招待と同じ最小の間。 */
+export function vapUnavailableInvitationWaitMs(settings: ControlSettings): number {
+  return Math.max(settings.constants.MIN_GAP_TIME_MS, settings.start_guard?.min_gap_ms ?? 0);
+}
+
+/** ASR の更新が止まったとみなす長さ。 */
+export function asrSettleMs(vapUnavailable: VapUnavailable, asrIsFinal: boolean): number {
+  return asrIsFinal ? vapUnavailable.asr_quiet_after_final_ms : vapUnavailable.asr_quiet_without_final_ms;
 }
 
 export interface AfterAiSpeechSettings {
@@ -124,6 +142,7 @@ export function controlSettings(policy: Policy, options: ControlOptions = {}): C
       // 原著どおり（試験で固定）。
       start_guard: null,
       after_ai_speech: null,
+      vap_unavailable: null,
     };
   }
   return {
@@ -145,5 +164,6 @@ export function controlSettings(policy: Policy, options: ControlOptions = {}): C
     invitation_grants_turn: true,
     start_guard: policy.turn.start_guard ?? null,
     after_ai_speech: afterAiSpeechSettings(policy.turn.after_ai_speech),
+    vap_unavailable: policy.turn.vap_unavailable ?? null,
   };
 }

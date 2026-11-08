@@ -17,8 +17,9 @@ import type { BrowserToNode, ClientHello, Condition, LlmRequest, NodeToBrowser, 
 import { ScriptedLlmProvider, ScriptedSttProvider, ScriptedTtsProvider } from '@llm-vap/testkit';
 import type { ScriptedSttSession, ScriptedTtsConnection } from '@llm-vap/testkit';
 import { NullTurnCompletionEstimator } from '../../src/cognition/completion';
+import { conversationKindFile } from '../../src/app/providers';
 import type { InitiativeSetup, SessionProviders } from '../../src/app/providers';
-import { CURRENT_PROMPT_VERSION } from '../../src/cognition/initiative';
+import { CURRENT_PROMPT_VERSION, parseConversationKindProfile } from '../../src/cognition/initiative';
 import type { SessionLog, SessionManifestDetails } from '../../src/logging';
 import type { MaaiClientListeners, MaaiWorkerClient } from '../../src/maai';
 import { Session } from '../../src/session/session';
@@ -66,6 +67,9 @@ export class FakeMaai {
   }
   ready(at: number): void {
     for (const l of this.session()) l.onReady?.({} as never, at);
+  }
+  error(code: string, at: number): void {
+    for (const l of this.session()) l.onError?.({ type: 'ERROR', code, message: 'test', fatal: false } as never, at);
   }
   unavailable(): void {
     for (const l of this.session()) {
@@ -135,6 +139,8 @@ export interface Rig {
   described: SessionManifestDetails[];
   /** 送った音声の先頭。 */
   frame: number;
+  /** true の間は TTS の chunk を送らない（候補の音声が間に合わない状況を作る。試験用）。 */
+  pauseTts: boolean;
   /** 1 tick 進める: 時刻、上りの音声枠（mic の振幅）、VAP（fake のとき）、tick、非同期の処理と TTS の生成。 */
   step(options?: { loud?: boolean; p?: [number, number, boolean] }): Promise<void>;
   steps(n: number, options?: { loud?: boolean; p?: [number, number, boolean] }): Promise<void>;
@@ -158,6 +164,23 @@ export interface RigInitiative {
   enabled?: boolean;
   responder?: (request: LlmRequest) => string | Promise<string>;
   reason?: string;
+  /** 二段判定で動かす（会話の種類の設定は config の joint_thinking）。省略は1段判定（v2）。 */
+  staged?: { timing_strategy: 'llm' | 'immediate' };
+}
+
+function stagedSetup(timing_strategy: 'llm' | 'immediate'): Pick<InitiativeSetup, 'staged' | 'choice'> {
+  const profile = parseConversationKindProfile(JSON.parse(readFileSync(conversationKindFile('joint_thinking'), 'utf8')));
+  return {
+    staged: {
+      timing_strategy,
+      conversation_kind: 'joint_thinking',
+      profile,
+      desire_prompt_version: 'initiative-desire-ja-v1',
+      timing_prompt_version: 'initiative-timing-ja-v1',
+      recent_context: { max_turns: 6, max_chars_per_turn: 300 },
+    },
+    choice: { conversation_kind: 'joint_thinking', conversation_kind_source: 'client', timing_strategy, timing_strategy_source: 'default' },
+  };
 }
 
 export async function createRig(
@@ -193,6 +216,7 @@ export async function createRig(
           persona: TEST_PERSONA,
           prompt_version: CURRENT_PROMPT_VERSION,
           model: 'test_double',
+          ...(options.initiative.staged ? stagedSetup(options.initiative.staged.timing_strategy) : {}),
         }
     : undefined;
   const providers: SessionProviders = {
@@ -242,6 +266,7 @@ export async function createRig(
     tts: () => ttsProvider.connections.at(-1) as ScriptedTtsConnection,
     described,
     frame: 0,
+    pauseTts: false,
     async step(o = {}) {
       time.advance(TICK_MS);
       session.handleBinary(encodeAudioFrame({ audio_frame: rig.frame, mic: o.loud ? loud : quiet, sys: quiet }));
@@ -252,7 +277,7 @@ export async function createRig(
       }
       session.tick();
       await flush();
-      for (const context of rig.tts().contexts) context.pumpAll();
+      if (!rig.pauseTts) for (const context of rig.tts().contexts) context.pumpAll();
     },
     async steps(n, o = {}) {
       for (let i = 0; i < n; i++) await rig.step(o);

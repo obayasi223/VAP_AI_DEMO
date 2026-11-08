@@ -2,6 +2,7 @@
  * 決定的なゲート（計画 §4.5）。入力と出力を照合するだけで、モデルの説明文は読まない。
  * reason／why_now／cost_of_waiting を引数に取らないこと自体が「ゲートに使わない」の保証になる。
  */
+import type { RecentTurn } from './recent_turns';
 import { normalizeForMatch } from './text';
 import type { AsrSegmentSnapshot } from './transcript_view';
 
@@ -105,4 +106,31 @@ export function checkWithdrawEvidence(check: WithdrawCheckInput): GateResult<{ s
   const spanEnd = all.lastIndexOf(span) + span.length;
   if (spanEnd <= candidateEnd) return { ok: false, reasons: ['withdraw_evidence_not_after_candidate'] };
   return base;
+}
+
+export interface PriorTurnEvidenceCheck {
+  span: string;
+  turns: readonly RecentTurn[];
+  /** 今話している側の入力。ここにある語は過去のターンの根拠ではない（照合には通すが found は null）。 */
+  current: readonly AsrSegmentSnapshot[];
+}
+
+/**
+ * 過去のターンの根拠（生成段の prior_turn_evidence_span）の照合。空は検査しない（過去のターンを使っていない）。
+ * 過去のターンは今の発話の根拠の補助で、単独では根拠にならない（docs/initiative_v3_design.md）。
+ * 新しいターンから探す（同じ語が複数のターンにあるときは直近を指す）。
+ */
+export function checkPriorTurnEvidence(
+  check: PriorTurnEvidenceCheck,
+): GateResult<{ found: { turn_index: number; role: RecentTurn['role'] } | null }> {
+  const span = normalizeForMatch(check.span);
+  if (span.length === 0) return { ok: true, found: null };
+  if (span.length < MIN_EVIDENCE_CHARS) return { ok: false, reasons: ['prior_turn_evidence_too_short'] };
+  // 今の発話の前半を「過去」として書いても入力に実在する。根拠として棄却せず、過去のターンとしても数えない。
+  if (joined(check.current).includes(span)) return { ok: true, found: null };
+  for (let i = check.turns.length - 1; i >= 0; i -= 1) {
+    const turn = check.turns[i]!;
+    if (normalizeForMatch(turn.text).includes(span)) return { ok: true, found: { turn_index: i, role: turn.role } };
+  }
+  return { ok: false, reasons: ['prior_turn_evidence_not_in_shown_turns'] };
 }

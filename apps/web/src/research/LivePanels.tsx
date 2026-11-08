@@ -99,7 +99,10 @@ function DecisionCard({ row }: { row: DecisionRow }) {
   return (
     <li className={styles.decision} data-testid="decision-row">
       <div className={styles.decisionHead}>
-        <strong>{DECISION_LABEL[row.decision] ?? row.decision}</strong>
+        <strong>
+          {row.stage === 'desire' ? '生成段 ' : row.stage === 'timing' ? 'タイミング段 ' : ''}
+          {DECISION_LABEL[row.decision] ?? row.decision}
+        </strong>
         {row.candidate_id === null ? null : (
           <span>
             {row.candidate_id} v{row.candidate_version}
@@ -113,7 +116,13 @@ function DecisionCard({ row }: { row: DecisionRow }) {
         <div>
           <div className={styles.colLabel}>実測（orchestrator の時計, ms）</div>
           <div>
-            送信 {ms(row.measured.sent_at)} → 受信 {ms(row.measured.received_at)}（LLM {ms(row.measured.llm_ms)}ms）
+            {row.model_call ? (
+              <>
+                送信 {ms(row.measured.sent_at)} → 受信 {ms(row.measured.received_at)}（LLM {ms(row.measured.llm_ms)}ms）
+              </>
+            ) : (
+              'LLM の呼び出しなし（コードの判定）'
+            )}
           </div>
           {row.measured.decision_time === null ? null : (
             <div>
@@ -149,13 +158,13 @@ export function CandidatePanel({ candidates }: { candidates: CandidateSummary })
     <>
       <p data-testid="candidate-counts">
         判断の回数:{' '}
-        {counts.length === 0 ? <span className={styles.unmeasured}>initiative.decision 未受信</span> : counts.map(([k, n]) => `${k} ${n}`).join('、')}
+        {counts.length === 0 ? <span className={styles.unmeasured}>initiative.decision／desire／timing 未受信</span> : counts.map(([k, n]) => `${k} ${n}`).join('、')}
         {' / '}棄却 {candidates.discarded}・中断 {candidates.aborted}（initiative.discarded／aborted。E2a の拒否の写しは除く）・E2a の拒否{' '}
         {candidates.rejected}（candidate.rejected と active_candidate_exists）
       </p>
       {empty ? (
         <p className={styles.unmeasured} data-testid="candidates-empty">
-          候補のイベントはまだありません（initiative.decision と candidate.state_changed を待っています）
+          候補のイベントはまだありません（initiative.decision、initiative.desire、initiative.timing と candidate.state_changed を待っています）
         </p>
       ) : null}
       {candidates.current.length === 0 ? null : (

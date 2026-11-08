@@ -286,6 +286,41 @@
             "backchannel_phrases"
           ],
           "additionalProperties": false
+        },
+        "vap_unavailable": {
+          "type": "object",
+          "properties": {
+            "asr_quiet_after_final_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "asr_quiet_without_final_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "interrupt_asr_recent_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "ai_reference_missing_ms": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "asr_quiet_after_final_ms",
+            "asr_quiet_without_final_ms",
+            "interrupt_asr_recent_ms",
+            "ai_reference_missing_ms"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -583,8 +618,8 @@
           "properties": {
             "inhale_ms": {
               "type": "integer",
-              "minimum": 1,
-              "maximum": 9007199254740991
+              "minimum": 200,
+              "maximum": 1400
             },
             "hold_max_ms": {
               "type": "integer",
@@ -620,6 +655,62 @@
             "hold_max_ms",
             "max_new_stable_chars_since_judgement",
             "cue_max_judgement_age_ms"
+          ],
+          "additionalProperties": false
+        },
+        "staged": {
+          "type": "object",
+          "properties": {
+            "timing_strategy": {
+              "type": "string",
+              "enum": [
+                "llm",
+                "immediate",
+                "v2"
+              ]
+            },
+            "conversation_kind": {
+              "type": "string",
+              "enum": [
+                "joint_thinking",
+                "companion"
+              ]
+            },
+            "desire_prompt_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "timing_prompt_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "recent_context": {
+              "type": "object",
+              "properties": {
+                "max_turns": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "max_chars_per_turn": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "max_turns",
+                "max_chars_per_turn"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "timing_strategy",
+            "conversation_kind",
+            "desire_prompt_version",
+            "timing_prompt_version",
+            "recent_context"
           ],
           "additionalProperties": false
         }

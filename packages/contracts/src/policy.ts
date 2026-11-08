@@ -8,6 +8,7 @@
  * 節の持ち主: turn、gaze は E、similarity、completion は D、initiative は G。
  */
 import { z } from 'zod';
+import { ConversationKind, TimingStrategy } from './candidates';
 import { ChannelLayout, NonEmptyString, NonNegativeMs, Probability } from './common';
 
 /**
@@ -116,9 +117,10 @@ export type InitiativeTrigger = z.infer<typeof InitiativeTrigger>;
 export const InitiativeNegotiation = z.strictObject({
   /**
    * 吸気の長さ（ms）。orchestrator が決めて合図に入れ、吸気の完了は orchestrator の時計で判定する
-   * （ブラウザの完了の報告を待たない）。
+   * （ブラウザの完了の報告を待たない）。範囲はアバターの受け付ける範囲（apps/web の INHALE_MS_RANGE）と揃える。
+   * アバターは範囲外を丸めるので、外れた値だと描く長さと orchestrator の時計がずれる。上限 1400 は出典がなく暫定。
    */
-  inhale_ms: z.number().int().min(1),
+  inhale_ms: z.number().int().min(200).max(1400),
   /**
    * 吸気の後の準備姿勢（BREATH_HOLD_OR_READY）の長さ（ms）。これを過ぎた時点、またはそれ以降に人が話していたら
    * DEFERRED（脱力）へ移る。人が黙っている間は発話の許可を待つ。
@@ -136,6 +138,24 @@ export const InitiativeNegotiation = z.strictObject({
   cue_max_judgement_age_ms: NonNegativeMs.nullable(),
 });
 export type InitiativeNegotiation = z.infer<typeof InitiativeNegotiation>;
+
+/**
+ * 発話希望の二段判定（生成段とタイミング段。docs/initiative_v3_design.md）。値はどれも【未検証の暫定値】。
+ * 省略は既存の1段判定（initiative-ja-v2）のまま。timing_strategy の既定は llm（設定ファイルで明示する）。
+ */
+export const InitiativeStaged = z.strictObject({
+  timing_strategy: TimingStrategy,
+  /** 開始画面で選ぶまでの既定の会話の種類。 */
+  conversation_kind: ConversationKind,
+  desire_prompt_version: NonEmptyString,
+  timing_prompt_version: NonEmptyString,
+  /** 生成段とタイミング段へ渡す直近の会話（今の発話より前）。 */
+  recent_context: z.strictObject({
+    max_turns: z.number().int().min(0),
+    max_chars_per_turn: z.number().int().min(1),
+  }),
+});
+export type InitiativeStaged = z.infer<typeof InitiativeStaged>;
 
 /**
  * 開始の慎重化（原著にない、ja のみ。docs/known_gaps.md §10）。省略は原著どおりの開始の条件。
@@ -167,6 +187,26 @@ export const AfterAiSpeech = z.strictObject({
 });
 export type AfterAiSpeech = z.infer<typeof AfterAiSpeech>;
 
+/**
+ * VAP が使えない、信用できないとき（助走中、鮮度切れ、ワーカーの停止、値の異常など）の安全側の開始と割り込み
+ * （原著にない、ja のみ。docs/known_gaps.md §12）。省略は今までどおりの fallback。値は【暫定、根拠は実機の1セッションのみ】。
+ * 開始の待ちの長さは fallback_silence_max_ms と start_guard から求めるので、ここには持たない。
+ */
+export const VapUnavailable = z.strictObject({
+  /** ASR の最後の更新が final のとき、更新が止まっていることを求める長さ。 */
+  asr_quiet_after_final_ms: NonNegativeMs,
+  /** ASR の最後の更新が final でないとき（final が来ないときの上限）。 */
+  asr_quiet_without_final_ms: NonNegativeMs,
+  /** fallback の割り込みは、ASR の更新がこの長さ以内に来ているときだけ（新しい発話の内容がある）。 */
+  interrupt_asr_recent_ms: NonNegativeMs,
+  /**
+   * AI の再生中に sys の無音がこれ以上続いたら AI の音声の参照が来ていないとみなし、VAP を信用しない。
+   * null は検査しない（docs/known_gaps.md §12。実機の sys は揃っているので、試験の素材を直すまでは検査を入れていない）。
+   */
+  ai_reference_missing_ms: Uncalibrated(NonNegativeMs),
+});
+export type VapUnavailable = z.infer<typeof VapUnavailable>;
+
 export const PolicyJa = z.strictObject({
   $schema: z.string().optional(),
   policy_id: z.literal('ja'),
@@ -196,6 +236,8 @@ export const PolicyJa = z.strictObject({
     start_guard: StartGuard.optional(),
     /** AI の発話の終わりの扱い。省略は原著どおり。 */
     after_ai_speech: AfterAiSpeech.optional(),
+    /** VAP が使えないときの安全側の開始と割り込み。省略は今までどおり。 */
+    vap_unavailable: VapUnavailable.optional(),
   }),
   gaze: z.strictObject({
     /** 原著に数値の閾値はない（計画 §4.2）。 */
@@ -244,6 +286,8 @@ export const PolicyJa = z.strictObject({
     trigger: InitiativeTrigger.optional(),
     /** 合図と発話の交渉（E2、E3）。省略は候補を記録するだけ。 */
     negotiation: InitiativeNegotiation.optional(),
+    /** 二段判定。省略は既存の1段判定。 */
+    staged: InitiativeStaged.optional(),
   }),
   speech: z.strictObject({
     /** is_ready の定義。最初の PCM がこの長さバッファされた状態（計画 §4.3）。 */

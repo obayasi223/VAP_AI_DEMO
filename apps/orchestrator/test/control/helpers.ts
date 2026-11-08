@@ -16,12 +16,14 @@ export const ja = (patch: (policy: PolicyJa) => void = () => undefined): PolicyJ
 };
 /**
  * Appendix A の分岐を見る試験用の ja。原著にない開始の慎重化（turn.start_guard）と AI の発話の終わりの扱い
- * （turn.after_ai_speech）を外す。その2つは start_guard.test.ts と after_ai_speech.test.ts で config の値のまま見る。
+ * （turn.after_ai_speech）、VAP が使えないときの安全側の判断（turn.vap_unavailable）を外す。前の2つは start_guard.test.ts と
+ * after_ai_speech.test.ts、最後の1つは vap_unavailable.test.ts で config の値のまま見る。
  */
 export const jaAppendixA = (patch: (policy: PolicyJa) => void = () => undefined): PolicyJa =>
   ja((p) => {
     delete p.turn.start_guard;
     delete p.turn.after_ai_speech;
+    delete p.turn.vap_unavailable;
     patch(p);
   });
 /** 試験用の視線の設定。config の値は null のまま。 */

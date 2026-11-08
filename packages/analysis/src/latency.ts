@@ -137,6 +137,44 @@ const EXCLUDED = (reason: string): TimePoint => ({ status: 'unmeasured', reason,
 type SttEvent = EventOf<'stt.interim'> | EventOf<'stt.final'>;
 type NewDecision = Extract<EventOf<'initiative.decision'>, { decision: 'NEW' }>;
 
+/** 候補を作った判定の共通の形（1段判定の NEW と、二段判定の生成段の registered／held_promoted）。 */
+interface CandidateOrigin {
+  candidate_id: string;
+  evidence_valid: boolean;
+  evidence_span: string;
+  evidence_segment_ids: number[];
+  sent_at: number;
+  decided_at: number;
+  source: ResearchEvent;
+}
+
+function candidateOriginOf(event: ResearchEvent): CandidateOrigin | null {
+  if (event.event === 'initiative.decision' && event.decision === 'NEW') {
+    const decision: NewDecision = event;
+    return {
+      candidate_id: decision.candidate_id,
+      evidence_valid: decision.evidence_valid.value,
+      evidence_span: decision.evidence_span.value,
+      evidence_segment_ids: [...decision.evidence_segment_ids.value],
+      sent_at: decision.sent_at,
+      decided_at: decision.decided_at,
+      source: decision,
+    };
+  }
+  if (event.event !== 'initiative.desire' || (event.outcome !== 'registered' && event.outcome !== 'held_promoted')) return null;
+  if (event.candidate_id.value === null || event.evidence_span.value === null) return null;
+  return {
+    candidate_id: event.candidate_id.value,
+    evidence_valid: event.gate.value.passed,
+    evidence_span: event.evidence_span.value,
+    evidence_segment_ids: [...(event.evidence_segment_ids.value?.value ?? [])],
+    sent_at: event.sent_at,
+    // held_promoted は候補にした時刻（received_at は応答の受信で、候補になる前）。
+    decided_at: event.outcome === 'held_promoted' ? event.t_monotonic_ms : event.received_at,
+    source: event,
+  };
+}
+
 /** audio_frame → orchestrator 時刻。ブラウザの audio.health（補正済み）を基準点にする。 */
 export interface FrameClock {
   toMs(frame: number): { t_ms: number; uncertainty_ms: number | null } | { reason: string };
@@ -192,11 +230,11 @@ function isStt(event: ResearchEvent): event is SttEvent {
  */
 function firstSttContaining(
   stt: readonly SttEvent[],
-  decision: NewDecision,
+  decision: Pick<CandidateOrigin, 'evidence_span' | 'evidence_segment_ids' | 'sent_at'>,
 ): SttEvent | null {
-  const span = normalizeForMatch(decision.evidence_span.value);
+  const span = normalizeForMatch(decision.evidence_span);
   if (span.length === 0) return null;
-  const ids = [...decision.evidence_segment_ids.value].sort((a, b) => a - b);
+  const ids = [...decision.evidence_segment_ids].sort((a, b) => a - b);
   const latest = new Map<number, string>();
   for (const event of stt) {
     if (event.t_monotonic_ms > decision.sent_at) break;
@@ -227,12 +265,13 @@ export function candidateTimeline(events: readonly ResearchEvent[]): CandidateTi
   }
 
   const rows: CandidateTimelineRow[] = [];
-  for (const event of events) {
-    if (event.event !== 'initiative.decision' || event.decision !== 'NEW') continue;
-    const found = event.evidence_valid.value ? firstSttContaining(stt, event) : null;
+  for (const raw of events) {
+    const event = candidateOriginOf(raw);
+    if (event === null) continue;
+    const found = event.evidence_valid ? firstSttContaining(stt, event) : null;
     let online: TimePoint;
     let transcript: TimePoint;
-    if (!event.evidence_valid.value) {
+    if (!event.evidence_valid) {
       online = EXCLUDED('evidence_invalid');
       transcript = EXCLUDED('evidence_invalid');
     } else if (found === null) {
@@ -271,7 +310,7 @@ export function candidateTimeline(events: readonly ResearchEvent[]): CandidateTi
       content_evidence_precision: precision,
       content_evidence_posthoc: isPosthoc ? online : ABSENT('posthoc_alignment_not_in_log'),
       transcript,
-      decision_at: { status: 'measured', t_ms: event.decided_at, uncertainty_ms: uncertaintyOf(event) },
+      decision_at: { status: 'measured', t_ms: event.decided_at, uncertainty_ms: uncertaintyOf(event.source) },
       cue_at: cue,
       speech_at: speech,
     });
@@ -481,6 +520,7 @@ export function isLatencyRelevant(event: ResearchEvent): boolean {
     case 'stt.final':
     case 'llm.response':
     case 'initiative.decision':
+    case 'initiative.desire':
     case 'signal.sent':
     case 'signal.started':
     case 'speech.started':

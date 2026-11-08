@@ -13,7 +13,7 @@ import {
   TrackSettings,
   VisibilityName,
 } from './browser_rpc';
-import { CandidateCause, CandidateRejectReason, CandidateState } from './candidates';
+import { CandidateCause, CandidateRejectReason, CandidateState, ConversationKind, TimingVerdict } from './candidates';
 import {
   AsrSegmentId,
   AudioFrameIndex,
@@ -313,6 +313,134 @@ const InitiativeDropShape = {
 export const InitiativeDiscardedEvent = eventSchema('initiative.discarded', InitiativeDropShape);
 export const InitiativeAbortedEvent = eventSchema('initiative.aborted', InitiativeDropShape);
 
+// ---- 発話希望の二段判定（docs/initiative_v3_design.md）--------------------------
+
+/**
+ * 生成段とタイミング段の結果に共通の項目。モデル名、プロンプトの版、会話の種類、入力の版と実測の遅延を、
+ * 段ごとに別々に残す（「内容の妥当性」と「申し出る時点の適切さ」を別々に評価するため）。
+ * LLM が書いた理由は ModelOutput で包み、ゲートも制御も読まない。
+ */
+const InitiativeStageMeta = {
+  segment_id: SegmentId,
+  /** LLM に渡した入力の版。 */
+  transcript_revision: TranscriptRevision,
+  /** llm.request と llm.response へ結ぶ。 */
+  request_id: NonEmptyString,
+  sent_at: MonotonicMs,
+  received_at: MonotonicMs,
+  /** received_at - sent_at（実測）。 */
+  latency_ms: NonNegativeMs,
+  model_version: ModelVersion,
+  prompt_version: NonEmptyString,
+  conversation_kind: ConversationKind,
+  profile_version: NonNegativeInt,
+  /** 渡した直近の会話の、会話履歴の版。履歴を渡していなければ null と理由。 */
+  history_version: Maybe(NonNegativeInt),
+  /** 今話している側の入力として渡した ASR 区間 ID。 */
+  input_segment_ids: z.array(AsrSegmentId),
+  /** 直近の会話として渡したターン数。 */
+  recent_turn_count: NonNegativeInt,
+};
+
+/** コードのゲートの結果。理由はコードの値（gate.ts の理由）で、モデルの説明文は入れない。 */
+const StageGate = Verified(z.strictObject({ passed: z.boolean(), reasons: z.array(NonEmptyString) }));
+
+export const InitiativeDesireOutcome = z.enum([
+  /** NONE（言いたいことは生じていない）を E2a に渡した。 */
+  'none',
+  /** NEW を候補にした。 */
+  'registered',
+  /** REVISE で候補の内容を更新した。 */
+  'revised',
+  /** コードのゲートで棄却した（gate の reasons）。 */
+  'gate_rejected',
+  /** 話の後に届いた NEW を E2a が保留した。 */
+  'held',
+  /** 保留していた NEW を、人の再開で候補にした。 */
+  'held_promoted',
+  /** E2a が受け付けなかった（ledger_reason）。 */
+  'rejected',
+]);
+export type InitiativeDesireOutcome = z.infer<typeof InitiativeDesireOutcome>;
+
+/**
+ * 生成段の結果（言いたいことが生じたかと、その内容）。「今言うべきか」はここに入らない。
+ * desire の値は initiative.decision の正本（NONE/NEW/REVISE）の部分集合。
+ */
+export const InitiativeDesireEvent = eventSchema('initiative.desire', {
+  ...InitiativeStageMeta,
+  desire: z.enum(['NONE', 'NEW', 'REVISE']),
+  /** 候補にならなかったときは null と理由。 */
+  candidate_id: Maybe(CandidateId),
+  candidate_version: Maybe(CandidateVersion),
+  intent_type: MaybeModelOutput(IntentType),
+  proposed_utterance: MaybeModelOutput(z.string()),
+  evidence_span: MaybeModelOutput(z.string()),
+  /** LLM 生成の説明。ゲートも制御も読まない。 */
+  reason: MaybeModelOutput(z.string()),
+  /** 根拠になった今の発話の ASR 区間（コードで照合）。 */
+  evidence_segment_ids: Maybe(Verified(z.array(AsrSegmentId))),
+  /** 過去のターンの根拠の抜き出し。空なら null と理由。 */
+  prior_turn_evidence_span: MaybeModelOutput(z.string()),
+  /** 過去のターンの根拠をコードが見つけた位置。役割は input の値。 */
+  prior_turn_evidence: Maybe(
+    Verified(z.strictObject({ turn_index: NonNegativeInt, role: z.enum(['user', 'ai']) })),
+  ),
+  gate: StageGate,
+  outcome: InitiativeDesireOutcome,
+  ledger_reason: Maybe(NonEmptyString),
+});
+
+const TimingBody = {
+  candidate_id: CandidateId,
+  candidate_version: CandidateVersion,
+  /** 同じ起動の生成段の request_id。 */
+  desire_request_id: NonEmptyString,
+  segment_id: SegmentId,
+  transcript_revision: TranscriptRevision,
+  conversation_kind: ConversationKind,
+  profile_version: NonNegativeInt,
+  outcome: z.enum(['kept', 'withdrawn', 'gate_rejected', 'rejected']),
+  ledger_reason: Maybe(NonEmptyString),
+};
+
+/**
+ * タイミング段の結果（話の途中で申し出る／話し終わりまで待つ／取り下げる）。生成段とは別のイベント。
+ * immediate は LLM を呼ばないので遅延の項目を持たない。v2 は1段判定なのでこのイベントを出さない。
+ */
+export const InitiativeTimingEvent = z.discriminatedUnion('timing_strategy', [
+  eventSchema('initiative.timing', {
+    ...TimingBody,
+    timing_strategy: z.literal('llm'),
+    timing: TimingVerdict,
+    request_id: NonEmptyString,
+    sent_at: MonotonicMs,
+    received_at: MonotonicMs,
+    latency_ms: NonNegativeMs,
+    model_version: ModelVersion,
+    prompt_version: NonEmptyString,
+    history_version: Maybe(NonNegativeInt),
+    input_segment_ids: z.array(AsrSegmentId),
+    recent_turn_count: NonNegativeInt,
+    // LLM 生成。ゲートも制御も読まない。
+    reason: MaybeModelOutput(z.string()),
+    why_now: MaybeModelOutput(z.string()),
+    cost_of_waiting: MaybeModelOutput(z.string()),
+    withdraw_reason: MaybeModelOutput(z.string()),
+    withdraw_evidence_segment_ids: Maybe(Verified(z.array(AsrSegmentId).min(1))),
+    gate: StageGate,
+  }),
+  eventSchema('initiative.timing', {
+    ...TimingBody,
+    timing_strategy: z.literal('immediate'),
+    timing: z.literal('OFFER_NOW'),
+    decided_at: MonotonicMs,
+    /** LLM を呼んでいない。 */
+    model_call: z.literal(false),
+  }),
+]);
+export type InitiativeTimingEvent = z.infer<typeof InitiativeTimingEvent>;
+
 /**
  * 候補の状態遷移。発行は E（候補の状態の正本）。
  * モデル由来の撤回は initiative.decision(WITHDRAW) が withdraw_reason の項目を必ず持ち（空なら null と理由）、ここからは
@@ -407,7 +535,8 @@ export const SignalEndedEvent = eventSchema('signal.ended', {
  * outcome と reasons はコードの値で、モデルの説明文は入れない。urgency は使わない（計画 §4.5）。
  */
 export const NegotiationDecisionEvent = eventSchema('negotiation.decision', {
-  stage: z.enum(['signal_gate', 'speech_selection']),
+  /** candidate_audio は候補の先行音声の段階（outcome が audio_preparing／audio_ready／audio_failed／audio_abandoned）。 */
+  stage: z.enum(['signal_gate', 'speech_selection', 'candidate_audio']),
   candidate_id: Maybe(CandidateId),
   candidate_version: Maybe(CandidateVersion),
   candidate_state: CandidateState.nullable(),
@@ -593,6 +722,8 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   InitiativeDecisionEvent,
   InitiativeDiscardedEvent,
   InitiativeAbortedEvent,
+  InitiativeDesireEvent,
+  InitiativeTimingEvent,
   CandidateStateChangedEvent,
   CandidateRejectedEvent,
   SignalSentEvent,
@@ -630,6 +761,8 @@ export const EVENT_NAMES = [
   'initiative.decision',
   'initiative.discarded',
   'initiative.aborted',
+  'initiative.desire',
+  'initiative.timing',
   'candidate.state_changed',
   'signal.sent',
   'signal.started',

@@ -25,6 +25,7 @@ const EXPECTED: Record<string, string[]> = {
   'DEFERRED>SPEAKING': SPEAK,
   'DEFERRED>WITHDRAWN': WITHDRAW,
   'SPEAKING>SPOKEN': ['speech_finished', 'speech_interrupted'],
+  'SPEAKING>WITHDRAWN': ['speech_failed', 'speech_no_audio'],
 };
 
 const FROMS: (CandidateState | null)[] = [null, ...CandidateState.options];
@@ -41,6 +42,14 @@ for (const from of FROMS) {
 }
 
 describe('遷移表（既定: 再合図なし）', () => {
+  it('SPEAKING → WITHDRAWN は D の報告（失敗、無音）だけ。モデルの判断や通常の撤回では許さない', () => {
+    expect(checkTransition('SPEAKING', 'WITHDRAWN', 'speech_failed')).toEqual({ ok: true });
+    expect(checkTransition('SPEAKING', 'WITHDRAWN', 'speech_no_audio')).toEqual({ ok: true });
+    for (const cause of ['model_decision', 'expired', 'normal_response_started'] as const) {
+      expect(checkTransition('SPEAKING', 'WITHDRAWN', cause)).toMatchObject({ ok: false, reason: 'cause_not_allowed' });
+    }
+  });
+
   it(`全 ${rows.length} 通り`, () => {
     const mismatches: string[] = [];
     for (const [key, cause, allowed] of rows) {
@@ -59,7 +68,6 @@ describe('遷移表（既定: 再合図なし）', () => {
     ['INTENT_READY', 'DEFERRED', 'user_continued', 'INTENT_READY->DEFERRED'],
     ['BREATH_INHALE', 'DEFERRED', 'user_continued', 'BREATH_INHALE->DEFERRED'],
     ['DEFERRED', 'BREATH_INHALE', 'signal_gate_allowed', 'DEFERRED->BREATH_INHALE'],
-    ['SPEAKING', 'WITHDRAWN', 'model_decision', 'SPEAKING->WITHDRAWN'],
   ] as const)('%s → %s（%s）は invalid_transition', (from, to, cause, detail) => {
     expect(checkTransition(from, to, cause)).toEqual({ ok: false, reason: 'invalid_transition', details: [detail] });
   });

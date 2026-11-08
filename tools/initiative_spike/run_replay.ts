@@ -5,23 +5,31 @@
 //   --scenarios C1,C2           既定は素材のあるもの全部（G3 の C5 を除く）
 //   --models gemini-3.5-flash-lite:minimal  モデルと思考の段（既定は S の推奨）
 //   --label <名前>              結果の保存先 fixtures/initiative/runs/<名前>/
-//   --prompt <版>               既定は現在の版
+//   --prompt <版>               1段判定（v2）の版。既定は現在の版
+//   --timing-strategy v2|llm|immediate  既定は v2（1段判定）。リプレイでは指定したときだけ二段判定にする
+//   --conversation-kind joint_thinking|companion  二段判定の会話の種類（v2 では指定できない）。既定は joint_thinking
+//   --desire-prompt、--timing-prompt <版>  二段判定のプロンプトの版
 //   --max-calls <n>             実 API の呼び出しの累計の上限（--ledger のファイルで数える）
 //   --ledger <名前>             呼び出しの台帳（fixtures/initiative/runs/<名前>.json）。既定は素材ごとの台帳
 //   --min-new-chars、--boundary-chars  起動の条件（既定は policy の initiative.trigger。none で文の区切りを見ない）
 //   --yes                       実行（課金あり）
 import { parseArgs } from 'node:util';
 import { join } from 'node:path';
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { SystemTimeSource, createEventEmitter } from '@llm-vap/contracts';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { ConversationKind, SystemTimeSource, TimingStrategy, createEventEmitter } from '@llm-vap/contracts';
 import type { EventEmitter, LlmProvider, LlmRequest, LlmResult, LlmStream, ResearchEvent, TimeSource } from '@llm-vap/contracts';
-import { CURRENT_PROMPT_VERSION } from '../../apps/orchestrator/src/cognition/initiative';
-import type { TriggerOptions } from '../../apps/orchestrator/src/cognition/initiative';
+import {
+  CURRENT_DESIRE_PROMPT_VERSION,
+  CURRENT_PROMPT_VERSION,
+  CURRENT_TIMING_PROMPT_VERSION,
+  parseConversationKindProfile,
+} from '../../apps/orchestrator/src/cognition/initiative';
+import type { StagedOptions, TriggerOptions } from '../../apps/orchestrator/src/cognition/initiative';
 import { createGeminiProviderFromEnv } from '../../apps/orchestrator/src/providers/llm';
 import type { GeminiThinkingLevel } from '../../apps/orchestrator/src/providers/llm/gemini';
 import { InitiativeWiring, NO_CANDIDATE_SPEECH } from '../../apps/orchestrator/src/session/initiative_wiring';
 import { CallBudget } from './lib/call_budget';
-import { RUNS_DIR, existsSync, loadPersona, loadPolicy, loadScenarios, readSttJsonl, sttPath, writeJson } from './lib/project';
+import { ROOT, RUNS_DIR, existsSync, loadPersona, loadPolicy, loadScenarios, readSttJsonl, sttPath, writeJson } from './lib/project';
 import type { Scenario } from './lib/project';
 import { replayStt } from './lib/replay';
 
@@ -38,6 +46,10 @@ const { values: args } = parseArgs({
     ledger: { type: 'string' },
     'min-new-chars': { type: 'string' },
     'boundary-chars': { type: 'string' },
+    'timing-strategy': { type: 'string', default: 'v2' },
+    'conversation-kind': { type: 'string' },
+    'desire-prompt': { type: 'string', default: CURRENT_DESIRE_PROMPT_VERSION },
+    'timing-prompt': { type: 'string', default: CURRENT_TIMING_PROMPT_VERSION },
     yes: { type: 'boolean', default: false },
   },
 });
@@ -61,6 +73,26 @@ const trigger: TriggerOptions = {
         ? Number(args['boundary-chars'])
         : policyTrigger.min_new_chars_at_boundary,
 };
+const timingStrategy = TimingStrategy.parse(args['timing-strategy']);
+if (timingStrategy === 'v2' && args['conversation-kind']) {
+  throw new Error('--conversation-kind は二段判定（--timing-strategy llm|immediate）のときだけ指定できます');
+}
+/** 二段判定の設定。v2 は null。リプレイは直前のターンを持たないので、直近の会話は渡さない（recent_context の max_turns=0 と同じ結果）。 */
+function stagedOptions(): StagedOptions | null {
+  if (timingStrategy === 'v2') return null;
+  const kind = ConversationKind.parse(args['conversation-kind'] ?? 'joint_thinking');
+  return {
+    timing_strategy: timingStrategy,
+    profile: parseConversationKindProfile(JSON.parse(readFileSync(join(ROOT, 'config', `conversation_kind.${kind}.ja.json`), 'utf8'))),
+    recent_context: { max_turns: 0, max_chars_per_turn: 300 },
+    desire_prompt_version: args['desire-prompt'] as string,
+    timing_prompt_version: args['timing-prompt'] as string,
+  };
+}
+const staged = stagedOptions();
+/** 結果のファイル名に入れる判定の設定（1段判定は従来の形のまま）。 */
+const judgementLabel = staged === null ? (args.prompt as string) : `${timingStrategy}__${staged.profile.conversation_kind}__${args['desire-prompt']}__${args['timing-prompt']}`;
+
 /** E2a へ人の発話の有無を伝える間隔。セッションの tick（20ms）より粗いが、話の後の判定（MIN_GAP_TIME_MS）には足りる。 */
 const FLOOR_TICK_MS = 100;
 
@@ -109,7 +141,7 @@ function makeProvider(model: string, thinking: string, time: TimeSource, emitter
 }
 
 async function runOne(scenario: Scenario, model: string, thinking: string, dir: string): Promise<void> {
-  const stem = `${scenario.id}__${model}__${thinking}__${args.prompt}`;
+  const stem = `${scenario.id}__${model}__${thinking}__${judgementLabel}`;
   const eventsPath = join(dir, `${stem}.events.jsonl`);
   writeFileSync(eventsPath, '');
   const source = readSttJsonl(sttPath(origin, scenario.id, take));
@@ -131,6 +163,7 @@ async function runOne(scenario: Scenario, model: string, thinking: string, dir: 
     speech: () => NO_CANDIDATE_SPEECH,
     trigger,
     prompt_version: args.prompt,
+    ...(staged ? { staged } : {}),
   });
   // 人の発話の有無: 記録を流している間は話している、流し終えたら黙った（VAP がないので記録の範囲で近似する）。
   let speaking = true;
@@ -167,7 +200,12 @@ async function runOne(scenario: Scenario, model: string, thinking: string, dir: 
     provider_class: llm.provider_class,
     // スパイク（p2_v2_tune など）は tools/initiative_spike/lib/gemini_thin.ts の Interactions API だった。
     api: 'streamGenerateContent',
-    prompt_version: args.prompt,
+    prompt_version: staged === null ? args.prompt : null,
+    timing_strategy: timingStrategy,
+    conversation_kind: staged?.profile.conversation_kind ?? null,
+    profile_version: staged?.profile.profile_version ?? null,
+    desire_prompt_version: staged === null ? null : args['desire-prompt'],
+    timing_prompt_version: staged === null ? null : args['timing-prompt'],
     persona: loadPersona(scenario).persona_id,
     trigger,
     limits: policy.initiative,

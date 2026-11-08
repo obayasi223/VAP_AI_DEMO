@@ -120,6 +120,14 @@ export class TimelineBuffer {
           label: `視線 ${event.target === 'user' ? '利用者へ' : 'そらす'}${event.in_speech_pause ? '（発話内ポーズ）' : ''}`,
         });
         break;
+      case 'initiative.desire':
+        if (event.candidate_id.value !== null && event.desire !== 'NONE') {
+          insertSorted(this.marks, { t: event.t_monotonic_ms, kind: 'initiative', label: `発話希望 ${event.desire} ${event.candidate_id.value}` });
+        }
+        break;
+      case 'initiative.timing':
+        insertSorted(this.marks, { t: event.t_monotonic_ms, kind: 'initiative', label: `タイミング ${event.timing} ${event.candidate_id}` });
+        break;
       case 'initiative.decision':
         if (event.decision !== 'NONE') {
           insertSorted(this.marks, {

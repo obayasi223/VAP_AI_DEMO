@@ -22,6 +22,7 @@
     "dev:orchestrator:scripted": "STT_PROVIDER_CLASS=test_double TTS_PROVIDER_CLASS=test_double LLM_PROVIDER_CLASS=test_double tsx apps/orchestrator/src/main.ts",
     "test:e2e": "tsx apps/orchestrator/test/e2e/run.ts",
     "log:check": "tsx tools/log_check/cli.ts",
+    "review:initiative": "tsx tools/initiative_review/cli.ts",
     "dev:fakes": "npm run fakes -w @llm-vap/testkit"
   },
   "devDependencies": {

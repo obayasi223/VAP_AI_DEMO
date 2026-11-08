@@ -90,4 +90,51 @@ describe('研究条件の切替（セッション単位）', () => {
     expect(await open(url, '?condition=initiative_inhale')).toBe('reactive');
     expect(await loggedConditions()).toEqual(new Set(['reactive']));
   });
+
+  describe('会話の種類とタイミングの方式', () => {
+    async function manifest(): Promise<{ initiative: Record<string, unknown> }> {
+      const s = server!;
+      const session = s.current()!;
+      await s.endSession('test_done');
+      await sleep(20);
+      return JSON.parse(await readFile(join(dir!, session.session_id, 'manifest.json'), 'utf8')) as { initiative: Record<string, unknown> };
+    }
+
+    it('?conversation_kind= と ?timing_strategy= を manifest に残す（由来は client）', async () => {
+      const url = await start();
+      await open(url, '?condition=initiative_inhale&conversation_kind=companion&timing_strategy=immediate');
+      expect((await manifest()).initiative).toMatchObject({
+        timing_strategy: 'immediate',
+        conversation_kind: 'companion',
+        conversation_kind_source: 'client',
+        timing_strategy_source: 'client',
+        desire_prompt_version: 'initiative-desire-ja-v1',
+        profile_version: 1,
+      });
+    });
+
+    it('求めがなければ方策の既定（llm、joint_thinking）', async () => {
+      const url = await start();
+      await open(url, '');
+      expect((await manifest()).initiative).toMatchObject({ timing_strategy: 'llm', conversation_kind: 'joint_thinking', conversation_kind_source: 'default', timing_strategy_source: 'default' });
+    });
+
+    it('不正な値は既定へ（由来は default）', async () => {
+      const url = await start();
+      await open(url, '?conversation_kind=nonsense&timing_strategy=nonsense');
+      expect((await manifest()).initiative).toMatchObject({ timing_strategy: 'llm', conversation_kind: 'joint_thinking', timing_strategy_source: 'default' });
+    });
+
+    it('*_FROM_CLIENT=0 は既定に固定する（由来は fixed）', async () => {
+      const url = await start({ CONVERSATION_KIND_FROM_CLIENT: '0', TIMING_STRATEGY_FROM_CLIENT: '0' });
+      await open(url, '?conversation_kind=companion&timing_strategy=immediate');
+      expect((await manifest()).initiative).toMatchObject({ timing_strategy: 'llm', conversation_kind: 'joint_thinking', conversation_kind_source: 'fixed', timing_strategy_source: 'fixed' });
+    });
+
+    it('v2 を選ぶと会話の種類は適用しない（記録も null）', async () => {
+      const url = await start();
+      await open(url, '?timing_strategy=v2&conversation_kind=companion');
+      expect((await manifest()).initiative).toMatchObject({ timing_strategy: 'v2', conversation_kind: null, desire_prompt_version: null, profile_version: null });
+    });
+  });
 });

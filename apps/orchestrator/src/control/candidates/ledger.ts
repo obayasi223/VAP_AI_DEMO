@@ -5,6 +5,9 @@
  *   SPEAKING へ入る原因は呼び手が判断した結果として受け取る。
  * - candidate_id と版はここで振る。LLM には生成させない。
  * - 不正な遷移、遅れて届いた判定、照合できない根拠は拒否し、candidate.rejected に理由を残す。
+ * - segment_id が変わっただけでは判定を捨てない。NONE は記録して何もしない。内容を持つ判定は、AI が話し始めたか
+ *   （details の先頭 ai_started_speaking）と入力以降の新規の安定文字数（too_many_new_stable_chars）を確かめて判断する
+ *   （経過時間の上限は G のゲートが先に確かめている）。
  * - 版が変わったら、前の版の未再生の PCM を D の discardCandidate で棄てる。再生の開始は D の startChecked で
  *   版と PCM の一致を確かめる。
  * - モデルの説明文は記録するだけで判定に使わない（追補1）。
@@ -18,6 +21,7 @@ import type {
   EventEmitter,
   SpeechGenerator,
 } from '@llm-vap/contracts';
+import { normalizeForMatch } from '../../cognition/initiative/text';
 import { evidenceStillStable, verifyEvidence, verifyWithdrawEvidence } from './evidence';
 import {
   DEFAULT_TRANSITION_OPTIONS,
@@ -60,6 +64,11 @@ export interface CandidateLedgerSettings {
   post_turn_silence_ms: number;
   /** DEFERRED からの再合図。既定は無効（計画 §4.6）。 */
   allow_recue?: boolean;
+  /**
+   * policy.initiative.max_new_stable_chars_since_input。区間をまたいで届いた判定の古さの上限。
+   * 区間内の判定は G のゲートが同じ値で確かめている。省略と null（未校正）は数えない。
+   */
+  max_new_stable_chars_since_input?: number | null;
 }
 
 export interface CandidateLedgerDeps {
@@ -78,6 +87,8 @@ export class CandidateLedger {
   private counter = 0;
   private appliedRevision: number | null = null;
   private currentSegment = 0;
+  /** 最後に AI が話し始めた（onSegmentChanged）segment と時刻。入力の segment がこれより前なら AI が話し始めた後の結果。 */
+  private lastAiStart: { segment_id: number; at: number } | null = null;
   private floor: { user_speaking: boolean; since: number } | null = null;
   private held: HeldDecision | null = null;
 
@@ -144,17 +155,22 @@ export class CandidateLedger {
    * NEW は成功すると採番した ref を返す。G は initiative.decision をこの戻り値で emit する（採番の後）。
    */
   applyModelDecision(d: ModelDecision): DecisionResult {
-    if (d.segment_id < this.currentSegment) {
-      return this.rejectModel(d, 'stale_segment', [`input_segment=${d.segment_id}`, `current=${this.currentSegment}`]);
+    const crossedSegment = d.segment_id < this.currentSegment;
+    if (d.segment_id > this.currentSegment) this.advanceSegment(d.segment_id, d.received_at);
+    // NONE は候補を変えないので棄却しない。何も適用せず、順序の基準だけを進める（markApplied は最大値を取る）。
+    if (d.decision === 'NONE') {
+      this.markApplied(d.transcript_revision);
+      return okResult('NONE', null, null, null);
     }
-    if (d.segment_id > this.currentSegment) this.onSegmentChanged(d.segment_id, d.received_at);
     if (this.appliedRevision !== null && d.transcript_revision < this.appliedRevision) {
       return this.rejectModel(d, 'stale_transcript_revision', []);
     }
+    // WITHDRAW は候補を減らすだけなので、区間をまたいでも適用する（根拠と対象の確かめは applyWithdraw）。
+    if (crossedSegment && d.decision !== 'WITHDRAW') {
+      const crossed = this.rejectAcrossSegment(d);
+      if (crossed !== null) return crossed;
+    }
     switch (d.decision) {
-      case 'NONE':
-        this.markApplied(d.transcript_revision);
-        return okResult('NONE', null, null, null);
       case 'NEW':
         return this.applyNew(d, false);
       case 'KEEP':
@@ -377,36 +393,32 @@ export class CandidateLedger {
     return { ok: true, record: toContract(record), generation: started.generation };
   }
 
-  /** 発話の終わり。再生 ID が違えば（別の世代の報告）拒否する。 */
+  /**
+   * 発話の終わり。再生 ID が違えば（別の世代の報告）拒否する。
+   * 再生の失敗（speech_failed）と 1 音も出なかった終わり（speech_no_audio）は SPOKEN にせず WITHDRAWN で閉じる。
+   */
   finishSpeech(
     candidate_id: string,
     audio_playback_id: number,
-    cause: 'speech_finished' | 'speech_interrupted',
+    cause: 'speech_finished' | 'speech_interrupted' | 'speech_failed' | 'speech_no_audio',
     at: number,
   ): TransitionResult {
     const record = this.records.get(candidate_id);
+    const to: CandidateState = cause === 'speech_failed' || cause === 'speech_no_audio' ? 'WITHDRAWN' : 'SPOKEN';
     if (record && record.state === 'SPEAKING' && record.audio_playback_id !== audio_playback_id) {
-      return this.rejectCode(record, candidate_id, 'transition', 'SPOKEN', cause, 'invalid_transition', [
+      return this.rejectCode(record, candidate_id, 'transition', to, cause, 'invalid_transition', [
         'playback_mismatch',
         `audio_playback_id=${audio_playback_id}`,
         `speaking=${record.audio_playback_id}`,
       ]);
     }
-    return this.transition(candidate_id, 'SPOKEN', cause, at);
+    return this.transition(candidate_id, to, cause, at);
   }
 
   /** 追補2の cue_at（signal.started_at）。最初の合図だけを残す。 */
   noteCueStarted(candidate_id: string, started_at: number): void {
     const record = this.records.get(candidate_id);
     if (record && record.timeline.cue_at === null) record.timeline.cue_at = started_at;
-  }
-
-  /** 追補2の speech_at（speech.started_at）。 */
-  noteSpeechStarted(candidate_id: string, audio_playback_id: number, started_at: number): void {
-    const record = this.records.get(candidate_id);
-    if (record && record.audio_playback_id === audio_playback_id && record.timeline.speech_at === null) {
-      record.timeline.speech_at = started_at;
-    }
   }
 
   // ---- 外の状況（J から） ------------------------------------------------------
@@ -426,8 +438,16 @@ export class CandidateLedger {
     return result ? { request_id, result } : null;
   }
 
-  /** segment_id の変更（AI の発話開始、§4.1 の ASR.reset）。 */
+  /**
+   * segment_id の変更（AI の発話開始、§4.1 の ASR.reset）。TurnManager は話し始める tick でだけ segment を進めるので、
+   * ここへ来たら AI が話し始めたとして覚える（入力の segment がこれより前の判定は rejectAcrossSegment が見る）。
+   */
   onSegmentChanged(segment_id: number, at: number): void {
+    if (segment_id >= this.currentSegment) this.lastAiStart = { segment_id, at };
+    this.advanceSegment(segment_id, at);
+  }
+
+  private advanceSegment(segment_id: number, at: number): void {
     if (segment_id <= this.currentSegment) return;
     this.currentSegment = segment_id;
     if (this.held) this.dropHeld(at, 'segment_changed');
@@ -466,6 +486,35 @@ export class CandidateLedger {
 
   private withdrawable(): LedgerRecord[] {
     return [...this.records.values()].filter((r) => WITHDRAWABLE_STATES.includes(r.state));
+  }
+
+  /**
+   * segment_id が今より前の入力から出た判定（NEW／KEEP／REVISE）の有効性。無効なら理由を残して棄却する。
+   * 根拠の残存は verifyContent（KEEP は applyKeep）、経過時間は G のゲートが見る。ここは「AI が話し始めたか」と
+   * 「入力より後の新規の安定文字数」だけを足す（G の数え方は segment をまたぐと少なく出る）。
+   * 実際のセッションでは segment が変わるのは AI が話し始めたときだけなので、前者で必ず棄却される。
+   * 後者を通るのは segment が判定から進んだ経路（リプレイ）だけ。
+   */
+  private rejectAcrossSegment(d: ModelDecision): Rejection | null {
+    const where = [`input_segment=${d.segment_id}`, `current=${this.currentSegment}`];
+    const start = this.lastAiStart;
+    if (start !== null && d.segment_id < start.segment_id) {
+      return this.rejectModel(d, 'stale_segment', ['ai_started_speaking', ...where, `ai_started_at=${start.at}`]);
+    }
+    const limit = this.deps.settings.max_new_stable_chars_since_input ?? null;
+    if (limit !== null) {
+      const chars = this.newStableCharsSince(d.input_segments);
+      if (chars > limit) return this.rejectModel(d, 'stale_segment', ['too_many_new_stable_chars', ...where, `chars=${chars}`, `limit=${limit}`]);
+    }
+    return null;
+  }
+
+  /** 入力より後の新規の安定文字数（正規化後）。入力になかった ASR 区間は全部を新規と数える。 */
+  private newStableCharsSince(input: readonly AsrSegmentSnapshot[]): number {
+    const before = new Map(input.map((s) => [s.asr_segment_id, normalizeForMatch(s.stable_text).length]));
+    let added = 0;
+    for (const s of this.deps.stable()) added += Math.max(0, normalizeForMatch(s.stable_text).length - (before.get(s.asr_segment_id) ?? 0));
+    return added;
   }
 
   private isPostTurn(at: number): boolean {

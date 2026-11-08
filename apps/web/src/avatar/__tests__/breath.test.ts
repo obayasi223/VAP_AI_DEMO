@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { InitiativeNegotiation } from '@llm-vap/contracts';
 import {
   BREATH_CHEST_EXPRESSION,
   BreathLayer,
   DEFAULT_BREATH,
   DEFAULT_INHALE_MS,
   HOLD_MAX_MS,
+  INHALE_MS_RANGE,
   inhaleCurve,
   mergeBreathParams,
   normalBreathWave,
@@ -136,30 +138,81 @@ describe('phase の遷移', () => {
     expect(layer.telemetry().prep.mouth).toBeGreaterThan(0);
   });
 
-  it('二重の startInhale は無視する（吸気中・保持中・脱力中、同じ cue_id でも別でも）', () => {
+  it('二重の startInhale は無視する（吸気中・保持中、同じ cue_id でも別でも）。戻り値で受け付けたかを返す', () => {
     const { layer, step } = makeLayer();
-    layer.startInhale({ cue_id: 'c1', duration_ms: 450 });
-    layer.startInhale({ cue_id: 'c2', duration_ms: 900 });
+    expect(layer.startInhale({ cue_id: 'c1', duration_ms: 450 })).toBe(true);
+    expect(layer.startInhale({ cue_id: 'c2', duration_ms: 900 })).toBe(false);
     step(200);
-    layer.startInhale({ cue_id: 'c1', duration_ms: 450 });
-    layer.startInhale({ cue_id: 'c3', duration_ms: 300 });
+    expect(layer.startInhale({ cue_id: 'c1', duration_ms: 450 })).toBe(false);
+    expect(layer.startInhale({ cue_id: 'c3', duration_ms: 300 })).toBe(false);
     expect(layer.telemetry()).toMatchObject({ cueId: 'c1', inhaleMs: 450, ignoredStarts: 3 });
     step(400);
     expect(layer.phase()).toBe('hold');
-    layer.startInhale({ cue_id: 'c4', duration_ms: 450 });
+    expect(layer.startInhale({ cue_id: 'c4', duration_ms: 450 })).toBe(false);
+    expect(layer.telemetry().ignoredStarts).toBe(4);
     layer.release('withdrawn');
-    step(100);
-    layer.startInhale({ cue_id: 'c5', duration_ms: 450 });
-    expect(layer.phase()).toBe('release');
-    expect(layer.telemetry().ignoredStarts).toBe(5);
-    const before = layer.telemetry().prep.chest;
-    step(100);
-    expect(layer.telemetry().prep.chest).toBeLessThan(before);
-    step(2000);
+    step(3000);
     expect(layer.phase()).toBe('idle');
-    layer.startInhale({ cue_id: 'c6', duration_ms: 450 });
+    expect(layer.startInhale({ cue_id: 'c6', duration_ms: 450 })).toBe(true);
     step(DT);
     expect(layer.telemetry().cueId).toBe('c6');
+  });
+
+  it.each(['deferred', 'withdrawn'] as const)('%s の脱力の途中の吸気は今の姿勢から滑らかに受ける（不連続にしない）', (reason) => {
+    const { layer, step } = makeLayer();
+    layer.startInhale({ cue_id: 'c1', duration_ms: 700 });
+    step(900);
+    layer.release(reason);
+    step(200);
+    expect(layer.phase()).toBe('release');
+    const before = layer.telemetry().prep;
+    expect(before.chest).toBeGreaterThan(0.1);
+    expect(layer.startInhale({ cue_id: 'c2', duration_ms: 700 })).toBe(true);
+    step(DT);
+    expect(layer.telemetry()).toMatchObject({ phase: 'inhale', cueId: 'c2', kind: 'prep', ignoredStarts: 0 });
+    // 姿勢が飛ばない（1 フレームで 0 へ戻らない）。
+    expect(Math.abs(layer.telemetry().prep.chest - before.chest)).toBeLessThan(0.05);
+    step(900);
+    expect(layer.phase()).toBe('hold');
+    expect(layer.telemetry().prep.chest).toBeGreaterThan(0.9);
+  });
+
+  it('話している間の発話の戻りでは吸気を受けない。話し終えた後の戻り（口が閉じている）では受ける', () => {
+    let speechOpen = 0.5;
+    const { layer, step } = makeLayer({ speechOpen: () => speechOpen });
+    layer.startInhale({ cue_id: 'c1', duration_ms: 700 });
+    step(900);
+    layer.release('speech_started');
+    step(100);
+    expect(layer.telemetry().releaseKind).toBe('speech');
+    expect(layer.startInhale({ cue_id: 'c2', duration_ms: 700 })).toBe(false);
+    expect(layer.phase()).toBe('release');
+    speechOpen = 0;
+    step(100);
+    expect(layer.phase()).toBe('release');
+    expect(layer.startInhale({ cue_id: 'c3', duration_ms: 700 })).toBe(true);
+    step(DT);
+    expect(layer.telemetry()).toMatchObject({ phase: 'inhale', cueId: 'c3' });
+  });
+
+  it('release は動かしたかを返す（idle、同じ戻りの途中は false）', () => {
+    const { layer, step } = makeLayer();
+    expect(layer.release('withdrawn')).toBe(false);
+    layer.startInhale({ cue_id: 'c1', duration_ms: 450 });
+    expect(layer.release('withdrawn')).toBe(false); // まだ描いていない吸気の取り消し
+    layer.startInhale({ cue_id: 'c2', duration_ms: 450 });
+    step(600);
+    expect(layer.release('deferred')).toBe(true);
+    step(DT);
+    expect(layer.release('deferred')).toBe(false);
+    expect(layer.release('withdrawn')).toBe(true);
+  });
+
+  it('方策の inhale_ms の範囲はアバターの受け付ける範囲と同じ（丸めで描く長さと orchestrator の時計がずれない）', () => {
+    expect(InitiativeNegotiation.shape.inhale_ms.safeParse(INHALE_MS_RANGE[0]).success).toBe(true);
+    expect(InitiativeNegotiation.shape.inhale_ms.safeParse(INHALE_MS_RANGE[1]).success).toBe(true);
+    expect(InitiativeNegotiation.shape.inhale_ms.safeParse(INHALE_MS_RANGE[0] - 1).success).toBe(false);
+    expect(InitiativeNegotiation.shape.inhale_ms.safeParse(INHALE_MS_RANGE[1] + 1).success).toBe(false);
   });
 
   it('cue.duration_ms は範囲に丸め、吸気の長さに使う', () => {

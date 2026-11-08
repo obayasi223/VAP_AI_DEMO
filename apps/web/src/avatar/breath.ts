@@ -19,7 +19,7 @@
  * 口のわずかな開き、眉を時系列でずらして重ねる。視線は既定では触らない（吸気の効果と分離）。吸気音は持たない。
  *
  * three と VRM に依存しない。書く名前は output で差し替える。時刻は update の dt を積んだ内部時刻で、
- * startInhale／release／prepareShort は次のフレームから効く。
+ * startInhale／release／prepareShort は次のフレームから効く。deferred／withdrawn の脱力の途中に来た吸気は今の姿勢から受ける。
  */
 import type { AvatarLayer, LayerContext, PoseFrame } from './pose';
 import { clamp, clamp01, DEG2RAD, smoothAsymmetric, smoothstep, type Rng } from './util';
@@ -34,10 +34,16 @@ export interface InhaleCue {
 export type BreathPhase = 'idle' | 'inhale' | 'hold' | 'release';
 export type ReleaseReason = 'speech_started' | 'deferred' | 'withdrawn';
 export interface BreathController {
-  /** 1回の準備吸気 → 保持（準備姿勢）。idle 以外では無視する（同じ cue_id でも別でも）。 */
-  startInhale(cue: InhaleCue): void;
-  /** speech_started: 保持から発話へ（息を使い始める）／deferred: 声を出さずに吐いて引き下がる（準備を少し残す）／withdrawn: 準備を残さず戻る。 */
-  release(reason: ReleaseReason): void;
+  /**
+   * 1回の準備吸気 → 保持（準備姿勢）。受け付けたら true、無視したら false（描いていないことを呼び手が報告できるように）。
+   * 受け付けるのは idle と、脱力の途中（今の姿勢から滑らかに吸う）。吸気中と保持中、開始待ち、発話中の戻りでは無視する。
+   */
+  startInhale(cue: InhaleCue): boolean;
+  /**
+   * speech_started: 保持から発話へ（息を使い始める）／deferred: 声を出さずに吐いて引き下がる（準備を少し残す）／withdrawn: 準備を残さず戻る。
+   * 実際に姿勢を変えたら true、変えるものがなければ false（idle、同じ戻りの途中、まだ描いていない吸気の取り消し）。
+   */
+  release(reason: ReleaseReason): boolean;
   phase(): BreathPhase;
   /**
    * 追加（H2 第2版）: deferred の後に許可が出て話すときの短い準備動作（再吸気しない、計画 §4.6）。
@@ -58,6 +64,9 @@ export const DEFAULT_INHALE_MS = 700;
 export const HOLD_MAX_MS = 1800;
 /** cue.duration_ms の受け付ける範囲。外れたら丸める。下限は Torreira et al. (2015) の標本の最小 210ms を丸めた。上限 1400 は出典がなく暫定。 */
 export const INHALE_MS_RANGE: readonly [number, number] = [200, 1400];
+
+/** 発話の口が開いているとみなす下限（前フレームの speechOpen）。話している間は口の準備を譲り、吸気も受けない。 */
+const SPEECH_OPEN_THRESHOLD = 0.04;
 
 /** 胸郭モーフを表情として登録する名前（runtime.ts が登録する）。 */
 export const BREATH_CHEST_EXPRESSION = 'breathChest';
@@ -470,14 +479,18 @@ export class BreathLayer implements AvatarLayer, BreathController {
     return this.current;
   }
 
-  startInhale(cue: InhaleCue): void {
-    // 1回で完結: idle 以外（吸気、保持、脱力の途中、開始待ち）では無視する。
-    if (this.current !== 'idle' || this.pendingStart) {
+  startInhale(cue: InhaleCue): boolean {
+    // 1回で完結: 吸気中、保持中、開始待ちでは二重に吸わない。
+    // 脱力の途中は受ける（今の姿勢から吸い直す）。ただし発話の戻りで口が動いている間（＝話している）は受けない。
+    // 話し終えた後の発話の戻り（胸がまだ下がっている途中）は口が閉じていて、ここで受ける。
+    const relaxing = this.current === 'release' && (this.releaseKind !== 'speech' || this.speechOpen() <= SPEECH_OPEN_THRESHOLD);
+    if (this.pendingStart || !(this.current === 'idle' || relaxing)) {
       this.ignored += 1;
-      return;
+      return false;
     }
     this.pendingStart = { kind: 'prep', cueId: cue.cue_id, durationMs: cue.duration_ms };
     this.pendingRelease = null;
+    return true;
   }
 
   prepareShort(durationMs?: number): void {
@@ -490,22 +503,25 @@ export class BreathLayer implements AvatarLayer, BreathController {
     this.pendingRelease = null;
   }
 
-  release(reason: ReleaseReason): void {
+  release(reason: ReleaseReason): boolean {
     if (this.pendingStart) {
       // まだ描いていない動作は取り消す（何も見せていない）。
       this.pendingStart = null;
       this.lastCause = reason;
-      return;
+      return false;
     }
-    if (this.current === 'idle') return;
+    if (this.current === 'idle') return false;
     if (this.current === 'release') {
       // 引き下がりの途中で発話が始まったら、発話の戻り方へ切り替える（口を口形へ譲る）。
       // deferred の途中の withdrawn は、残した準備を捨てて戻る。
-      if (reason === 'speech_started' && this.releaseKind !== 'speech') this.pendingRelease = reason;
-      else if (reason === 'withdrawn' && this.releaseKind === 'deferred') this.pendingRelease = reason;
-      return;
+      if ((reason === 'speech_started' && this.releaseKind !== 'speech') || (reason === 'withdrawn' && this.releaseKind === 'deferred')) {
+        this.pendingRelease = reason;
+        return true;
+      }
+      return false;
     }
     this.pendingRelease = reason;
+    return true;
   }
 
   telemetry(): BreathTelemetry {
@@ -559,7 +575,8 @@ export class BreathLayer implements AvatarLayer, BreathController {
       const requested = Number.isFinite(start.durationMs) ? start.durationMs : DEFAULT_INHALE_MS;
       if (start.kind === 'prep') {
         this.inhaleMs = clamp(requested, INHALE_MS_RANGE[0], INHALE_MS_RANGE[1]);
-        this.inhaleFrom = { ...ZERO_CHANNELS };
+        // 脱力の途中で受けたときは今の姿勢から吸う（idle は全部 0 なので同じ）。不連続にしない。
+        this.inhaleFrom = { ...this.values };
         this.inhaleTarget = { ...FULL_CHANNELS };
       } else {
         this.inhaleMs = clamp(requested, 80, 800);
@@ -611,7 +628,7 @@ export class BreathLayer implements AvatarLayer, BreathController {
     }
 
     // 発話の口形が開いていれば、口の準備は譲る（ぶつけない）。
-    if (this.speechOpen() > 0.04) this.values.mouth = 0;
+    if (this.speechOpen() > SPEECH_OPEN_THRESHOLD) this.values.mouth = 0;
 
     // 待機の揺れと通常呼吸: 準備の間と戻った直後は抑え、ゆっくり戻す。
     const active = this.current !== 'idle';

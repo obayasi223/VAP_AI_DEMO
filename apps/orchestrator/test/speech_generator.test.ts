@@ -592,6 +592,7 @@ describe('SpeechGenerator: 再生と語境界の停止', () => {
         spoken_text: '今日は',
         spoken_text_precision: 'alignment_char',
         interrupted: true,
+        no_audio: false,
       },
     ]);
   });

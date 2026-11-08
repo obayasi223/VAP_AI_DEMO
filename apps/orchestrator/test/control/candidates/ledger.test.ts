@@ -262,11 +262,12 @@ describe('判定の順序（古い transcript_revision の結果が新しい状�
     ]);
   });
 
-  it('NONE の拒否は operation=NONE で記録する（NEW と区別する）', () => {
+  it('順序より古い NONE も棄却しない（何も適用せず、基準も戻さない）', () => {
     const r = rig();
     r.ledger.applyModelDecision(noneD({ rev: 20 }));
-    expect(r.ledger.applyModelDecision(noneD({ rev: 18 }))).toMatchObject({ ok: false, reason: 'stale_transcript_revision' });
-    expect(rejects(r.sink).at(-1)).toMatchObject({ operation: 'NONE', requested_state: null });
+    expect(r.ledger.applyModelDecision(noneD({ rev: 18 }))).toMatchObject({ ok: true, decision: 'NONE' });
+    expect(rejects(r.sink)).toHaveLength(0);
+    expect(r.ledger.appliedTranscriptRevision()).toBe(20);
   });
 
   it('新しい NONE の後に届いた古い NEW は候補にしない', () => {
@@ -338,6 +339,105 @@ describe('世代（segment_id）', () => {
     r.ledger.applyModelDecision(noneD({ rev: 11, segment_id: 2 }));
     expect(r.ledger.segmentId()).toBe(2);
     expect(r.ledger.get(a.candidate_id)?.state).toBe('WITHDRAWN');
+  });
+});
+
+describe('区間（segment_id）をまたいで届いた判定（AI が話し始めた後に LLM が返った、final の判定など）', () => {
+  it('NONE は区間をまたいでも記録するだけで棄却しない（candidate.rejected に出さない）', () => {
+    const r = rig();
+    r.ledger.onSegmentChanged(1, 1100);
+    expect(r.ledger.applyModelDecision(noneD({ rev: 23, segment_id: 0 }))).toMatchObject({ ok: true, decision: 'NONE', ref: null });
+    expect(rejects(r.sink)).toHaveLength(0);
+    expect(r.ledger.appliedTranscriptRevision()).toBe(23);
+    expect(r.ledger.list()).toHaveLength(0);
+  });
+
+  it('AI が話し始めた後の NEW は棄却し、details の先頭に ai_started_speaking と区間、開始の時刻を残す', () => {
+    const r = rig();
+    r.ledger.onSegmentChanged(1, 1100);
+    expect(r.ledger.applyModelDecision(newD({ rev: 23, segment_id: 0, at: 1500 }))).toMatchObject({ ok: false, reason: 'stale_segment', held: false });
+    expect(rejects(r.sink)[0]).toMatchObject({
+      reason: 'stale_segment',
+      operation: 'NEW',
+      details: ['ai_started_speaking', 'input_segment=0', 'current=1', 'ai_started_at=1100'],
+    });
+    expect(r.ledger.want()).toEqual({ kind: 'none' });
+  });
+
+  it('segment が判定から進んだだけ（AI の開始の報告なし、リプレイの経路）なら、根拠と古さを見て受理する', () => {
+    const r = rig();
+    r.ledger.applyModelDecision(noneD({ rev: 11, segment_id: 1 }));
+    const accepted = r.ledger.applyModelDecision(newD({ rev: 12, segment_id: 0 }));
+    expect(accepted).toMatchObject({ ok: true, decision: 'NEW', ref: { candidate_id: 'c_0001' } });
+    expect(rejects(r.sink)).toHaveLength(0);
+  });
+
+  it('入力より後の新規の安定文字が上限を超えていれば、AI が話していなくても棄却する（too_many_new_stable_chars）', () => {
+    const r = rig({ max_new_stable_chars_since_input: 5 });
+    r.ledger.applyModelDecision(noneD({ rev: 11, segment_id: 1 }));
+    r.state.stable = [...STABLE, seg(3, '新しい区間の話がかなり長く続いていて上限を超えている', 1)];
+    const late = r.ledger.applyModelDecision(newD({ rev: 12, segment_id: 0 }));
+    expect(late).toMatchObject({ ok: false, reason: 'stale_segment' });
+    expect(rejects(r.sink)[0]?.details[0]).toBe('too_many_new_stable_chars');
+    expect(rejects(r.sink)[0]?.details).toEqual(expect.arrayContaining(['limit=5']));
+  });
+
+  it('根拠が消えていれば棄却する（evidence_invalid。区間の変更とは別の理由）', () => {
+    const r = rig();
+    r.ledger.applyModelDecision(noneD({ rev: 11, segment_id: 1 }));
+    r.state.stable = [seg(3, '別の話', 1)];
+    expect(r.ledger.applyModelDecision(newD({ rev: 12, segment_id: 0 }))).toMatchObject({ ok: false, reason: 'evidence_invalid' });
+  });
+
+  it('REVISE も AI が話し始めた後は棄却し（版は進まない）、話していなければ改訂する', () => {
+    const started = rig({ candidate_expires_on_segment_change: false });
+    const ref = created(started, { rev: 10 });
+    started.ledger.onSegmentChanged(1, 1100);
+    expect(started.ledger.applyModelDecision(reviseD(ref, { rev: 12, segment_id: 0, utter: '別の文' }))).toMatchObject({ ok: false, reason: 'stale_segment' });
+    expect(rejects(started.sink)[0]).toMatchObject({ operation: 'REVISE', details: expect.arrayContaining(['ai_started_speaking']) });
+    expect(started.ledger.get(ref.candidate_id)).toMatchObject({ candidate_version: 1, proposed_utterance: '予算は増やせないのですか？' });
+
+    const crossed = rig({ candidate_expires_on_segment_change: false });
+    const ref2 = created(crossed, { rev: 10 });
+    crossed.ledger.applyModelDecision(noneD({ rev: 11, segment_id: 1 }));
+    expect(crossed.ledger.applyModelDecision(reviseD(ref2, { rev: 12, segment_id: 0, utter: '別の文' }))).toMatchObject({ ok: true, decision: 'REVISE' });
+    expect(crossed.ledger.get(ref2.candidate_id)?.candidate_version).toBe(2);
+  });
+
+  it('KEEP は AI が話し始めた後は棄却する（判定の時刻を新しくしない）', () => {
+    const r = rig({ candidate_expires_on_segment_change: false });
+    const ref = created(r, { rev: 10, at: 1000 });
+    r.ledger.onSegmentChanged(1, 1100);
+    expect(r.ledger.applyModelDecision(keepD(ref, { rev: 12, segment_id: 0, at: 1500 }))).toMatchObject({ ok: false, reason: 'stale_segment' });
+    expect(r.ledger.getRecord(ref.candidate_id)?.received_at).toBe(1000);
+  });
+
+  it('WITHDRAW は区間をまたいでも適用する（候補を減らすだけ）。古い revision の順序の検査は残る', () => {
+    const r = rig({ candidate_expires_on_segment_change: false });
+    const ref = created(r, { rev: 10 });
+    r.ledger.onSegmentChanged(1, 1100);
+    expect(r.ledger.applyModelDecision(withdrawD(ref, { rev: 12, segment_id: 0 }))).toMatchObject({ ok: true, decision: 'WITHDRAW', to: 'WITHDRAWN' });
+    expect(rejects(r.sink)).toHaveLength(0);
+
+    const old = rig({ candidate_expires_on_segment_change: false });
+    const ref2 = created(old, { rev: 10 });
+    old.ledger.applyModelDecision(reviseD(ref2, { rev: 14, utter: '新しい文' }));
+    old.ledger.onSegmentChanged(1, 1100);
+    expect(old.ledger.applyModelDecision(withdrawD({ ...ref2, candidate_version: 2 }, { rev: 12, segment_id: 0 }))).toMatchObject({ ok: false, reason: 'stale_transcript_revision' });
+  });
+
+  it('AI の開始で撤回済みの候補に届いた KEEP／REVISE／WITHDRAW は、候補の状態の理由で棄却する（区間では落とさない）', () => {
+    const r = rig();
+    const ref = created(r, { rev: 10 });
+    r.ledger.onSegmentChanged(1, 1100);
+    expect(r.ledger.get(ref.candidate_id)?.state).toBe('WITHDRAWN');
+    expect(r.ledger.applyModelDecision(withdrawD(ref, { rev: 12, segment_id: 0 }))).toMatchObject({ ok: false, reason: 'state_not_applicable' });
+  });
+
+  it('segment の変更より前の入力でも、同じ segment の判定は従来どおり（棄却の理由にならない）', () => {
+    const r = rig();
+    r.ledger.onSegmentChanged(1, 1100);
+    expect(r.ledger.applyModelDecision(newD({ rev: 12, segment_id: 1 }))).toMatchObject({ ok: true, decision: 'NEW' });
   });
 });
 
@@ -536,16 +636,14 @@ describe('モデルの説明文は判定に使わない（追補1）', () => {
 });
 
 describe('時刻（追補2: decided_at／cue_at／speech_at は別々の実測）', () => {
-  it('最初の合図と再生の開始だけを残す', () => {
+  it('最初の合図だけを残す（speech_at は speech.started から計算する: packages/analysis）', () => {
     const r = rig();
     const ref = created(r, { at: 1000 });
     const pid = (r.speech as FakeSpeech).prepare(ref);
     r.ledger.noteCueStarted(ref.candidate_id, 1300);
     r.ledger.noteCueStarted(ref.candidate_id, 1900);
     r.ledger.startSpeech(ref.candidate_id, 1, pid, 'turn_allowed', 2000);
-    r.ledger.noteSpeechStarted(ref.candidate_id, pid + 1, 2050);
-    r.ledger.noteSpeechStarted(ref.candidate_id, pid, 2100);
-    expect(r.ledger.getRecord(ref.candidate_id)?.timeline).toEqual({ decided_at: 1000, cue_at: 1300, speech_at: 2100, resolved_at: null });
+    expect(r.ledger.getRecord(ref.candidate_id)?.timeline).toEqual({ decided_at: 1000, cue_at: 1300, speech_at: null, resolved_at: null });
   });
 });
 

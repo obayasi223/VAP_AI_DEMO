@@ -107,7 +107,7 @@
 | 鮮度切れの定義 | `audio_frame` の遅れ（計画）に加えて受信時刻の遅れも見る | 音声そのものが止まると frame の差が開かず、古い p を fresh と扱うため |
 | hri2025 の鮮度と助走 | ja と同じ 500ms と 10 秒をコードで持つ | 方策に項目がなく、原著にもない。原著再現の根拠にしない |
 | 復帰時の計時 | fresh に戻ったら L57 と L71 の時計を現在時刻にする | VAP がなかった間の値で L74 が即時に真になるのを防ぐ。原著にない |
-| degraded 中の開始と割り込み | `fallback_silence_max_ms`、`fallback_interrupt_min_words`、`fallback_energy_silence_dbfs` のどれかが null なら、招待以外で開始せず、割り込みもしない。ja は §8 の暫定値で有効 | `fallback_energy` は mic の RMS（dBFS、session が計算）。閾値は方策の `turn.fallback_energy_silence_dbfs` を session が `createTurnManager` へ渡す。値は未校正 |
+| degraded 中の開始と割り込み | `fallback_silence_max_ms`、`fallback_interrupt_min_words`、`fallback_energy_silence_dbfs` のどれかが null なら、招待以外で開始せず、割り込みもしない。ja は §8 の暫定値と §12 の安全側の判断（`turn.vap_unavailable`）で有効 | `fallback_energy` は mic の RMS（dBFS、session が計算）。閾値は方策の `turn.fallback_energy_silence_dbfs` を session が `createTurnManager` へ渡す。値は未校正 |
 | 再生を始められないとき | `TurnInputs.start_blocked_reason`（切断中、別の音声がまだ終わっていない）がある間は L78 を偽にし、segment を進めない。両方の方策 | 原著の `is_ready` に「出力できる」を含めた解釈。入力で止められなかった拒否は session が前進を取り消す（`start_rolled_back`） |
 | `set_degraded` の出し直し | degraded のまま理由の種類（down／warming_up／stale）が変わったときも出す | 画面の「助走中」と、助走後の down を正しく出すため。原著にない |
 | 境界の後に届いた旧い発話の書き直し | final の語時刻が本文と合えば、境界より前に終わった語を旧 segment へ。なければ境界より前の revision の長さまでを旧 segment とし、伸びた分だけを新 segment へ（`providers/stt/assembler.ts`） | 共通接頭部で分けると、書き直された語尾が新しい利用者発話になり、AI の発話の後に2回目の応答が出る。語時刻のない interim では近似で、境界の直前の語尾が遅れて認識されると新 segment に入りうる。TurnManager（Appendix A）は変えていない |
@@ -140,6 +140,7 @@
 | 起動とターンの終わり | 新規の安定文字が `trigger.min_new_stable_chars` 以上、文中の区切りの後に `min_new_chars_at_boundary` 以上、または **final を受けたとき（増分が1文字以上なら文字数によらず1回）**。リプレイの `finishInput` も入力の終わりを final とみなす同じ規則 | final を文字数で止めると、ターンの終わりの判定（撤回の機会）が抜けていた。Google は話の途中の間にも final を打つので、その分の要求は増える |
 | 判定の失敗の後 | 失敗した要求の入力は判定済みにしない。待ち（2秒から倍、上限30秒）が明けたら、新しい増分がなくても J の tick（`poll`）で同じ入力から判定し直す | 失敗した入力が判定済みになると、話が止まった後は二度と判定されなかった |
 | 撤回の根拠の位置 | 候補の根拠が入力に見つからなければ、撤回の根拠が後ろかを確かめられないので撤回を棄却する（`candidate_evidence_not_in_input`） | 入力の上限で落ちた区間の候補を、前の発話で撤回させないため |
+| 区間（`segment_id`）をまたいで届いた判定 | `segment_id` は TurnManager が AI の発話を開始する tick（L80）でだけ進む。つまり「区間が変わった」は「AI が話し始めた」と同じ。LLM の往復（実測の中央値 1.3 秒、§11 の遅延の表）の間に区間が変わるのは普通に起きる。**区間が変わっただけでは捨てない:** `NONE` は記録するだけで `candidate.rejected` に数えない（`initiative.decision` の `NONE` になる）。`NEW`／`REVISE`／`KEEP` は、入力の後に AI が話し始めていれば棄却し、`candidate.rejected` の `reason=stale_segment` の `details` の先頭に `ai_started_speaking`（と区間、開始の時刻）を残す。**NEW** はこの条件で棄却するので、実セッションでは区間をまたいだ NEW は候補にならない（§4.6「通常応答を話し始めたら残っている候補は撤回」と同じ扱い）。区間が判定の側で進んだだけの経路（リプレイ）は、根拠の照合と新規の安定文字数（`max_new_stable_chars_since_input` を区間をまたいで数え直す。`details` の先頭が `too_many_new_stable_chars`）を見て受理する。経過時間（`max_result_age_ms`）は G のゲートが先に見る（`stale_result_too_old`）。`WITHDRAW` は候補を減らすだけなので区間をまたいでも適用する（ただし AI の開始で候補はすでに撤回されていることが多く、その場合は `state_not_applicable`）。順序（`transcript_revision`）の検査は `NEW`／`KEEP`／`REVISE`／`WITHDRAW` に残す | `s20261108T045055-ca6e12` の破棄 4 件は全部 `NONE` で、3 件は `stt.final` の到着が AI の発話開始より 0.4〜0.9 秒遅く、要求を送った時点で AI はもう話していた。1 件は interim で送った要求が往復の間に追い越された。`NONE` が棄却に数えられていたのは計測の誤りとして直した。残る問題: AI の開始の後に届く final の判定は LLM の呼び出しの無駄（G の側で起動を止められるが、この節の作業では `cognition/initiative/` を変えていない）。`candidate_expires_on_segment_change` が `false` のときだけ KEEP／REVISE が届く |
 | プロバイダの状態の名前 | 判定用の Gemini は `provider.status` を `gemini:initiative` で出す（応答用は `gemini`）。要求の上限の報告は `initiative_monitor` の行。`cost.usage` と `llm.*` の `provider` は両方とも `gemini` のままで、用途は `purpose`（`initiative`）で分ける | 研究者画面の行は provider 名で引くので、同じ名前だと取り違える。`packages/analysis` の単価の照合は `provider` で引くので `cost.usage` の名前は変えない |
 
 ## 10. 実機の対話で見つかった開始の早さ（ja、原著にない追加）
@@ -208,7 +209,8 @@
 
 | 項目 | 規則 | 理由、残る問題 |
 |---|---|---|
-| 合図のゲート | 条件が `initiative_inhale`、活動中の候補が1つ、合図中でない、AI が話していない、アバターが使える、冷却時間（`signal_cooldown_ms`）を超えた（null は未校正として合図しない）、判定の入力の後の新しい安定文字が上限以下（入力が分からなければ合図しない。上限 null は `max_new_stable_chars_since_input` を使う）、判定からの経過が上限以下（null は `max_result_age_ms`）、候補の音声が準備済み。止めた理由は全部 `negotiation.decision`（stage `signal_gate`）に残す（同じ理由の繰り返しは数字を除いた鍵で1回） | 候補の音声を待ってから合図するので、合図は TTS の遅れの分だけ遅れる。吸気の後に話す音声がない状態を避けるため |
+| 合図のゲート | 条件が `initiative_inhale`、活動中の候補が1つ、合図中でない、AI が話していない、アバターが使える、冷却時間（`signal_cooldown_ms`）を超えた（null は未校正として合図しない）、判定の入力の後の新しい安定文字が上限以下（入力が分からなければ合図しない。上限 null は `max_new_stable_chars_since_input` を使う）、判定からの経過が上限以下（null は `max_result_age_ms`）、候補の音声が用意できる（`preparing` か `ready`。作れない `none`／`failed` では合図しない）。止めた理由は全部 `negotiation.decision`（stage `signal_gate`）に残す（同じ理由の繰り返しは数字を除いた鍵で1回）。合図の理由に `candidate_audio_preparing`／`candidate_audio_ready` が残る | 音声の完成を待たず、NEW の次の tick で合図と TTS の準備を同時に始める（吸気の 700ms の間に作る）。吸気の後に間に合わないときの振る舞いは下の「音声が間に合わない」 |
+| 音声が間に合わない（合図と TTS の同時開始の帰結） | 吸気の後の `BREATH_HOLD_OR_READY` で音声が `preparing` のあいだは `candidate_audio_wait:<cue_id>` で通常応答も含めて開始を保留し、許可が出ても選択は `wait`（理由 `candidate_audio_preparing`）。`hold_max_ms`（吸気の完了から 800ms）を過ぎても来なければ候補を撤回する（`candidate.state_changed` の `expired`、`negotiation.decision` の stage `candidate_audio`、outcome `audio_abandoned`、理由 `audio_not_ready_by_deadline:hold_ms=…`）。`breath.release` は `withdrawn`。人が話していて期限に達したら撤回せず既存の `DEFERRED`。音声の失敗（`failed`、`none`）は期限を待たず同じ撤回。撤回と改訂で準備中の音声を棄てるのは既存の E2a の `discardCandidate` | 吸気を見せた後に話さないことが起きうる（候補を話さない撤回 1 件）。期限 `hold_max_ms` は `DEFERRED` の暫定値を流用しており、音声待ちの値としては測っていない。全体の猶予は吸気 700ms ＋ 保持 800ms = 1.5 秒で、その間に TTS（現状の ElevenLabs の実測はこのログにない）が間に合わないと引き下がる |
 | 吸気の長さと完了 | Node が `inhale_ms` を決めて `breath.cue` で送り、完了は Node の時計で判定する（ブラウザの報告は待たない）。`signal.sent` の `parameters.inhale_completion` は `orchestrator_clock` | 描画の遅れや背景タブで完了が遅れないため。`signal.started` は描画の rAF の時刻で別に残す |
 | 吸気中の許可 | 吸気中は `start_blocked_reason`（`candidate_inhale_in_progress:<cue_id>`）で通常応答も含めて開始を止める。吸気を終えた tick で許可を見直して話す | 計画 §4.6 のとおり |
 | `DEFERRED` | 吸気の後 `hold_max_ms` を過ぎても人が話していれば `DEFERRED` へ移り `breath.release`（`deferred`）。人が黙っていれば保持を続ける（許可か期限まで）。`DEFERRED` から再吸気しない | 人が黙っていて許可が出ないとき、Node 側の保持は期限（15 秒）まで続くが、アバターは自分の上限（`HOLD_MAX_MS`=1500）で自動で脱力する。見た目と状態がずれる |
@@ -217,6 +219,23 @@
 | 撤回 | 通常応答を話し始めたら撤回（E2a）。期限 `candidate_expiry_ms` でも撤回。どちらも合図中なら `breath.release`（`withdrawn`）。未再生の PCM は E2a の `discardCandidate` が棄てる | 破棄は JSONL のイベントにしていない（`negotiation_wiring` の `discardedAudio` とプロバイダの取り消しだけ）。後から破棄を確かめるには `candidate.state_changed` と `speech.*` の欠けから推すしかない |
 | `REVISE` | 再吸気しない。古い版の PCM は棄て、新しい版の文で音声を作り直す | 作り直しの間に許可が出ると、候補の音声がないので通常応答が勝つことがある |
 | 二つ目の `NEW` | 活動中の候補があれば E2a が棄却（`active_candidate_exists`） | 波2のまま |
+
+**話し終わりの後の `NEW`（§4.6 の表に照らして）:** 区間をまたぐ NEW は上の規則で棄却するので、話し終わりの後の候補ができるのは同じ区間の中だけ。無音が `post_turn_silence_ms`（`MIN_GAP_TIME_MS` 500ms）未満に届いた `NEW` は `INTENT_READY` になり、AI が話していなければ合図のゲートを通る（試験で固定）。吸気して（`candidate_inhale_in_progress` で通常応答も保留）、許可が出たら候補を話す。§4.6 の「吸気中に発話機会が来た場合」「招待のない自然な譲渡」のとおりで、negotiator の変更は要らない。無音が 500ms 以上の `NEW` は従来どおり保留（§9 の表）で、人が再開しなければ通常応答の開始で棄てる。`start_guard` の最小の間（900ms）との間は通常応答が先に始まれば捨てられる（E3 の調停は未実装のまま）。
+
+**遅延の表（`npx tsx tools/latency_report/cli.ts <セッション>`、`packages/analysis/src/initiative_chain.ts`）:** `s20261108T045055-ca6e12`（`reactive`、判定 10 回: final 起動 4、interim 起動 6、n は段ごとに下）。値は 1 セッションだけの実測。
+
+| 段 | n | 中央値 | 最大 | 備考 |
+|---|---|---|---|---|
+| 元の音声（起動の revision の `audio_frame_end`）→ ASR 結果の受信 | 10（final 4、interim 6） | 255ms（final 766ms、interim 242ms） | 952ms | `audio.health`（ブラウザ、`browser_rtt`）を基準点にした換算 |
+| 文字が揃う → 安定（`stable_text` に入る） | 10 | 589ms（final 1193ms、interim 577ms） | 1470ms | Google の `stability` の経路。`stable_prefix_*` は使っていない |
+| 受信 → 判定の送信 | 10 | 0ms | 1ms | STT の受信と同じ tick で起動 |
+| 判定の送信 → LLM の応答 | 10 | 1294ms | 1524ms | 最初の本文の断片は 817ms（中央値） |
+| LLM の応答 → 候補の記録 | 0 | - | - | NEW が 0 件 |
+| 候補の記録 → 合図の送信 | 0 | - | - | 同上。`reactive` なので合図もない |
+| 合図の送信 → 描画の開始 | 0 | - | - | 同上。`signal.started` がない |
+| 候補の音声の準備 → 完成 | 0 | - | - | `reactive` は TTS を作らない。`negotiation.decision`（stage `candidate_audio`）で今後測れる |
+
+`initiative_inhale`／`initiative_no_cue` の実セッションがまだないので、候補より後の段は未測定。このセッションでは判定の遅れの大部分は LLM の往復（1.3 秒）で、起動の条件（24 文字、区切りの 12 文字）を変えたときの効果はこの段からは分からない（測っていない）。
 
 **暫定の値（`config/policy.ja.json`）**
 
@@ -239,3 +258,37 @@
 **E2E の台本（`SCRIPTED_INITIATIVE=new_on_input`）**
 
 - 台本の STT が interim をすべて安定テキストとして出し、判定の LLM が入力の最後の区間から根拠を抜き出した `NEW`（候補があれば `KEEP`）を返す（`app/scripted.ts`）。reactive のセッションの STT の台本は変えない。配線を通すためだけのもので、発話希望の判断ではない。既定は `none`。
+
+## 12. VAP が使えない、信用できないときの開始と割り込み（ja、原著にない）
+
+実装は `apps/orchestrator/src/control/turn_manager.ts` の `decideVapUnavailableStart` と `fallbackInterruptHold`、`control/vap_freshness.ts` の `VapTrustSettings`。ja の `turn.vap_unavailable` のときだけ動く。hri2025 は `controlSettings` で null で、判断も理由も変わらない（`test/control/vap_unavailable.test.ts` の末尾で固定）。値はどれも【暫定、根拠は実機の1セッションのみか、なし】。
+
+**規則: VAP を信用できない間は、人の発話が確かに終わったと音声と ASR で言えるまで開始しない。** 次の全部を満たす tick でだけ許可する（どれか欠けたら `turn.allowed` の `reason` に `degraded:<縮退の理由>|<止めた理由>`）。
+
+1. エネルギーが読める。`fallback_energy` があり、**受信済み音声の先頭が `vap_stale_ms` 以内に進んでいる**（上りが止まると session の `lastMicDbfs` は最後の値のままで、無音の根拠にならない）。止まっていた間は無音に数えない。
+2. 応答の対象の文がある（`asr_result` が null でない）。文のない許可を出さない（発話候補も `permitted_to_speak` で話し始める）。
+3. **今の segment で人の声を観測している**（VAP の `vad[0]`、または `fallback_energy` が閾値以上）。声の裏付けのない ASR の文に応答しない。
+4. 声の無音: `fallback_last_voiced_at` から `vapUnavailableStartWaitMs`（`fallback_silence_max_ms`、`start_guard.min_gap_ms`、`start_guard.completion_timeout_low_p_min_ms` の最大。今は 1500ms）。招待は `start_guard` の最小の間（900ms）。VAP が AI を支持していないのと同じ扱いにする。
+5. ASR の静止: 最後の更新が final なら `asr_quiet_after_final_ms`、final でなければ `asr_quiet_without_final_ms`。final の後に interim が来れば final でないに戻る。
+
+割り込み（`fallbackInterruptHold`）は今までの条件（声のエネルギーと語数）に加えて、**ASR の更新が `interrupt_asr_recent_ms` 以内**（新しい内容がある）、**相槌だけでない**（`after_ai_speech` の語句）。止めなかったときは `reason` に `interrupt_held:asr_not_recent:…`、`interrupt_held:backchannel_only:…`。
+
+信用できない入力として次も追加した（`assessVapFreshness` の第4引数、`VapFreshness` の種類は増やさず `stale` と理由で区別）: 値の異常（NaN、範囲外、受信より先の `audio_frame`、`invalid_vap_value:…`）、`vap.direction_status` が `provisional`（`direction_provisional`）。AI の音声の参照（`ai_reference_missing_ms`、再生中の sys の無音）は実装したが **config は null で検査していない**。session の試験の素材（`test/session/helpers.ts`）が再生中も `sys` を無音で送っており、値を入れると `L59` の試験が赤になるため。実機の sys は揃っている（下）。試験の素材を直してから値を入れる。
+
+回復（`fresh`）では `applyFreshness` のとおり `user_speak_end_time` と `user_turn_end_time` を回復の時刻に数え直し、通常の分岐（L67、L74、`start_guard`）に戻る。縮退に戻ったら無音はそこから数え直す。
+
+| 項目 | 値 | 根拠 |
+|---|---|---|
+| `turn.vap_unavailable.asr_quiet_after_final_ms` | 300 | 根拠なし。final の後の確定の余裕 |
+| `turn.vap_unavailable.asr_quiet_without_final_ms` | 1200 | `s20261108T045055-ca6e12`: 1つの ASR 区間内の更新の間隔は p99 と最大が約 1000ms。それより長くした |
+| `turn.vap_unavailable.interrupt_asr_recent_ms` | 1000 | 上と同じ分布。発話中の更新は 1000ms 以内に来る |
+| `turn.vap_unavailable.ai_reference_missing_ms` | null | 未校正（上）。同セッションの AI の発話中の sys の無音（`vad[1]` < 0.5）の最長は 160ms |
+
+実ログの再生（`test/control/replay_vap_outage.test.ts`、全区間でワーカーの停止として再生、エネルギーは `vad[0]` からの近似）: 変更前（`vap_unavailable` なし）と変更後で話の途中の開始はどちらも 0 件。開始までの遅れ（E3 は 1539→2299ms、E5 は 1568→1968ms、ASR の final を待ったため）。E1、E2 は変わらず。
+
+**限界:**
+
+- すべての条件はエネルギーの閾値（-45 dBFS）に依存し、閾値は未校正。**実機のログにマイクのエネルギーの連続した記録がない**（`turn.allowed` に `fallback_energy` の値が残るのは縮退中の判断のときだけで、既存の2セッションでは各1点、どちらも -40.8 dBFS。声か環境音かは不明で、閾値の -45 より大きい）。環境音が閾値を超える環境では、エネルギーが「声あり」のままで fallback の開始が永久に許可されない（助走の 10 秒は VAP の回復で解ける）。声の裏付けはこの場合に常に真になる。
+- エコー（ヘッドセットなし）で AI の声がマイクに入ると、エネルギーと ASR の両方が「人の声」に見えるので、割り込みと開始の両方が誤る。エコーの抑制は作らない（利用者の判断）。
+- 小さい声がエネルギーの閾値を下回る利用者では、声の裏付けがなく開始しない（VAP が回復すれば通常に戻る）。
+- MaAI の `process_failed_reset` のあとは助走に戻す（session.ts の `onError`、`vap_worker_started_at` を更新）。ゼロ埋めの区間（`FRAMES_DROPPED`）の後の VAP は fresh のまま使う。

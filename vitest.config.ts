@@ -9,6 +9,7 @@ export default defineConfig({
       'apps/orchestrator/src/cognition/initiative/__tests__/**/*.test.ts',
       'apps/web/src/avatar/__tests__/**/*.test.ts',
       'tools/initiative_spike/test/**/*.test.ts',
+      'tools/initiative_review/test/**/*.test.ts',
     ],
     testTimeout: 15000,
   },

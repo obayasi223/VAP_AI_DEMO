@@ -7,7 +7,7 @@
  * 増えた方策の項目は画面の編集欄と再生には自動で入るが、この分岐の表には足すまで出ない（reason には出る）。
  */
 import type { TurnBranchDiagnostic, TurnDiagnosticBody, Vap2chState } from '@llm-vap/contracts';
-import { readVap, turnGptTimeout } from '../control';
+import { asrSettleMs, readVap, turnGptTimeout, vapUnavailableStartWaitMs } from '../control';
 import type { ControlSettings, TurnState } from '../control';
 
 function round(value: number, digits = 3): number {
@@ -55,6 +55,18 @@ export function buildTurnDiagnostic(
 
   if (view === null) {
     add('degraded', 'VAP が使えない（鮮度切れ・助走中）', true, `vap_freshness=${state.vap_freshness}`);
+    if (settings.vap_unavailable !== null) {
+      const silence = since(now, state.fallback_last_voiced_at);
+      const quiet = since(now, state.last_asr_time);
+      const wait = vapUnavailableStartWaitMs(settings);
+      const settle = asrSettleMs(settings.vap_unavailable, state.asr_is_final);
+      add(
+        'vap_unavailable_start',
+        'VAP なしの開始（声の無音と ASR の静止の両方）',
+        state.asr_result !== null && silence !== null && silence >= wait && quiet !== null && quiet >= settle,
+        `無音 ${silence ?? '-'}ms ≥ ${wait}ms、ASR の静止 ${quiet ?? '-'}ms ≥ ${settle}ms（${state.asr_is_final ? 'final あり' : 'final なし'}）、文 ${state.asr_result === null ? 'なし' : 'あり'}`,
+      );
+    }
   }
   const userSpeaking = state.user_speaking;
   add(

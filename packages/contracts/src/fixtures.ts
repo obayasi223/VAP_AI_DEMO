@@ -130,6 +130,24 @@ const initiativeBody = {
   evidence_segment_ids: verified([7], 'asr_segment_lookup'),
 };
 
+/** 生成段とタイミング段の共通の項目（作り物）。 */
+const stageMeta = {
+  ...envelope,
+  segment_id: 3,
+  transcript_revision: 42,
+  request_id: 'r_2',
+  sent_at: 1000,
+  received_at: 1200,
+  latency_ms: 200,
+  model_version: 'gemini-3.5-flash-lite',
+  prompt_version: 'initiative-desire-ja-v1',
+  conversation_kind: 'joint_thinking',
+  profile_version: 1,
+  history_version: present(4),
+  input_segment_ids: [7],
+  recent_turn_count: 2,
+};
+
 const signal = { ...envelope, candidate_id: 'c_0007', phase: 'inhale', parameters: { depth: 0.6 } };
 
 const candidateChange = {
@@ -337,6 +355,67 @@ export const VALID_FIXTURES: Record<SchemaName, { name: string; value: unknown }
     {
       name: 'initiative.aborted',
       value: { ...dropped, event: 'initiative.aborted', candidate_id: present('c_0007') },
+    },
+    {
+      name: 'initiative.desire',
+      value: {
+        ...stageMeta,
+        event: 'initiative.desire',
+        desire: 'NEW',
+        candidate_id: present('c_0007'),
+        candidate_version: present(1),
+        intent_type: modelOutput('QUESTION'),
+        proposed_utterance: modelOutput('それは月額料金にも含まれていますか？'),
+        evidence_span: modelOutput('月額料金の話'),
+        reason: modelOutput('料金の範囲が話に出ていない'),
+        evidence_segment_ids: present(verified([7], 'normalized_substring_of_listed_segments')),
+        prior_turn_evidence_span: modelOutputAbsent('model_left_empty'),
+        prior_turn_evidence: absent('no_prior_turn_evidence'),
+        gate: verified({ passed: true, reasons: [] }, 'stage_gate'),
+        outcome: 'registered',
+        ledger_reason: absent('accepted'),
+      },
+    },
+    {
+      name: 'initiative.timing/llm',
+      value: {
+        ...stageMeta,
+        event: 'initiative.timing',
+        timing_strategy: 'llm',
+        timing: 'WAIT_FOR_TURN_END',
+        candidate_id: 'c_0007',
+        candidate_version: 1,
+        desire_request_id: 'r_2',
+        request_id: 'r_2_timing',
+        reason: modelOutput('話し終わってからで内容が変わらない'),
+        why_now: modelOutputAbsent('model_left_empty'),
+        cost_of_waiting: modelOutputAbsent('model_left_empty'),
+        withdraw_reason: modelOutputAbsent('model_left_empty'),
+        withdraw_evidence_segment_ids: absent('not_withdraw'),
+        gate: verified({ passed: true, reasons: [] }, 'stage_gate'),
+        outcome: 'kept',
+        ledger_reason: absent('accepted'),
+      },
+    },
+    {
+      name: 'initiative.timing/immediate',
+      value: {
+        ...envelope,
+        event: 'initiative.timing',
+        timing_strategy: 'immediate',
+        timing: 'OFFER_NOW',
+        candidate_id: 'c_0007',
+        candidate_version: 1,
+        desire_request_id: 'r_2',
+        segment_id: 3,
+        transcript_revision: 42,
+        conversation_kind: 'companion',
+        profile_version: 1,
+        decided_at: 1200,
+        model_call: false,
+        outcome: 'kept',
+        ledger_reason: absent('accepted'),
+      },
     },
     {
       name: 'candidate.state_changed/code',
