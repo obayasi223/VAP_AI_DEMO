@@ -282,6 +282,11 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     return { audio_playback_id: entry.id, generation: entry.generation };
   }
 
+  /** 追い出しなしで新しい文脈を開けるか（吸気の後の声の先読みが、他の準備を押しのけないため）。 */
+  hasFreeContext(): boolean {
+    return this.activeContexts() < Math.min(MAX_ACTIVE_CONTEXTS, this.options.tts.max_contexts);
+  }
+
   private activeContexts(): number {
     let n = 0;
     for (const entry of this.entries.values()) if (entry.contextOpen) n += 1;
@@ -295,7 +300,8 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
       const unstarted = [...this.entries.values()].filter(
         (entry) => entry.contextOpen && (entry.state === 'preparing' || entry.state === 'ready'),
       );
-      const victim = unstarted.find((entry) => entry.request.origin.kind === 'response') ?? unstarted[0];
+      // 吸気の後の声は先読みなので最初に譲る（通常応答と候補の準備を押しのけない）。
+      const victim = unstarted.find((entry) => entry.request.origin.kind === 'vocal_cue') ?? unstarted.find((entry) => entry.request.origin.kind === 'response') ?? unstarted[0];
       if (!victim) return; // 再生中だけで埋まっている。openContext の例外で失敗として扱う。
       this.cancel(victim.id, 'context_limit');
     }
@@ -308,7 +314,8 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
         audio_playback_id: entry.id,
         generation: entry.generation,
       });
-      if (entry.request.origin.kind === 'candidate') {
+      if (entry.request.origin.kind === 'candidate' || entry.request.origin.kind === 'vocal_cue') {
+        // 文が決まっている音声（候補の文、吸気の後の短い声）。LLM は呼ばない。
         this.sendToTts(entry, entry.request.text);
       } else {
         await this.streamResponse(entry);
@@ -849,7 +856,9 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
       output_latency_ms: latency === null ? absent('browser_did_not_report_output_latency') : present(latency),
       ...(origin.kind === 'candidate'
         ? { origin: 'candidate', candidate_id: origin.candidate_id, candidate_version: origin.candidate_version }
-        : { origin: 'response' }),
+        : origin.kind === 'vocal_cue'
+          ? { origin: 'vocal_cue', vocal_cue_kind: origin.vocal_cue_kind }
+          : { origin: 'response' }),
     };
   }
 

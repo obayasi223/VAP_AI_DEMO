@@ -341,6 +341,7 @@ async function main(): Promise<void> {
     let session4: Session | null = null;
     let session5: Session | null = null;
     let session6: Session | null = null;
+    let session7: Session | null = null;
     if (!REAL) {
       env.SCRIPTED_INITIATIVE = 'wait_on_input';
       page = await openParticipant(browser, '&condition=initiative_inhale&conversation_kind=companion&timing_strategy=llm');
@@ -416,10 +417,26 @@ async function main(): Promise<void> {
       results.session6 = session6 ? { withdrawn: withdrawn6 !== null, breath: breath6 } : null;
       await page.close();
       await server.endSession('e2e_done');
+
+      // ---- 3f. 吸気の後の短い声（pre_beginning）: 延期の後の切れ目で「あ、」を鳴らす（台本 defer_on_input、実 MaAI）。方式は immediate --------
+      env.SCRIPTED_INITIATIVE = 'defer_on_input';
+      page = await openParticipant(browser, '&condition=initiative_inhale&conversation_kind=joint_thinking&timing_strategy=immediate&vocal_cue=pre_beginning');
+      await page.click('#start');
+      session7 = await waitFor('seventh session', () => {
+        const s = server.current();
+        return s !== null && s !== session6 ? s : null;
+      }, 30_000);
+      const spoke7 = session7
+        ? await waitFor('candidate speech after vocal cue', () => session7!.history.snapshot().some((h) => h.role === 'assistant' && h.origin.kind === 'candidate') || null, 60_000, 100)
+        : null;
+      await sleep(3000);
+      results.session7 = session7 ? { candidate_spoken: spoke7 !== null, assistant_texts: session7.history.snapshot().filter((h) => h.role === 'assistant').map((h) => h.text) } : null;
+      await page.close();
+      await server.endSession('e2e_done');
     }
 
     // ---- 4. ログの検査 -----------------------------------------------------------------
-    for (const [label, session] of [['session1', session1], ['session2', session2], ['session3', session3], ['session4', session4], ['session5', session5], ['session6', session6]] as [string, Session | null][]) {
+    for (const [label, session] of [['session1', session1], ['session2', session2], ['session3', session3], ['session4', session4], ['session5', session5], ['session6', session6], ['session7', session7]] as [string, Session | null][]) {
       if (!session) continue;
       const dir = path.join(config.sessions_dir, session.session_id);
       const report = await checkLog(dir);
@@ -455,6 +472,10 @@ async function main(): Promise<void> {
     }
     if (session5) analyseRevise(readEvents(path.join(config.sessions_dir, session5.session_id, 'events.jsonl')), results.session5 as { candidate_spoken: boolean; breath: { type: string }[] } | null);
     if (session6) analyseWithdraw(readEvents(path.join(config.sessions_dir, session6.session_id, 'events.jsonl')), results.session6 as { withdrawn: boolean; breath: { type: string; reason?: string }[] } | null);
+    if (session7) {
+      const dir7 = path.join(config.sessions_dir, session7.session_id);
+      analyseVocalCue(readEvents(path.join(dir7, 'events.jsonl')), JSON.parse(readFileSync(path.join(dir7, 'manifest.json'), 'utf8')) as Record<string, unknown>, results.session7 as { candidate_spoken: boolean; assistant_texts: string[] } | null);
+    }
   } finally {
     await browser?.close().catch(() => undefined);
     if (next?.pid) {
@@ -568,6 +589,21 @@ function analyseWithdraw(events: ResearchEvent[], session6: { withdrawn: boolean
   check('撤回: 声を出さない（候補の speech.started がない）', speech.length === 0, speech.length);
   check('撤回: ブラウザへ breath.release(withdrawn) が届き、再吸気なし', releases.includes('withdrawn') && (session6?.breath.filter((c) => c.type === 'breath.cue').length ?? 0) === 1 && (session6?.breath.some((c) => c.type === 'breath.release' && c.reason === 'withdrawn') ?? false), results.withdraw);
   check('撤回: immediate（タイミング段は LLM を呼ばない）', timing.length >= 1 && timing.every((e) => e.timing_strategy === 'immediate' && e.model_call === false), results.withdraw);
+}
+
+/** 吸気の後の短い声（pre_beginning、台本 defer_on_input、実 MaAI）: 延期の後に 1 回だけ鳴り、再生の経路を通り、履歴には入らない。 */
+function analyseVocalCue(events: ResearchEvent[], manifest: Record<string, unknown>, session7: { candidate_spoken: boolean; assistant_texts: string[] } | null): void {
+  const states = ofType(events, 'candidate.state_changed').filter((e) => e.candidate_id === 'c_0001');
+  const path = states.map((e) => (e.cause_source === 'code' ? `${e.to}:${e.cause}` : `${e.to}:${e.decision}`));
+  const cues = ofType(events, 'initiative.vocal_cue');
+  const started = ofType(events, 'speech.started').filter((e) => e.origin === 'vocal_cue');
+  const initiative = manifest.initiative as Record<string, unknown> | undefined;
+  results.vocal_cue = { path, manifest: { vocal_cue: initiative?.vocal_cue, source: initiative?.vocal_cue_source }, cues: cues.map((e) => ({ kind: e.vocal_cue_kind, phrase: e.phrase, audio: e.audio_outcome, gap: e.gap, observation: e.observation })), started: started.length, assistant: session7?.assistant_texts ?? null };
+  check('吸気の後の声: manifest に値と出どころが残る', initiative?.vocal_cue === 'pre_beginning' && initiative?.vocal_cue_source === 'client', results.vocal_cue);
+  check('吸気の後の声: 延期（DEFERRED）に入った', path.some((p) => p.startsWith('DEFERRED:')), results.vocal_cue);
+  check('吸気の後の声: 候補ごとに 1 回で、「あ、」が通常の再生の経路で鳴った', cues.length === 1 && cues[0]!.phrase === 'あ、' && cues[0]!.vocal_cue_kind === 'pre_beginning' && cues[0]!.audio_outcome !== 'not_played' && started.length === 1, results.vocal_cue);
+  check('吸気の後の声: 履歴に入らない', (session7?.assistant_texts ?? []).every((t) => t !== 'あ、'), results.vocal_cue);
+  check('吸気の後の声: 譲ったとは断定しない記録', !JSON.stringify(cues).match(/yield|gave_way|accepted/), cues.length);
 }
 
 /** 吸気あり（initiative_inhale）のセッション: 合図 → 吸気 → 保留 → 候補の発話 → 話し終わり、が JSONL とブラウザの記録に残る。 */

@@ -35,6 +35,7 @@ export const EVENT_ROUTES = {
   'initiative.response_material': { origin: 'node' },
   'initiative.response_reflection': { origin: 'node' },
   'initiative.already_said': { origin: 'node' },
+  'initiative.vocal_cue': { origin: 'node' },
   'candidate.state_changed': { origin: 'node' },
   'candidate.rejected': { origin: 'node' },
   'signal.sent': { origin: 'node' },

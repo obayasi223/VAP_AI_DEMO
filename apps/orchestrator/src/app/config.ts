@@ -6,7 +6,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { Condition, ConversationKind, Policy, TimingStrategy, type PolicyOverrideInfo } from '@llm-vap/contracts';
+import { Condition, ConversationKind, Policy, TimingStrategy, VocalCueMode, type PolicyOverrideInfo } from '@llm-vap/contracts';
 import { loadOverrideFile } from '../dev/policy_override';
 import { REPO_ROOT } from '../maai';
 
@@ -40,6 +40,10 @@ export interface OrchestratorConfig {
   conversation_kind_from_client: boolean;
   /** 画面の ?timing_strategy= を使うか（TIMING_STRATEGY_FROM_CLIENT、既定 true）。false なら既定に固定する。 */
   timing_strategy_from_client: boolean;
+  /** 吸気の後の短い声の既定（VOCAL_CUE、既定は none＝無音の吸気だけ。不正値は none）。initiative_inhale のときだけ効く。 */
+  vocal_cue: VocalCueMode;
+  /** 画面の ?vocal_cue= を使うか（VOCAL_CUE_FROM_CLIENT、既定 true）。false なら既定に固定する。 */
+  vocal_cue_from_client: boolean;
   sessions_dir: string;
   stt: ProviderMode;
   tts: ProviderMode;
@@ -112,6 +116,15 @@ export function readSessionAudioConfig(env: NodeJS.ProcessEnv = process.env): Se
   return { enabled: flag(env.SAVE_SESSION_AUDIO, false), min_free_bytes: minFreeMb * 1024 * 1024 };
 }
 
+/** VOCAL_CUE。不正値は既定の none（無音の吸気だけの動作を変えない）。 */
+function vocalCueFromEnv(value: string | undefined): VocalCueMode {
+  if (value === undefined || value === '') return 'none';
+  const parsed = VocalCueMode.safeParse(value);
+  if (parsed.success) return parsed.data;
+  console.warn(`[orchestrator] ignored an invalid VOCAL_CUE (${value.slice(0, 40)}); using none`);
+  return 'none';
+}
+
 export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorConfig {
   const policyFile = path.resolve(REPO_ROOT, env.POLICY_FILE || 'config/policy.ja.json');
   const basePolicy = Policy.parse(JSON.parse(readFileSync(policyFile, 'utf-8')));
@@ -133,6 +146,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
     timing_strategy: TimingStrategy.parse(env.TIMING_STRATEGY || staged?.timing_strategy || 'v2'),
     conversation_kind_from_client: flag(env.CONVERSATION_KIND_FROM_CLIENT, true),
     timing_strategy_from_client: flag(env.TIMING_STRATEGY_FROM_CLIENT, true),
+    vocal_cue: vocalCueFromEnv(env.VOCAL_CUE),
+    vocal_cue_from_client: flag(env.VOCAL_CUE_FROM_CLIENT, true),
     sessions_dir: path.resolve(REPO_ROOT, env.SESSIONS_DIR || 'sessions'),
     stt: mode('STT_PROVIDER_CLASS', env),
     tts: mode('TTS_PROVIDER_CLASS', env),

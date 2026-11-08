@@ -45,7 +45,7 @@ export interface OutcomeSttRow {
 export interface OutcomeStartInput {
   audio_playback_id: number;
   segment_id: number;
-  origin: 'response' | 'candidate';
+  origin: 'response' | 'candidate' | 'vocal_cue';
   candidate_id: Maybe<string>;
   conversation_kind: Maybe<string>;
   decided_at: number;

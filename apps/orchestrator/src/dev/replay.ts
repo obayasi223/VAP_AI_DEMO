@@ -127,7 +127,7 @@ interface RecordedSpeech {
   interrupted: boolean;
   spoken_text: string;
   spoken_text_precision: Ev<'speech.ended'>['spoken_text_precision'];
-  origin: 'response' | 'candidate';
+  origin: 'response' | 'candidate' | 'vocal_cue';
   candidate_id: string | null;
   /** speech.started／ended の started_at／ended_at（再生の報告の時刻）と音声位置。 */
   playback_started_at: number;

@@ -88,6 +88,15 @@ export type CandidateRejectReason = z.infer<typeof CandidateRejectReason>;
 export const ConversationKind = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 export type ConversationKind = z.infer<typeof ConversationKind>;
 
+/**
+ * 吸気の後の短い声（docs/initiative_v3_design.md §10）。研究の主眼は無音の吸気なので既定は none（無音の吸気だけ）で、別モードとして分けて分析する。
+ * pre_beginning は発話権の申し出（「あ、」など）、backchannel は相槌（「うん」のみ、発話権を主張しない）。
+ */
+export const VocalCueMode = z.enum(['none', 'pre_beginning', 'backchannel']);
+export type VocalCueMode = z.infer<typeof VocalCueMode>;
+export const VocalCueKind = z.enum(['pre_beginning', 'backchannel']);
+export type VocalCueKind = z.infer<typeof VocalCueKind>;
+
 /** タイミング段の方式。llm=希望があるときだけ2回目の LLM、immediate=希望が出たら次の機会に申し出る、v2=既存の1段判定。 */
 export const TimingStrategy = z.enum(['llm', 'immediate', 'v2']);
 export type TimingStrategy = z.infer<typeof TimingStrategy>;

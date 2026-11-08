@@ -35,7 +35,7 @@ export interface Span {
 
 export interface AiSpeechSpan extends Span {
   audio_playback_id: number;
-  origin: 'response' | 'candidate';
+  origin: 'response' | 'candidate' | 'vocal_cue';
   outcome: 'speaking' | 'ended' | 'interrupted';
 }
 

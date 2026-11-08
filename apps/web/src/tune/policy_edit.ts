@@ -137,7 +137,8 @@ export function thresholdLines(policy: unknown): ThresholdLines {
   }
   for (const leaf of numericLeaves(policy)) {
     if (seen.has(leaf.path) || leaf.value < 0 || leaf.value > 1) continue;
-    if (/similarity|completion\.thresholds|stability|TURNGPT|index/i.test(leaf.path)) continue;
+    // vocal_cue は既定で動かない別モードなので、調整の図には重ねない。
+    if (/similarity|completion\.thresholds|stability|TURNGPT|index|vocal_cue/i.test(leaf.path)) continue;
     const name = leaf.path.split('.').at(-1) ?? '';
     const lane: keyof ThresholdLines | null = /p_fut|PFUT/i.test(name)
       ? 'p_future'

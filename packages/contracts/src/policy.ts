@@ -111,6 +111,24 @@ export const InitiativeTrigger = z.strictObject({
 export type InitiativeTrigger = z.infer<typeof InitiativeTrigger>;
 
 /**
+ * 吸気の後の短い声の切れ目の基準（docs/initiative_v3_design.md §10）。**未校正の暫定値**（根拠は実測ではない）。
+ * 既存の信号（VAP の vad、ASR の更新の間隔、人の発話の終わりからの間）だけで決める。どれかが null なら未校正として声を出さない（黙って別の値に置き換えない）。
+ */
+export const InitiativeVocalCue = z.strictObject({
+  /** 人の発話の終わり（TurnManager の user_speak_end_time）からの間の下限。これ未満は短すぎて出さない。 */
+  min_user_silence_ms: NonNegativeMs.nullable(),
+  /** ASR の最後の更新からの間の下限（人の発話がまだ続いている間は ASR が更新される）。 */
+  min_asr_quiet_ms: NonNegativeMs.nullable(),
+  /** VAP の vad（人のチャネル）の上限。これ以上は人の声が続いているとみなして出さない。 */
+  max_vad_user: Probability.nullable(),
+  /** 発話権の申し出の語。『あ、』と『あの、』を切り替えられる（backchannel は「うん」のみで変えない）。 */
+  pre_beginning_phrase: z.enum(['あ、', 'あの、']),
+  /** 音声の終わりから人の反応を観測する窓（initiative.vocal_cue の observation）。 */
+  observation_window_ms: NonNegativeMs,
+});
+export type InitiativeVocalCue = z.infer<typeof InitiativeVocalCue>;
+
+/**
  * 発話希望を振る舞いにつなぐ交渉（E2 の合図、E3 の選択。計画 §4.6）。値はどれも【暫定、未校正】。
  * 省略したら交渉は動かず、どの条件でも候補を記録するだけ（波2の振る舞い）。
  */
@@ -138,6 +156,8 @@ export const InitiativeNegotiation = z.strictObject({
   cue_max_judgement_age_ms: NonNegativeMs.nullable(),
   /** 合図の後の人の反応を観測する窓（negotiation.cue_reaction）。【暫定、未校正】省略は記録しない。 */
   cue_reaction_window_ms: NonNegativeMs.optional(),
+  /** 吸気の後の短い声の切れ目の基準。【暫定、未校正】省略は vocal_cue を選んでも声を出さない。 */
+  vocal_cue: InitiativeVocalCue.optional(),
 });
 export type InitiativeNegotiation = z.infer<typeof InitiativeNegotiation>;
 

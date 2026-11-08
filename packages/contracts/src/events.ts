@@ -13,7 +13,7 @@ import {
   TrackSettings,
   VisibilityName,
 } from './browser_rpc';
-import { CandidateCause, CandidateRejectReason, CandidateState, ContentWithdrawKind, ConversationKind, TimingVerdict, WithdrawEvidenceSource } from './candidates';
+import { CandidateCause, CandidateRejectReason, CandidateState, ContentWithdrawKind, ConversationKind, TimingVerdict, VocalCueKind, WithdrawEvidenceSource } from './candidates';
 import {
   AsrSegmentId,
   AudioFrameIndex,
@@ -578,6 +578,58 @@ export const InitiativeResponseReflectionEvent = eventSchema('initiative.respons
   at: MonotonicMs,
 });
 
+/**
+ * 吸気の後の短い声（vocal_cue、docs/initiative_v3_design.md §10）。**観測の記録で、人が譲ったとは断定しない**。
+ * 切れ目の値は判定に使った値、observation は音声の終わりから窓（observation_window_ms）の間に測った値だけを残す。
+ */
+export const InitiativeVocalCueEvent = eventSchema('initiative.vocal_cue', {
+  vocal_cue_kind: VocalCueKind,
+  phrase: NonEmptyString,
+  candidate_id: CandidateId,
+  candidate_version: CandidateVersion,
+  /** 元の吸気の合図（DEFERRED の候補の cue_id）。 */
+  cue_id: NonEmptyString,
+  audio_playback_id: AudioPlaybackId,
+  /** 声を出すと決めた tick の時刻。 */
+  decided_at: MonotonicMs,
+  gap: z.strictObject({
+    /** 人の発話の終わりからの間。 */
+    user_silence_ms: NonNegativeMs,
+    /** ASR の最後の更新からの間。 */
+    asr_quiet_ms: NonNegativeMs,
+    /** VAP の vad の人の側（判定の時点）。 */
+    vad_user: Maybe(Probability),
+    p_now_ai: Maybe(Probability),
+    p_future_ai: Maybe(Probability),
+    /** 判定に使った基準（policy.initiative.negotiation.vocal_cue、未校正の暫定値）。 */
+    min_user_silence_ms: NonNegativeMs,
+    min_asr_quiet_ms: NonNegativeMs,
+    max_vad_user: Probability,
+  }),
+  /** speech.started と同じ時刻（書き込み＋出力遅延）。音が出なければ null と理由。 */
+  audio_started_at: Maybe(MonotonicMs),
+  audio_ended_at: Maybe(MonotonicMs),
+  audio_outcome: z.enum(['played', 'interrupted', 'not_played']),
+  /** 声として出た部分だけ（出なければ空）。 */
+  spoken_text: z.string(),
+  observation: z.strictObject({
+    window_ms: NonNegativeMs,
+    observed_ms: NonNegativeMs,
+    /** window は窓の満了、ai_speech_started は窓の前に AI が話し始めた、candidate_resolved は窓の前に候補が解決した、not_played は音が出なかった。 */
+    ended_by: z.enum(['window', 'ai_speech_started', 'candidate_resolved', 'session_ended', 'not_played']),
+    ticks: NonNegativeInt,
+    user_speaking_ticks: NonNegativeInt,
+    /** 音声の再生の間に人が話していた tick があったか。 */
+    user_speaking_during_audio: z.boolean(),
+    user_speaking_at_audio_end: z.boolean(),
+    /** 音声の終わりの時点で黙っていた人が話し始めるまでの時間（窓の中で話さなければ null と理由）。 */
+    time_to_user_resume_ms: Maybe(NonNegativeMs),
+    /** 窓の間に候補の発話が始まったか。 */
+    candidate_speech_started: z.boolean(),
+    candidate_states: z.array(CandidateState),
+  }),
+});
+
 /** 候補がすでに AI の話した内容と同じなのでコードが撤回した（candidate.state_changed の cause=already_said と対で出す）。 */
 export const InitiativeAlreadySaidEvent = eventSchema('initiative.already_said', {
   candidate_id: CandidateId,
@@ -718,6 +770,12 @@ function speechEvent<Name extends string, Shape extends z.ZodRawShape>(name: Nam
       origin: z.literal('candidate'),
       candidate_id: CandidateId,
       candidate_version: CandidateVersion,
+    }),
+    /** 吸気の後の短い声（どの候補の声かは initiative.vocal_cue の audio_playback_id で結ぶ）。 */
+    eventSchema(name, {
+      ...shape,
+      origin: z.literal('vocal_cue'),
+      vocal_cue_kind: VocalCueKind,
     }),
   ]);
 }
@@ -970,7 +1028,7 @@ export const TurnOutcomeEvent = z.discriminatedUnion('kind', [
     kind: z.literal('ai_utterance'),
     audio_playback_id: AudioPlaybackId,
     segment_id: SegmentId,
-    origin: z.enum(['response', 'candidate']),
+    origin: z.enum(['response', 'candidate', 'vocal_cue']),
     candidate_id: Maybe(CandidateId),
     /** 二段判定の会話の種類（manifest の conversation_kind）。 */
     conversation_kind: Maybe(NonEmptyString),
@@ -1040,6 +1098,7 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   InitiativeResponseMaterialEvent,
   InitiativeResponseReflectionEvent,
   InitiativeAlreadySaidEvent,
+  InitiativeVocalCueEvent,
   CandidateStateChangedEvent,
   CandidateRejectedEvent,
   SignalSentEvent,
@@ -1085,6 +1144,7 @@ export const EVENT_NAMES = [
   'initiative.response_material',
   'initiative.response_reflection',
   'initiative.already_said',
+  'initiative.vocal_cue',
   'candidate.state_changed',
   'signal.sent',
   'signal.started',

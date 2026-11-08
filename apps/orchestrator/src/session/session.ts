@@ -53,6 +53,7 @@ import type {
   TurnInputs,
   Unsubscribe,
   Vap2chState,
+  VocalCueMode,
 } from '@llm-vap/contracts';
 import { ResponsePrefetch } from '../cognition/prefetch';
 import { createTurnManager, userTextFor } from '../control';
@@ -71,9 +72,11 @@ import { FALLBACK_ENERGY_FLOOR_DBFS, PlaybackTracker, rmsDbfs } from './audio_st
 import { SessionHistory, UserUtterances } from './history';
 import { InitiativeWiring } from './initiative_wiring';
 import { NegotiationWiring, negotiatorSettings } from './negotiation_wiring';
-import { readVap, vapDirectionSettings } from '../control/vap_direction';
+import { readVadUser, readVap, vapDirectionSettings } from '../control/vap_direction';
 import { turnOutcomeSettings } from '../control/turn_outcome';
+import { vocalCueSettings } from '../control/vocal_cue';
 import { TurnOutcomeWiring } from './turn_outcome_wiring';
+import { VocalCueWiring } from './vocal_cue_wiring';
 import type { CandidateChoice } from './negotiation_wiring';
 
 export interface BrowserLink {
@@ -172,6 +175,10 @@ export class Session {
   private negotiation: NegotiationWiring | null = null;
   /** 判定は動いているのに交渉だけ作れなかった理由（negotiatorSettings が null）。 */
   private negotiationReason: string | null = null;
+  /** 吸気の後の短い声（別モード）。vocal_cue が none のときは作らない（無音の吸気の動作を変えない）。 */
+  private vocalCue: VocalCueWiring | null = null;
+  /** vocal_cue を選んだのに声が動かない理由（条件が違う、未校正など）。 */
+  private vocalCueReason: string | null = null;
   /** 会話の音声の保存。設定がなければ null（何も書かない）。 */
   private audioRecorder: SessionAudioRecorder | null = null;
   private manifestDetails: SessionManifestDetails | null = null;
@@ -371,6 +378,10 @@ export class Session {
         profile_version: this.initiative !== null ? (initiative?.staged?.profile.profile_version ?? null) : null,
         conversation_kind_source: initiative?.choice?.conversation_kind_source ?? null,
         timing_strategy_source: initiative?.choice?.timing_strategy_source ?? null,
+        vocal_cue: this.vocalCue?.settings.kind ?? 'none',
+        vocal_cue_requested: initiative?.choice?.vocal_cue ?? 'none',
+        vocal_cue_source: initiative?.choice?.vocal_cue_source ?? null,
+        vocal_cue_reason: this.vocalCueReason,
         // 波3: reactive は記録だけ。initiative_no_cue は合図なしで発話、initiative_inhale は吸気の合図の後に発話。
         candidates_used_for:
           this.negotiation === null || this.options.condition === 'reactive'
@@ -498,13 +509,15 @@ export class Session {
         stop: (m) => this.send({ type: 'playback.stop', ...m }),
       },
       time: this.time,
-      emitter: this.outcome?.tee(this.emitter) ?? this.emitter,
+      // none のときは VocalCueWiring が null で、これまでと同じ emitter のまま。
+      emitter: this.vocalCue?.tee(this.outcome?.tee(this.emitter) ?? this.emitter) ?? this.outcome?.tee(this.emitter) ?? this.emitter,
       is_ready_buffer_ms: isReadyBufferMs(policy),
     });
     this.speech = speech;
     this.prefetch = new ResponsePrefetch({ speech, time: this.time, emitter: this.emitter });
     this.unsubscribe.push(
       speech.onStateChange((change) => {
+        this.vocalCue?.onSpeechState(change, this.time.monotonicMs());
         this.negotiation?.onSpeechState(change);
         this.outcome?.onSpeechState(change);
         const origin = change.request.origin;
@@ -521,6 +534,11 @@ export class Session {
         this.initiative?.onSpeechFinished(finished, this.time.monotonicMs());
         if (finished.no_audio && finished.origin.kind === 'candidate') this.queueCandidateRecovery(finished.origin.candidate_id, 'speech_no_audio', finished.audio_playback_id);
         this.outcome?.onFinished(finished, this.time.monotonicMs());
+        // 吸気の後の短い声は履歴に入れない（LLM の文脈を汚さない）。already_said の照合の対象にもしない。
+        if (finished.origin.kind === 'vocal_cue') {
+          this.vocalCue?.onFinished(finished, this.time.monotonicMs());
+          return;
+        }
         const segment = this.startedInSegment.get(finished.audio_playback_id);
         this.startedInSegment.delete(finished.audio_playback_id);
         this.history.commitAssistantSpoken(
@@ -596,10 +614,30 @@ export class Session {
       } else {
         this.negotiationReason = 'negotiation_settings_unavailable';
       }
+      this.buildVocalCue(setup.choice?.vocal_cue ?? 'none');
     } catch (error) {
       // policy の未校正（null）など。音声の経路は止めない。
       this.initiativeReason = `initiative_unavailable:${String(error instanceof Error ? error.message : error).slice(0, 200)}`;
     }
+  }
+
+  /** 吸気の後の短い声。none なら何も作らない（既定）。選んだのに動かないときは理由を manifest と degraded に残す。 */
+  private buildVocalCue(requested: VocalCueMode): void {
+    if (requested === 'none') return;
+    const policy = this.options.policy;
+    const built = policy.policy_id === 'ja' ? vocalCueSettings(policy, requested, this.options.condition) : { settings: null, reason: 'policy_has_no_initiative_section' };
+    if (built.settings === null || this.negotiation === null || this.initiative === null) {
+      this.vocalCueReason = built.reason ?? this.negotiationReason ?? 'negotiation_not_running';
+      if (this.options.condition === 'initiative_inhale') this.fixedReasons.push(`vocal_cue_unavailable:${this.vocalCueReason}`);
+      return;
+    }
+    this.vocalCue = new VocalCueWiring({
+      settings: built.settings,
+      negotiation: this.negotiation,
+      initiative: this.initiative,
+      emitter: this.emitter,
+      speech: () => this.speech,
+    });
   }
 
   /**
@@ -930,12 +968,63 @@ export class Session {
       }
       for (const decision of decisions) this.dispatch(decision, now);
       this.outcome?.afterStep({ now, decisions, state: this.turnState, inputs, candidate_id: this.startedCandidate ? (candidate?.choice.candidate?.candidate_id ?? null) : null });
+      this.tickVocalCue(now);
       // 期限と人の発話の有無だけを同期で進める。LLM の結果は待たない。
       this.initiative?.tick(now, this.turnState.user_speaking);
     } catch (error) {
       this.counters.tick_errors += 1;
       if (this.counters.tick_errors <= 5) console.error(`[session ${this.session_id}] tick failed:`, error);
     }
+  }
+
+  /**
+   * 吸気の後の短い声（別モード）。許可の前の短い切れ目でだけ鳴らす。音声は通常の再生の経路で、VAP の AI チャネルとエコー判定、turn.outcome の対象になる。
+   * TurnManager の状態の話し中（starting）に入れて、再生の報告までの間も新しい開始と重ならないようにする（segment は進めない）。
+   */
+  private tickVocalCue(now: number): void {
+    const wiring = this.vocalCue;
+    if (wiring === null) return;
+    const state = this.turnState;
+    const vap = state.vap_freshness === 'fresh' ? this.vap : null;
+    const view = vap === null ? null : readVap(vap, vapDirectionSettings(this.options.policy));
+    const started = wiring.tick({
+      now,
+      state,
+      link_attached: this.link !== null,
+      active_playback: this.speech?.activePlayback() ?? null,
+      vad_user: vap === null ? null : readVadUser(vap),
+      p_now_ai: view?.p_now_ai ?? null,
+      p_future_ai: view?.p_future_ai ?? null,
+    });
+    if (started === null) return;
+    this.turnState = {
+      ...state,
+      mode: 'ai_speaking',
+      speaking: { phase: 'starting', audio_playback_id: started.audio_playback_id, requested_at: now },
+    };
+    this.outcome?.noteVocalCueStart({
+      audio_playback_id: started.audio_playback_id,
+      segment_id: state.segment_id,
+      candidate_id: started.candidate_id,
+      now,
+      audio_frame: this.receivedAudioFrame,
+      payload: {
+        turn_allowed: false,
+        invitation: state.invitation,
+        user_speaking: state.user_speaking,
+        p_now: view ? present(view.p_now_ai) : absent(`vap_${state.vap_freshness}`),
+        p_future: view ? present(view.p_future_ai) : absent(`vap_${state.vap_freshness}`),
+        completion_p: this.completion.p,
+        completion_revision: this.completion.revision === null ? absent('no_estimate_yet') : present(this.completion.revision),
+        gap_ms: present(started.user_silence_ms),
+        priority: absent('priority_not_implemented_until_e3'),
+        policy_id: this.options.policy.policy_id,
+        decision_source: 'vap',
+        vap_freshness: state.vap_freshness,
+        fallback_energy: absent('vap_is_fresh'),
+        reason: `vocal_cue:${wiring.settings.kind}`,
+      },
+    });
   }
 
   private dispatch(decision: TurnDecision, now: number): void {
@@ -1150,6 +1239,7 @@ export class Session {
     this.closed = true;
     if (this.tickTimer !== null) clearInterval(this.tickTimer);
     this.negotiation?.finishReactions(this.time.monotonicMs());
+    this.vocalCue?.close_session(this.time.monotonicMs());
     this.initiative?.close();
     this.link = null;
     for (const unsubscribe of this.unsubscribe.splice(0)) unsubscribe();

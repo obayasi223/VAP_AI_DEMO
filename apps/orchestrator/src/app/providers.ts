@@ -17,6 +17,7 @@ import type {
   TimingStrategy,
   TtsProvider,
   TurnCompletionEstimator,
+  VocalCueMode,
 } from '@llm-vap/contracts';
 import { NullTurnCompletionEstimator, createCompletionEstimator } from '../cognition/completion';
 import { CURRENT_PROMPT_VERSION, parseConversationKindProfile, parsePersona } from '../cognition/initiative';
@@ -35,8 +36,8 @@ import type { ScriptedInitiativeMode } from './scripted';
  */
 function scriptedInitiative(env: NodeJS.ProcessEnv): ScriptedInitiativeMode {
   const value = env.SCRIPTED_INITIATIVE || 'none';
-  if (value !== 'none' && value !== 'new_on_input' && value !== 'wait_on_input' && value !== 'revise_on_input' && value !== 'withdraw_on_input') {
-    throw new Error(`SCRIPTED_INITIATIVE must be none, new_on_input, wait_on_input, revise_on_input or withdraw_on_input, got ${value}`);
+  if (value !== 'none' && value !== 'new_on_input' && value !== 'wait_on_input' && value !== 'revise_on_input' && value !== 'withdraw_on_input' && value !== 'defer_on_input') {
+    throw new Error(`SCRIPTED_INITIATIVE must be none, new_on_input, wait_on_input, revise_on_input, withdraw_on_input or defer_on_input, got ${value}`);
   }
   return value;
 }
@@ -97,6 +98,9 @@ export interface InitiativeChoice {
   conversation_kind_source: ChoiceSource;
   timing_strategy: TimingStrategy;
   timing_strategy_source: ChoiceSource;
+  /** 吸気の後の短い声（省略は none）。initiative_inhale のときだけ効く。 */
+  vocal_cue?: VocalCueMode;
+  vocal_cue_source?: ChoiceSource;
 }
 
 /** 会話の種類の設定ファイル（config/conversation_kind.<kind>.ja.json）。 */
@@ -181,6 +185,8 @@ export async function createSessionProviders(input: {
     conversation_kind_source: 'default',
     timing_strategy: config.timing_strategy,
     timing_strategy_source: 'default',
+    vocal_cue: config.vocal_cue,
+    vocal_cue_source: 'default',
   };
   const initiative = initiativeFor({ config, condition, time, emitter, env, choice });
   if (completion.error !== null) console.error(`[orchestrator] completion estimator unavailable: ${completion.error}`);

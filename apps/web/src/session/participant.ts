@@ -50,12 +50,14 @@ export const TIMING_STRATEGY_LABELS: Record<TimingStrategy, string> = {
 };
 
 /** WS の URL に会話の種類と方式を足す。null の項目は足さない（Node の既定）。 */
-export function withInitiativeChoice(wsUrl: string, choice: { conversation_kind?: ConversationKind | null; timing_strategy?: TimingStrategy | null }): string {
-  const { conversation_kind = null, timing_strategy = null } = choice;
-  if (conversation_kind === null && timing_strategy === null) return wsUrl;
+export function withInitiativeChoice(wsUrl: string, choice: { conversation_kind?: ConversationKind | null; timing_strategy?: TimingStrategy | null; vocal_cue?: string | null }): string {
+  const { conversation_kind = null, timing_strategy = null, vocal_cue = null } = choice;
+  if (conversation_kind === null && timing_strategy === null && vocal_cue === null) return wsUrl;
   const url = new URL(wsUrl);
   if (conversation_kind !== null) url.searchParams.set('conversation_kind', conversation_kind);
   if (timing_strategy !== null) url.searchParams.set('timing_strategy', timing_strategy);
+  // 吸気の後の短い声（別モード、既定は無音）。値の検証は orchestrator（不正値は none）。
+  if (vocal_cue !== null) url.searchParams.set('vocal_cue', vocal_cue);
   return url.toString();
 }
 
@@ -253,7 +255,7 @@ export class ParticipantController {
    * クリックのハンドラの中で呼ぶこと（自動再生の制限）。condition は開始画面で選んだ研究条件（null は Node の既定）。
    * 再接続も同じ URL を使うので、同じセッションの間は条件が変わらない。
    */
-  async start(options: { condition?: Condition | null; conversation_kind?: ConversationKind | null; timing_strategy?: TimingStrategy | null } = {}): Promise<void> {
+  async start(options: { condition?: Condition | null; conversation_kind?: ConversationKind | null; timing_strategy?: TimingStrategy | null; vocal_cue?: string | null } = {}): Promise<void> {
     if (this.view.phase === 'starting' || this.view.phase === 'running') return;
     this.update({ phase: 'starting', error: null });
     try {
@@ -261,6 +263,7 @@ export class ParticipantController {
         wsUrl: withInitiativeChoice(withCondition(this.options.wsUrl, options.condition ?? null), {
           conversation_kind: options.conversation_kind ?? null,
           timing_strategy: options.timing_strategy ?? null,
+          vocal_cue: options.vocal_cue ?? null,
         }),
         onMessage: (message) => this.onMessage(message),
         // 再生の始まりと終わりは Worker が Node へ送る報告で知る（主スレッドには別に届かない）。

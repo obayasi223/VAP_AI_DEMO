@@ -366,7 +366,17 @@ function afterCueBlock(item) {
     el('tr', {}, el('th', { text: '流れ' }), el('td', { text: view.label })),
     el('tr', {}, el('th', { text: '延期' }), el('td', { text: view.deferred ? `あり（${fmtT(view.deferred_at)}）` : 'なし' })),
     el('tr', {}, el('th', { text: '結末' }), el('td', { text: `${ending}${view.ending_at === null ? '' : `（${fmtT(view.ending_at)}）`}` })),
+    el('tr', {}, el('th', { text: '吸気の後の声' }), el('td', { text: vocalCueText(view.vocal_cue) })),
   );
+}
+
+// 吸気の後の短い声（別モード）。その後に人が話したかは観測の値だけを出し、譲ったとは書かない。
+function vocalCueText(cue) {
+  if (!cue) return 'なし';
+  const kind = { pre_beginning: '話し出しの声', backchannel: '相づち' }[cue.kind] ?? cue.kind;
+  const audio = { played: '最後まで再生', interrupted: '割り込みで停止', not_played: '再生されず' }[cue.audio_outcome] ?? cue.audio_outcome;
+  const resumed = cue.resumed_ms === null ? '観測の窓の中で人の発話の再開なし' : `音声の後 ${cue.resumed_ms} ms で人の発話を観測`;
+  return `「${cue.phrase}」（${kind}）／ 開始 ${fmtT(cue.audio_started_at)} ／ 終了 ${fmtT(cue.audio_ended_at)} ／ ${audio} ／ ${resumed} ／ 窓の間の候補の発話 ${cue.candidate_speech_started ? 'あり' : 'なし'}`;
 }
 
 // 通常応答に渡した材料（渡した版）と、実際に話した文の比較。反映はコードの文字の一致からの推定で、確定ではない。
@@ -402,7 +412,7 @@ function lineRow(line) {
     { class: `line ${line.role} ${line.final ? '' : 'interim'}` },
     el('span', { class: 't', text: fmtT(line.t_ms) }),
     el('span', { class: 'who', text: line.role === 'user' ? '人' : 'AI' }),
-    el('span', { class: 'txt' }, line.text, line.final ? '' : ' （未確定）', line.origin === 'candidate' ? el('span', { class: 'badge code', text: '発話希望の発話' }) : null),
+    el('span', { class: 'txt' }, line.text, line.final ? '' : ' （未確定）', line.origin === 'candidate' ? el('span', { class: 'badge code', text: '発話希望の発話' }) : line.origin === 'vocal_cue' ? el('span', { class: 'badge code', text: '吸気の後の声' }) : null),
     el('button', { class: 'linebtn', disabled: !state.doc, onclick: () => startMissedFromLine(line), text: missed ? '印あり・追加' : '＋ 見逃しの印' }),
   );
 }
@@ -666,6 +676,8 @@ function filterQuery() {
   const prompt = document.getElementById('f-prompt').value;
   if (conversation) params.set('conversation_type', conversation);
   if (prompt) params.set('prompt_version', prompt);
+  const vocalCue = document.getElementById('f-vocal-cue').value;
+  if (vocalCue) params.set('vocal_cue', vocalCue);
   const text = params.toString();
   return text ? `?${text}` : '';
 }
@@ -675,6 +687,7 @@ async function refreshSessions() {
   state.sessions = data.sessions;
   fillSelect('f-conversation', ['', ...data.options.conversation_types], (v) => v || '（すべて）');
   fillSelect('f-prompt', ['', ...data.options.prompt_versions], (v) => v || '（すべて）');
+  fillSelect('f-vocal-cue', ['', ...data.options.vocal_cue_kinds], (v) => ({ '': '（すべて）', none: '声なし', pre_beginning: '話し出しの声', backchannel: '相づち' })[v] ?? v);
   const select = document.getElementById('session');
   select.replaceChildren(...state.sessions.map((s) => el('option', { value: s.session_id, text: `${s.session_id}（${s.conversation_type}）` })));
   const keep = state.sessions.some((s) => s.session_id === state.sessionId);
@@ -722,6 +735,7 @@ async function main() {
   document.getElementById('session').addEventListener('change', () => void loadSelectedSession());
   document.getElementById('f-conversation').addEventListener('change', () => void refreshSessions());
   document.getElementById('f-prompt').addEventListener('change', () => void refreshSessions());
+  document.getElementById('f-vocal-cue').addEventListener('change', () => void refreshSessions());
   document.getElementById('unrated').addEventListener('change', renderList);
   window.addEventListener('beforeunload', (e) => {
     if (state.dirty) e.preventDefault();

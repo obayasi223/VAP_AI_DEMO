@@ -336,6 +336,28 @@ export interface Collected {
   materials: MaterialRecord[];
   reflections: ReflectionRecord[];
   alreadySaid: AlreadySaidRecord[];
+  vocalCues: VocalCueRecord[];
+}
+
+/** 吸気の後の短い声（initiative.vocal_cue）。観測の値だけで、譲ったかどうかは持たない。 */
+export interface VocalCueRecord {
+  t_ms: number;
+  candidate_id: string;
+  candidate_version: number | null;
+  kind: string;
+  phrase: string;
+  audio_playback_id: number | null;
+  decided_at: number | null;
+  audio_started_at: number | null;
+  audio_ended_at: number | null;
+  audio_outcome: string;
+  silence_ms: number | null;
+  asr_quiet_ms: number | null;
+  resumed_ms: number | null;
+  resume_null_reason: string | null;
+  candidate_speech_started: boolean;
+  ended_by: string | null;
+  user_speaking_at_audio_end: boolean;
 }
 
 /** 通常応答の材料として渡した記録（initiative.response_material）。 */
@@ -394,6 +416,7 @@ export function emptyCollected(): Collected {
     materials: [],
     reflections: [],
     alreadySaid: [],
+    vocalCues: [],
   };
 }
 
@@ -730,6 +753,33 @@ function readReflection(e: RawEvent, c: Collected): void {
   });
 }
 
+function readVocalCue(e: RawEvent, c: Collected): void {
+  const candidate_id = str(e.candidate_id);
+  if (candidate_id === null) return;
+  const observation = (e.observation ?? {}) as RawEvent;
+  const gap = (e.gap ?? {}) as RawEvent;
+  const resume = (observation.time_to_user_resume_ms ?? {}) as { value?: unknown; null_reason?: unknown };
+  c.vocalCues.push({
+    t_ms: num(e.decided_at) ?? eventTime(e),
+    candidate_id,
+    candidate_version: num(e.candidate_version),
+    kind: str(e.vocal_cue_kind) ?? 'unknown',
+    phrase: str(e.phrase) ?? '',
+    audio_playback_id: num(e.audio_playback_id),
+    decided_at: num(e.decided_at),
+    audio_started_at: num(unwrapValue(e.audio_started_at)),
+    audio_ended_at: num(unwrapValue(e.audio_ended_at)),
+    audio_outcome: str(e.audio_outcome) ?? 'unknown',
+    silence_ms: num(gap.user_silence_ms),
+    asr_quiet_ms: num(gap.asr_quiet_ms),
+    resumed_ms: num(resume.value),
+    resume_null_reason: typeof resume.null_reason === 'string' ? resume.null_reason : null,
+    candidate_speech_started: observation.candidate_speech_started === true,
+    ended_by: str(observation.ended_by),
+    user_speaking_at_audio_end: observation.user_speaking_at_audio_end === true,
+  });
+}
+
 function readAlreadySaid(e: RawEvent, c: Collected): void {
   const candidate_id = str(e.candidate_id);
   if (candidate_id === null) return;
@@ -781,6 +831,7 @@ export const EVENT_READERS: Record<string, EventReader> = {
   'initiative.response_material': readMaterial,
   'initiative.response_reflection': readReflection,
   'initiative.already_said': readAlreadySaid,
+  'initiative.vocal_cue': readVocalCue,
 };
 
 export function collect(events: RawEvent[]): Collected {

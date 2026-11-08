@@ -95,6 +95,8 @@ export function loadSession(dir: string): ReviewSession {
     conversation_type,
     persona_id,
     prompt_versions,
+    vocal_cue_mode: str(initiative.vocal_cue),
+    vocal_cue_kinds: [...new Set(collected.vocalCues.map((v) => v.kind))],
     audio_files: listAudioFiles(dir),
   };
   return { meta, items, lines, has_audio_map: hasAudioMap, warnings };
@@ -117,6 +119,7 @@ export function eventsStamp(dir: string): string {
 export function itemMatches(item: ReviewItem, filter: ItemFilter): boolean {
   if (filter.conversation_type && item.conversation_type !== filter.conversation_type) return false;
   if (filter.prompt_version && !item.prompt_versions.includes(filter.prompt_version)) return false;
+  if (filter.vocal_cue && (item.after_cue?.vocal_cue?.kind ?? 'none') !== filter.vocal_cue) return false;
   return true;
 }
 
@@ -127,6 +130,8 @@ export function filterItems(items: ReviewItem[], filter: ItemFilter): ReviewItem
 export function sessionMatches(meta: SessionMeta, filter: ItemFilter): boolean {
   if (filter.conversation_type && meta.conversation_type !== filter.conversation_type) return false;
   if (filter.prompt_version && !meta.prompt_versions.includes(filter.prompt_version)) return false;
+  // none は声を出さなかった判定（どのセッションにもありうる）。種類を選んだらその種類の声が出たセッションだけ。
+  if (filter.vocal_cue && filter.vocal_cue !== 'none' && !meta.vocal_cue_kinds.includes(filter.vocal_cue)) return false;
   return true;
 }
 
@@ -135,4 +140,9 @@ export function filterOptions(metas: SessionMeta[]): { conversation_types: strin
     conversation_types: [...new Set(metas.map((m) => m.conversation_type))].sort(),
     prompt_versions: [...new Set(metas.flatMap((m) => m.prompt_versions))].sort(),
   };
+}
+
+/** 吸気の後の声の絞り込みの選択肢。none（声なし）は常に出す。 */
+export function vocalCueOptions(metas: SessionMeta[]): string[] {
+  return [...new Set(['none', ...metas.flatMap((m) => m.vocal_cue_kinds)])];
 }

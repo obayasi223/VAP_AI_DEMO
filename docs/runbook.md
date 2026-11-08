@@ -335,6 +335,9 @@ SAVE_SESSION_AUDIO=1 npm run dev:orchestrator
 
    吸気がほとんど出ず動きだけを確かめたいときは、`timing_strategy=immediate` にします。
 
+   吸気の後の短い声の別モードは、URL に `&vocal_cue=pre_beginning`（「あ、」）か `&vocal_cue=backchannel`（「うん」）を足します（`initiative_inhale` のときだけ効きます。既定は `none` で無音の吸気のみ）。
+   URL で変えられないように固定するときは、`.env` に `VOCAL_CUE=pre_beginning` と `VOCAL_CUE_FROM_CLIENT=0` を書きます。分析では manifest の `initiative.vocal_cue` と評価画面の「吸気の後の声」で分けます。
+
 3. 開始時にターミナル1の `session audio: SAVING ...` を確かめます。最初の約 10 秒は VAP の準備中です。
 
 4. 吸気を見たら、次の反応を意識して試します。下の 3 つは実 MaAI で一度も通していない経路です。

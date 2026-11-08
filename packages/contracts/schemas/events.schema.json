@@ -6643,6 +6643,473 @@
       "additionalProperties": false
     },
     {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "number",
+          "const": 1
+        },
+        "t_monotonic_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "wall_clock": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {
+          "type": "string",
+          "enum": [
+            "reactive",
+            "initiative_no_cue",
+            "initiative_inhale"
+          ]
+        },
+        "time_basis": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "orchestrator",
+                "browser_rtt",
+                "worker_audio_frame"
+              ]
+            },
+            "uncertainty_ms": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "uncertainty_ms"
+          ],
+          "additionalProperties": false
+        },
+        "event": {
+          "type": "string",
+          "const": "initiative.vocal_cue"
+        },
+        "vocal_cue_kind": {
+          "type": "string",
+          "enum": [
+            "pre_beginning",
+            "backchannel"
+          ]
+        },
+        "phrase": {
+          "type": "string",
+          "minLength": 1
+        },
+        "candidate_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "candidate_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "cue_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "audio_playback_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "decided_at": {
+          "type": "number",
+          "minimum": 0
+        },
+        "gap": {
+          "type": "object",
+          "properties": {
+            "user_silence_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "asr_quiet_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "vad_user": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "p_now_ai": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "p_future_ai": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "min_user_silence_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "min_asr_quiet_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "max_vad_user": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "user_silence_ms",
+            "asr_quiet_ms",
+            "vad_user",
+            "p_now_ai",
+            "p_future_ai",
+            "min_user_silence_ms",
+            "min_asr_quiet_ms",
+            "max_vad_user"
+          ],
+          "additionalProperties": false
+        },
+        "audio_started_at": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "null_reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value",
+                "null_reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "audio_ended_at": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "null_reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value",
+                "null_reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "audio_outcome": {
+          "type": "string",
+          "enum": [
+            "played",
+            "interrupted",
+            "not_played"
+          ]
+        },
+        "spoken_text": {
+          "type": "string"
+        },
+        "observation": {
+          "type": "object",
+          "properties": {
+            "window_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "observed_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "ended_by": {
+              "type": "string",
+              "enum": [
+                "window",
+                "ai_speech_started",
+                "candidate_resolved",
+                "session_ended",
+                "not_played"
+              ]
+            },
+            "ticks": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "user_speaking_ticks": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "user_speaking_during_audio": {
+              "type": "boolean"
+            },
+            "user_speaking_at_audio_end": {
+              "type": "boolean"
+            },
+            "time_to_user_resume_ms": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "candidate_speech_started": {
+              "type": "boolean"
+            },
+            "candidate_states": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "INTENT_READY",
+                  "BREATH_INHALE",
+                  "BREATH_HOLD_OR_READY",
+                  "DEFERRED",
+                  "SPEAKING",
+                  "SPOKEN",
+                  "WITHDRAWN"
+                ]
+              }
+            }
+          },
+          "required": [
+            "window_ms",
+            "observed_ms",
+            "ended_by",
+            "ticks",
+            "user_speaking_ticks",
+            "user_speaking_during_audio",
+            "user_speaking_at_audio_end",
+            "time_to_user_resume_ms",
+            "candidate_speech_started",
+            "candidate_states"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema_version",
+        "t_monotonic_ms",
+        "wall_clock",
+        "session_id",
+        "condition",
+        "time_basis",
+        "event",
+        "vocal_cue_kind",
+        "phrase",
+        "candidate_id",
+        "candidate_version",
+        "cue_id",
+        "audio_playback_id",
+        "decided_at",
+        "gap",
+        "audio_started_at",
+        "audio_ended_at",
+        "audio_outcome",
+        "spoken_text",
+        "observation"
+      ],
+      "additionalProperties": false
+    },
+    {
       "oneOf": [
         {
           "type": "object",
@@ -9392,6 +9859,172 @@
             "candidate_version"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "number",
+              "const": 1
+            },
+            "t_monotonic_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "wall_clock": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "condition": {
+              "type": "string",
+              "enum": [
+                "reactive",
+                "initiative_no_cue",
+                "initiative_inhale"
+              ]
+            },
+            "time_basis": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "orchestrator",
+                    "browser_rtt",
+                    "worker_audio_frame"
+                  ]
+                },
+                "uncertainty_ms": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "null"
+                        },
+                        "null_reason": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "value",
+                        "null_reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "uncertainty_ms"
+              ],
+              "additionalProperties": false
+            },
+            "event": {
+              "type": "string",
+              "const": "speech.started"
+            },
+            "audio_playback_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "audio_frame": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "started_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "first_pcm_written_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "output_latency_ms": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "origin": {
+              "type": "string",
+              "const": "vocal_cue"
+            },
+            "vocal_cue_kind": {
+              "type": "string",
+              "enum": [
+                "pre_beginning",
+                "backchannel"
+              ]
+            }
+          },
+          "required": [
+            "schema_version",
+            "t_monotonic_ms",
+            "wall_clock",
+            "session_id",
+            "condition",
+            "time_basis",
+            "event",
+            "audio_playback_id",
+            "audio_frame",
+            "started_at",
+            "first_pcm_written_at",
+            "output_latency_ms",
+            "origin",
+            "vocal_cue_kind"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -9775,6 +10408,199 @@
             "origin",
             "candidate_id",
             "candidate_version"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "number",
+              "const": 1
+            },
+            "t_monotonic_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "wall_clock": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "condition": {
+              "type": "string",
+              "enum": [
+                "reactive",
+                "initiative_no_cue",
+                "initiative_inhale"
+              ]
+            },
+            "time_basis": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "orchestrator",
+                    "browser_rtt",
+                    "worker_audio_frame"
+                  ]
+                },
+                "uncertainty_ms": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "null"
+                        },
+                        "null_reason": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "value",
+                        "null_reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "uncertainty_ms"
+              ],
+              "additionalProperties": false
+            },
+            "event": {
+              "type": "string",
+              "const": "speech.ended"
+            },
+            "audio_playback_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "audio_frame": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "started_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "first_pcm_written_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "output_latency_ms": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "spoken_text": {
+              "type": "string"
+            },
+            "spoken_text_precision": {
+              "type": "string",
+              "enum": [
+                "word_timing",
+                "alignment_char",
+                "time_proportional"
+              ]
+            },
+            "samples_written": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tts_text": {
+              "type": "string"
+            },
+            "ended_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "origin": {
+              "type": "string",
+              "const": "vocal_cue"
+            },
+            "vocal_cue_kind": {
+              "type": "string",
+              "enum": [
+                "pre_beginning",
+                "backchannel"
+              ]
+            }
+          },
+          "required": [
+            "schema_version",
+            "t_monotonic_ms",
+            "wall_clock",
+            "session_id",
+            "condition",
+            "time_basis",
+            "event",
+            "audio_playback_id",
+            "audio_frame",
+            "started_at",
+            "first_pcm_written_at",
+            "output_latency_ms",
+            "spoken_text",
+            "spoken_text_precision",
+            "samples_written",
+            "ended_at",
+            "origin",
+            "vocal_cue_kind"
           ],
           "additionalProperties": false
         }
@@ -10196,6 +11022,217 @@
             "origin",
             "candidate_id",
             "candidate_version"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "number",
+              "const": 1
+            },
+            "t_monotonic_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "wall_clock": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "condition": {
+              "type": "string",
+              "enum": [
+                "reactive",
+                "initiative_no_cue",
+                "initiative_inhale"
+              ]
+            },
+            "time_basis": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "orchestrator",
+                    "browser_rtt",
+                    "worker_audio_frame"
+                  ]
+                },
+                "uncertainty_ms": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "null"
+                        },
+                        "null_reason": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "value",
+                        "null_reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "uncertainty_ms"
+              ],
+              "additionalProperties": false
+            },
+            "event": {
+              "type": "string",
+              "const": "speech.interrupted"
+            },
+            "audio_playback_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "audio_frame": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "started_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "first_pcm_written_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "output_latency_ms": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "spoken_text": {
+              "type": "string"
+            },
+            "spoken_text_precision": {
+              "type": "string",
+              "enum": [
+                "word_timing",
+                "alignment_char",
+                "time_proportional"
+              ]
+            },
+            "samples_written": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tts_text": {
+              "type": "string"
+            },
+            "interrupted_at": {
+              "type": "number",
+              "minimum": 0
+            },
+            "stop_point": {
+              "type": "string",
+              "enum": [
+                "word_boundary",
+                "fade_at_limit",
+                "immediate"
+              ]
+            },
+            "decision_source": {
+              "type": "string",
+              "enum": [
+                "vap",
+                "fallback",
+                "woz"
+              ]
+            },
+            "origin": {
+              "type": "string",
+              "const": "vocal_cue"
+            },
+            "vocal_cue_kind": {
+              "type": "string",
+              "enum": [
+                "pre_beginning",
+                "backchannel"
+              ]
+            }
+          },
+          "required": [
+            "schema_version",
+            "t_monotonic_ms",
+            "wall_clock",
+            "session_id",
+            "condition",
+            "time_basis",
+            "event",
+            "audio_playback_id",
+            "audio_frame",
+            "started_at",
+            "first_pcm_written_at",
+            "output_latency_ms",
+            "spoken_text",
+            "spoken_text_precision",
+            "samples_written",
+            "interrupted_at",
+            "stop_point",
+            "decision_source",
+            "origin",
+            "vocal_cue_kind"
           ],
           "additionalProperties": false
         }
@@ -12768,7 +13805,8 @@
               "type": "string",
               "enum": [
                 "response",
-                "candidate"
+                "candidate",
+                "vocal_cue"
               ]
             },
             "candidate_id": {

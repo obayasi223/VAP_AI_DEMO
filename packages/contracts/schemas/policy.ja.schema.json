@@ -707,6 +707,64 @@
             "cue_reaction_window_ms": {
               "type": "number",
               "minimum": 0
+            },
+            "vocal_cue": {
+              "type": "object",
+              "properties": {
+                "min_user_silence_ms": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "min_asr_quiet_ms": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "max_vad_user": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "pre_beginning_phrase": {
+                  "type": "string",
+                  "enum": [
+                    "あ、",
+                    "あの、"
+                  ]
+                },
+                "observation_window_ms": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "min_user_silence_ms",
+                "min_asr_quiet_ms",
+                "max_vad_user",
+                "pre_beginning_phrase",
+                "observation_window_ms"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
