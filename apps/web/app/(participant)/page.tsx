@@ -14,7 +14,7 @@
  * 選択を隠す（条件を送らず、orchestrator の CONDITION に任せる。orchestrator 側も CONDITION_FROM_CLIENT=0 で固定する）。
  * 試験（apps/orchestrator/test/e2e）は window.__participant を読む。
  */
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Avatar } from '../../src/avatar';
 import { avatarRecord, resolveAvatarChoice } from '../../src/avatar/avatar_models';
 import {
@@ -28,6 +28,8 @@ import {
 import { parseBreathSoundGain } from '../../src/session/breath_sound';
 import type { Condition } from '@llm-vap/contracts/common';
 import type { ConversationKind, TimingStrategy } from '@llm-vap/contracts';
+import styles from './participant.module.css';
+import { ChoiceGroup, MicDetails, NoticeList, picker } from './parts';
 
 const CONDITIONS: Condition[] = ['reactive', 'initiative_inhale', 'initiative_no_cue'];
 const isCondition = (value: string | null | undefined): value is Condition => CONDITIONS.includes(value as Condition);
@@ -79,19 +81,28 @@ function defaultWsUrl(): string {
   return `ws://${window.location.hostname}:8787/ws`;
 }
 
+/** 参加者に見せる文。専門語と内部の名前を出さない（元の理由は研究者画面と記録で見られる）。 */
 function describeReason(reason: string): string | null {
-  if (reason.startsWith('vap:rewarm')) return '話者交替の予測（VAP）を準備しています。始めの10秒ほどは AI が返事をしにくいことがあります。';
-  if (reason.startsWith('vap:worker_not_started') || reason.startsWith('vap:no_vap_state')) return '話者交替の予測（VAP）が動いていません。';
-  if (reason.startsWith('vap:')) return '話者交替の予測（VAP）が一時的に使えません。';
-  if (reason.startsWith('vap_unavailable')) return '話者交替の予測（MaAI）を起動していません。';
-  if (reason.startsWith('stt_unavailable')) return '音声認識に接続できません。';
-  if (reason.startsWith('tts_unavailable')) return '音声合成に接続できません。';
-  if (reason.startsWith('llm_unavailable')) return '応答生成に接続できません。';
-  if (reason.startsWith('completion_unavailable')) return '発話の終わりの推定が使えません。AI の返事が遅れることがあります。';
-  if (reason.startsWith('negotiation_unavailable')) return '発話の申し出の機能が動いていません。研究者に知らせてください。';
-  if (reason.startsWith('test_double')) return null; // 下の「試験用」の表示で出す
-  return reason;
+  if (reason.startsWith('vap:rewarm')) return '会話の準備をしています。はじめの10秒ほどは、AI が返事をしにくいことがあります。';
+  if (reason.startsWith('vap:worker_not_started') || reason.startsWith('vap:no_vap_state')) return '会話の間合いを読む機能が動いていません。研究者に知らせてください。';
+  if (reason.startsWith('vap:')) return '会話の間合いを読む機能が、一時的に使えません。';
+  if (reason.startsWith('vap_unavailable')) return '会話の間合いを読む機能を起動していません。研究者に知らせてください。';
+  if (reason.startsWith('stt_unavailable')) return '声を聞き取る機能につながっていません。研究者に知らせてください。';
+  if (reason.startsWith('tts_unavailable')) return 'AI の声を作る機能につながっていません。研究者に知らせてください。';
+  if (reason.startsWith('llm_unavailable')) return 'AI の返事を作る機能につながっていません。研究者に知らせてください。';
+  if (reason.startsWith('completion_unavailable')) return '話し終わりの判断がしにくくなっています。AI の返事が遅れることがあります。';
+  if (reason.startsWith('negotiation_unavailable')) return 'AI の機能の一部が動いていません。研究者に知らせてください。';
+  if (reason.startsWith('test_double')) return null; // 「試験用」の表示で出す
+  return HIDE_CONDITION_PICKER ? '機能の一部が一時的に使えません。研究者に知らせてください。' : reason;
 }
+
+type AvatarLoad = { kind: 'loading' } | { kind: 'done' } | { kind: 'failed'; detail: string };
+
+const SETUP_COPY: Record<'idle' | 'stopped' | 'failed', { title: string; lead: string | null; startLabel: string }> = {
+  idle: { title: 'AI と声で話します', lead: null, startLabel: 'はじめる' },
+  stopped: { title: '会話を終えました', lead: 'おつかれさまでした。', startLabel: 'もう一度はじめる' },
+  failed: { title: 'はじめられませんでした', lead: null, startLabel: 'もう一度はじめる' },
+};
 
 const LINK_TEXT: Record<ParticipantView['link'], string> = {
   none: '未接続',
@@ -108,7 +119,7 @@ export default function ParticipantPage() {
   const avatarErrorRef = useRef<string | null>(null);
   const controllerRef = useRef<ParticipantController | null>(null);
   const [view, setView] = useState<ParticipantView>(INITIAL_VIEW);
-  const [avatarStatus, setAvatarStatus] = useState('アバターを読み込み中…');
+  const [avatarLoad, setAvatarLoad] = useState<AvatarLoad>({ kind: 'loading' });
   const [condition, setCondition] = useState<Condition | null>(null);
   const [conversationKind, setConversationKind] = useState<ConversationKind | null>(null);
   const [kindChoices, setKindChoices] = useState<ConversationKind[]>(CONVERSATION_KINDS);
@@ -149,7 +160,7 @@ export default function ParticipantPage() {
       try {
         if (choice.spec === null || choice.url === null) {
           // ?avatar=none: 描画なしの比較（測定用）。会話はできる。
-          setAvatarStatus('');
+          setAvatarLoad({ kind: 'done' });
           controllerRef.current?.setAvatarRecord(avatarRecord(choice, 'disabled'));
           startForMeasure();
           return;
@@ -168,7 +179,7 @@ export default function ParticipantPage() {
         }
         created = avatar;
         avatarRef.current = avatar;
-        setAvatarStatus('');
+        setAvatarLoad({ kind: 'done' });
         controllerRef.current?.setAvatarRecord(avatarRecord(choice, 'loaded'));
         startForMeasure();
       } catch (error) {
@@ -176,7 +187,7 @@ export default function ParticipantPage() {
         avatarErrorRef.current = message;
         controllerRef.current?.setAvatarRecord(avatarRecord(choice, 'failed', message.slice(0, 300)));
         startForMeasure();
-        setAvatarStatus(`アバターを表示できません（${message}）。会話はできます。`);
+        setAvatarLoad({ kind: 'failed', detail: message });
       }
     })();
     return () => {
@@ -195,198 +206,128 @@ export default function ParticipantPage() {
     };
   }, []);
 
-  const reasons = [...new Set(view.reasons.map(describeReason).filter((r): r is string => r !== null))];
+  const live = view.phase === 'starting' || view.phase === 'running';
+  // 会話の間だけ見せる（終わった後に残っていても意味がない）。
+  const messages = live ? [...new Set(view.reasons.map(describeReason).filter((r): r is string => r !== null)), ...view.warnings] : [];
+  const notices = <NoticeList error={view.error} isFake={view.isFake} messages={messages} />;
+
   const settings = view.trackSettings;
   const flag = (v: { value: boolean | null } | undefined) => (v?.value === null || v === undefined ? '不明' : v.value ? 'ON' : 'OFF');
+  const micDetails = (settings || view.sessionId) && (
+    <MicDetails>
+      {settings && (
+        <>
+          <ul>
+            <li>エコーキャンセル: {flag(settings.echoCancellation)}（OFF が正常）</li>
+            <li>ノイズ抑制: {flag(settings.noiseSuppression)}（OFF が正常）</li>
+            <li>自動音量調整: {flag(settings.autoGainControl)}（OFF が正常）</li>
+            <li>処理レート: {view.sampleRateHz ?? '不明'} Hz</li>
+            {view.inputDevices.map((d) => (
+              <li key={d.label + String(d.isDefault)}>
+                {d.isDefault ? '使用中（既定）: ' : '接続あり: '}
+                {d.label}
+              </li>
+            ))}
+          </ul>
+          <p>使うマイクを変えるには、Windows の「サウンドの設定」で入力と出力の既定をヘッドセットにしてから、ページを再読み込みしてください。</p>
+        </>
+      )}
+      {view.sessionId && (
+        <p className={styles.sessionLine}>
+          session: {view.sessionId}
+          {!HIDE_CONDITION_PICKER && view.condition && ` ／ ${CONDITION_LABELS[view.condition]}`}
+        </p>
+      )}
+    </MicDetails>
+  );
+
+  // 選択肢を増やすときは、ここに 1 つ足す（画面の並びと折りたたみの要約に反映される）。
+  const pickers = [
+    picker({ name: 'condition', legend: '応答のしかた', testId: 'condition-picker', value: condition, values: CONDITIONS, label: (c) => CONDITION_LABELS[c], onChange: setCondition }),
+    picker({ name: 'conversation_kind', legend: '会話の種類', testId: 'conversation-kind-picker', value: conversationKind, values: kindChoices, label: (k) => CONVERSATION_KIND_LABELS[k] ?? k, onChange: setConversationKind }),
+    picker({ name: 'timing_strategy', legend: '申し出るタイミング', testId: 'timing-strategy-picker', value: timingStrategy, values: TIMING_STRATEGIES, label: (t) => TIMING_STRATEGY_LABELS[t], onChange: setTimingStrategy }),
+  ];
+  const pickedSummary = pickers.flatMap((p) => p.options.filter((o) => o.value === p.value).map((o) => o.label)).join('、') || 'すべて指定なし';
+
+  const copy = view.phase === 'idle' || view.phase === 'stopped' || view.phase === 'failed' ? SETUP_COPY[view.phase] : SETUP_COPY.idle;
+  const linkDown = view.phase === 'running' && view.link !== 'ready';
+  const stateText = view.phase === 'starting' ? '準備中…' : linkDown ? LINK_TEXT[view.link] : view.aiSpeaking ? 'AI が話しています' : 'どうぞ話してください';
+  const stateTone = view.phase === 'starting' || linkDown ? 'preparing' : view.aiSpeaking ? 'speaking' : 'listening';
 
   return (
-    <main style={styles.main}>
-      <div style={styles.stage}>
-        <div ref={containerRef} style={styles.canvas} data-testid="avatar-stage" />
-        {avatarStatus && <p style={styles.avatarStatus}>{avatarStatus}</p>}
-      </div>
-      <aside style={styles.panel}>
-        {view.phase === 'idle' || view.phase === 'failed' || view.phase === 'stopped' ? (
-          <>
-            <p style={styles.notice}>
-              <strong>有線のヘッドセット</strong>（マイク付き）を使ってください。スピーカーや Bluetooth
-              では正しく動きません。
-            </p>
-            <button
-              id="start"
-              type="button"
-              style={styles.button}
-              onClick={() =>
-                void controllerRef.current?.start(
-                  HIDE_CONDITION_PICKER
-                    ? { condition: null, conversation_kind: null, timing_strategy: null }
-                    : { condition, conversation_kind: conversationKind, timing_strategy: timingStrategy, vocal_cue: new URLSearchParams(window.location.search).get('vocal_cue') },
-                )
-              }
-            >
-              はじめる
-            </button>
-            {!HIDE_CONDITION_PICKER && (
-              <fieldset style={styles.conditions} data-testid="condition-picker">
-                <legend style={styles.small}>応答のしかた（体験用）</legend>
-                <label style={styles.conditionLabel}>
-                  <input
-                    type="radio"
-                    name="condition"
-                    value=""
-                    checked={condition === null}
-                    onChange={() => setCondition(null)}
-                  />{' '}
-                  指定しない（サーバーの既定）
-                </label>
-                {CONDITIONS.map((c) => (
-                  <label key={c} style={styles.conditionLabel}>
-                    <input
-                      type="radio"
-                      name="condition"
-                      value={c}
-                      checked={condition === c}
-                      onChange={() => setCondition(c)}
-                    />{' '}
-                    {CONDITION_LABELS[c]}
-                  </label>
-                ))}
-              </fieldset>
-            )}
-            {!HIDE_CONDITION_PICKER && (
-              <fieldset style={styles.conditions} data-testid="conversation-kind-picker">
-                <legend style={styles.small}>会話の種類（体験用）</legend>
-                <label style={styles.conditionLabel}>
-                  <input
-                    type="radio"
-                    name="conversation_kind"
-                    value=""
-                    checked={conversationKind === null}
-                    onChange={() => setConversationKind(null)}
-                  />{' '}
-                  指定しない（サーバーの既定）
-                </label>
-                {kindChoices.map((k) => (
-                  <label key={k} style={styles.conditionLabel}>
-                    <input
-                      type="radio"
-                      name="conversation_kind"
-                      value={k}
-                      checked={conversationKind === k}
-                      onChange={() => setConversationKind(k)}
-                    />{' '}
-                    {CONVERSATION_KIND_LABELS[k] ?? k}
-                  </label>
-                ))}
-              </fieldset>
-            )}
-            {!HIDE_CONDITION_PICKER && (
-              <fieldset style={styles.conditions} data-testid="timing-strategy-picker">
-                <legend style={styles.small}>申し出るタイミング（体験用）</legend>
-                <label style={styles.conditionLabel}>
-                  <input
-                    type="radio"
-                    name="timing_strategy"
-                    value=""
-                    checked={timingStrategy === null}
-                    onChange={() => setTimingStrategy(null)}
-                  />{' '}
-                  指定しない（サーバーの既定）
-                </label>
-                {TIMING_STRATEGIES.map((t) => (
-                  <label key={t} style={styles.conditionLabel}>
-                    <input
-                      type="radio"
-                      name="timing_strategy"
-                      value={t}
-                      checked={timingStrategy === t}
-                      onChange={() => setTimingStrategy(t)}
-                    />{' '}
-                    {TIMING_STRATEGY_LABELS[t]}
-                  </label>
-                ))}
-              </fieldset>
-            )}
-            <p style={styles.small}>押すとマイクの許可を求められます。「許可」を選んでください。</p>
-          </>
-        ) : (
-          <div data-testid="state">
-            <p style={styles.big}>
-              {view.phase === 'starting' ? '準備中…' : view.aiSpeaking ? 'AI が話しています' : 'どうぞ話してください'}
-            </p>
-            <p style={styles.small}>接続: {LINK_TEXT[view.link]}</p>
-            <button type="button" style={styles.stopButton} onClick={() => void controllerRef.current?.stop()}>
-              終了する
-            </button>
+    <main className={styles.shell} data-mode={live ? 'live' : 'setup'}>
+      <div className={styles.stage}>
+        <div ref={containerRef} className={styles.canvas} data-testid="avatar-stage" />
+        {avatarLoad.kind === 'loading' && <p className={styles.avatarStatus}>アバターを読み込み中…</p>}
+        {avatarLoad.kind === 'failed' && (
+          <div className={styles.avatarFailure} data-testid="avatar-failure">
+            <p>アバターを表示できません。会話はできます。</p>
+            <p className={styles.avatarFailureDetail}>{avatarLoad.detail}</p>
           </div>
         )}
-        {view.error && (
-          <p role="alert" style={styles.error}>
-            {view.error}
-          </p>
-        )}
-        {view.isFake && (
-          <p style={styles.warn} data-testid="fake">
-            試験用の設定です（台本のプロバイダを使っています）。本番の記録には数えません。
-          </p>
-        )}
-        {reasons.map((reason) => (
-          <p key={reason} style={styles.warn}>
-            {reason}
-          </p>
-        ))}
-        {view.warnings.map((warning) => (
-          <p key={warning} style={styles.warn}>
-            {warning}
-          </p>
-        ))}
-        {settings && (
-          <details style={styles.details}>
-            <summary>マイクの設定</summary>
-            <ul style={styles.list}>
-              <li>エコーキャンセル: {flag(settings.echoCancellation)}（OFF が正常）</li>
-              <li>ノイズ抑制: {flag(settings.noiseSuppression)}（OFF が正常）</li>
-              <li>自動音量調整: {flag(settings.autoGainControl)}（OFF が正常）</li>
-              <li>処理レート: {view.sampleRateHz ?? '不明'} Hz</li>
-              {view.inputDevices.map((d) => (
-                <li key={d.label + String(d.isDefault)}>
-                  {d.isDefault ? '使用中（既定）: ' : '接続あり: '}
-                  {d.label}
-                </li>
-              ))}
-            </ul>
-            <p style={styles.small}>
-              使うマイクを変えるには、Windows の「サウンドの設定」で入力と出力の既定をヘッドセットにしてから、ページを再読み込みしてください。
-            </p>
-          </details>
-        )}
-        {view.sessionId && (
-          <p style={styles.tiny}>
-            session: {view.sessionId}
-            {!HIDE_CONDITION_PICKER && view.condition && ` ／ ${CONDITION_LABELS[view.condition]}`}
-          </p>
-        )}
-      </aside>
+      </div>
+      {live ? (
+        <footer className={styles.dock}>
+          <div className={styles.dockBar}>
+            <div className={styles.state} data-testid="state">
+              <p className={styles.stateLine}>
+                <span className={styles.dot} data-tone={stateTone} aria-hidden="true" />
+                {stateText}
+              </p>
+              {view.phase === 'starting' && <p className={styles.stateHint}>マイクの使用の確認が出たら、「許可」を選んでください。</p>}
+            </div>
+            <div className={styles.actions}>
+              {micDetails}
+              <button type="button" className={styles.stopButton} onClick={() => void controllerRef.current?.stop()}>
+                終了する
+              </button>
+            </div>
+          </div>
+          {notices}
+        </footer>
+      ) : (
+        <aside className={styles.panel}>
+          <h1 className={styles.title}>{copy.title}</h1>
+          {copy.lead && <p className={styles.lead}>{copy.lead}</p>}
+          {notices}
+          <ol className={styles.steps}>
+            <li>
+              <strong>有線のヘッドセット</strong>（マイク付き）をつけてください。スピーカーや Bluetooth では正しく動きません。
+            </li>
+            <li>「{copy.startLabel}」を押すと、マイクの使用の確認が出ます。「許可」を選んでください。</li>
+            <li>あとは話すだけです。やめるときは「終了する」を押してください。</li>
+          </ol>
+          <button
+            id="start"
+            type="button"
+            className={styles.startButton}
+            onClick={() =>
+              void controllerRef.current?.start(
+                HIDE_CONDITION_PICKER
+                  ? { condition: null, conversation_kind: null, timing_strategy: null }
+                  : { condition, conversation_kind: conversationKind, timing_strategy: timingStrategy, vocal_cue: new URLSearchParams(window.location.search).get('vocal_cue') },
+              )
+            }
+          >
+            {copy.startLabel}
+          </button>
+          {micDetails}
+          {!HIDE_CONDITION_PICKER && (
+            <details className={styles.research} data-testid="research-settings">
+              <summary className={styles.foldSummary}>
+                実験の設定（研究者用）
+                <span className={styles.researchPicked}>{pickedSummary}</span>
+              </summary>
+              <div className={styles.researchBody}>
+                {pickers.map((p) => (
+                  <ChoiceGroup key={p.name} choice={p} />
+                ))}
+                <p className={styles.researchNote}>「指定しない」は、サーバーの既定に従います。</p>
+              </div>
+            </details>
+          )}
+        </aside>
+      )}
     </main>
   );
 }
-
-const styles: Record<string, CSSProperties> = {
-  main: { display: 'flex', height: '100vh', margin: 0, fontFamily: 'system-ui, sans-serif', background: '#f4f4f2' },
-  stage: { flex: 1, position: 'relative', minWidth: 0 },
-  canvas: { position: 'absolute', inset: 0 },
-  avatarStatus: { position: 'absolute', left: 16, bottom: 16, margin: 0, color: '#555' },
-  panel: { width: 340, padding: 20, boxSizing: 'border-box', background: '#fff', borderLeft: '1px solid #ddd', overflowY: 'auto' },
-  notice: { fontSize: 15, lineHeight: 1.6 },
-  button: { fontSize: 22, padding: '14px 40px', borderRadius: 8, border: 'none', background: '#2f6fdd', color: '#fff', cursor: 'pointer' },
-  stopButton: { fontSize: 14, padding: '6px 16px', marginTop: 12 },
-  big: { fontSize: 22, margin: '8px 0' },
-  small: { fontSize: 13, color: '#555' },
-  tiny: { fontSize: 11, color: '#999', marginTop: 24 },
-  warn: { fontSize: 13, background: '#fff4d6', border: '1px solid #e9c46a', padding: 8, borderRadius: 4 },
-  error: { fontSize: 14, background: '#fde2e1', border: '1px solid #e07a7a', padding: 8, borderRadius: 4 },
-  details: { marginTop: 16, fontSize: 13 },
-  list: { paddingLeft: 18 },
-  conditions: { marginTop: 16, border: '1px solid #ddd', borderRadius: 4, padding: '6px 10px' },
-  conditionLabel: { display: 'block', fontSize: 14, margin: '4px 0' },
-};
