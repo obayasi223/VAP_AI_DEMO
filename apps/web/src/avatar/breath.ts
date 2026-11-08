@@ -175,16 +175,16 @@ export const DEFAULT_NORMAL_BREATH: NormalBreathParams = {
   shoulderDeg: 0,
 };
 
-// 吸気の大きさは、合図として見えやすいよう実際の吸気より誇張している（利用者の指定。暫定で未校正）。
+// 吸気の大きさは、合図として見えやすいよう実際の吸気より誇張している（利用者の指定。暫定で未校正）。延期後の短い準備動作（short*）は誇張せず、従来の大きさに保つ。
 export const DEFAULT_PREP_BREATH: PrepBreathParams = {
-  depth: 1,
+  depth: 0.92,
   chestPitchDeg: -2.15,
   neckCompensation: 0.5,
   armPitchCompensation: 1,
   shoulderDeg: 4.4,
   armCompensation: 1,
-  headPitchDeg: -1.9,
-  mouthOpen: 0.145,
+  headPitchDeg: -1.8,
+  mouthOpen: 0.12,
   brow: 0.24,
   holdMaxMs: HOLD_MAX_MS,
   holdChestLevel: 0.96,
@@ -200,11 +200,11 @@ export const DEFAULT_PREP_BREATH: PrepBreathParams = {
   withdrawnExhaleMs: 750,
   withdrawnMouthCloseMs: 150,
   shortPrepMs: 250,
-  shortChest: 0.4,
+  shortChest: 0.3,
   shortMouth: 1,
-  shortHead: 0.6,
-  shortShoulder: 0.2,
-  shortBrow: 0.3,
+  shortHead: 0.47,
+  shortShoulder: 0.145,
+  shortBrow: 0.225,
   postSuppressMs: 700,
   idleDuringPrep: 0.25,
   idleSuppressMs: 200,
