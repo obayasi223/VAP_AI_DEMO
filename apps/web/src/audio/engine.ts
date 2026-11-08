@@ -225,6 +225,9 @@ export async function startBrowserAudio(options: BrowserAudioOptions): Promise<B
         latestClock = message.estimate;
         options.onClock?.(message.estimate);
         break;
+      case 'axis_ping':
+        post({ t: 'axis_pong', worker_t_ms: message.worker_t_ms, main_t_ms: performance.now() });
+        break;
       case 'error':
         options.onError?.(message.detail);
         break;

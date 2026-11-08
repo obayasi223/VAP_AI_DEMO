@@ -57,7 +57,7 @@ export type FromWorklet =
 // ---- Main → Worker ------------------------------------------------------------
 export interface TransportInit {
   url: string;
-  /** 主スレッドの performance.timeOrigin。client_t_ms をこの時間軸に揃える。 */
+  /** 主スレッドの performance.timeOrigin。時間軸の測定が届くまでの代用（ThreadAxisEstimator が優先）。 */
   mainTimeOrigin: number;
   sessionId: string | null;
   sampleRateHz: number;
@@ -79,6 +79,7 @@ export type MainToWorker =
   | { t: 'context_state'; state: ContextStateName }
   | { t: 'visibility'; visibility: VisibilityStateName }
   | { t: 'send'; message: BrowserToNode }
+  | { t: 'axis_pong'; worker_t_ms: number; main_t_ms: number }
   | { t: 'shutdown' };
 
 // ---- Worker → Main ------------------------------------------------------------
@@ -101,6 +102,8 @@ export interface TransportStats {
   audio_frame: number;
   render_lag_ms: number;
   worklet_arrival_delay_ms: number;
+  /** 主スレッドと Worker の時間軸の測定（ThreadAxisEstimator）。skew_ms は timeOrigin の引き算との差（観測用）。 */
+  thread_axis: { offset_ms: number; rtt_ms: number; skew_ms: number } | null;
 }
 
 export type WorkerToMain =
@@ -109,4 +112,5 @@ export type WorkerToMain =
   | { t: 'sent'; message: BrowserToNode }
   | { t: 'stats'; stats: TransportStats }
   | { t: 'clock'; estimate: ClockEstimate }
+  | { t: 'axis_ping'; worker_t_ms: number }
   | { t: 'error'; detail: string };

@@ -206,6 +206,30 @@ export function CandidatePanel({ candidates }: { candidates: CandidateSummary })
           </tbody>
         </table>
       )}
+      {candidates.notes.length === 0 ? null : (
+        <table className={`${styles.table} ${styles.wrapTable}`} data-testid="candidate-notes">
+          <thead>
+            <tr>
+              <th className={styles.num}>時刻 ms</th>
+              <th>候補</th>
+              <th>出来事</th>
+              <th>実測・検証</th>
+              <th>LLM 生成</th>
+            </tr>
+          </thead>
+          <tbody>
+            {candidates.notes.map((row) => (
+              <tr key={row.key}>
+                <td className={styles.num}>{ms(row.t_ms)}</td>
+                <td>{row.candidate_id ?? '-'}</td>
+                <td>{row.kind}</td>
+                <td>{row.detail}</td>
+                <td>{row.model_text ?? ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       {candidates.state_changes.length === 0 ? null : (
         <table className={`${styles.table} ${styles.wrapTable}`}>
           <thead>

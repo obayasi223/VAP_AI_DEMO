@@ -75,6 +75,19 @@ export interface DropRow {
   held: boolean;
 }
 
+/** 候補に関する、状態の遷移にならない出来事（持ち越し、材料、反映の推定、すでに話した内容の撤回、合図への反応、発話の選択）。 */
+export interface CandidateNoteRow {
+  key: string;
+  t_ms: number;
+  /** どの出来事か（表示用の語）。 */
+  kind: string;
+  /** コードの実測・検証の値。 */
+  detail: string;
+  /** LLM が書いた文があるとき。画面で「LLM 生成」と明示する。 */
+  model_text: string | null;
+  candidate_id: string | null;
+}
+
 export interface CandidateNow {
   candidate_id: string;
   candidate_version: number;
@@ -94,6 +107,8 @@ export interface CandidateSummary {
   rejected: number;
   /** 新しい順。 */
   drops: DropRow[];
+  /** 候補の周辺の出来事（新しい順）。 */
+  notes: CandidateNoteRow[];
 }
 
 const MAX_ROWS = 40;
@@ -257,6 +272,28 @@ export function decisionRow(event: Decision, index: number): DecisionRow {
   }
 }
 
+function reflectionDetail(event: EventOf<'initiative.response_reflection'>): string {
+  const estimate = event.estimate.value;
+  const parts = [`話した: ${event.spoken_outcome}`];
+  if (event.estimated_reflected.value !== null) parts.push(`推定 ${event.estimated_reflected.value ? '一致あり' : '一致なし'}`);
+  if (estimate !== null) parts.push(`包含率 ${estimate.containment.toFixed(2)}／基準 ${estimate.threshold}`);
+  return parts.join('、');
+}
+
+function cueReactionDetail(event: EventOf<'negotiation.cue_reaction'>): string {
+  const stop = event.time_to_user_stop_ms.value;
+  const start = event.time_to_user_start_ms.value;
+  return [
+    `終わり: ${event.ended_by}`,
+    `人の発話 tick ${event.user_speaking_ticks}/${event.ticks}`,
+    `合図時に話していた: ${event.user_speaking_at_cue ? 'はい' : 'いいえ'}`,
+    stop !== null ? `止まるまで ${Math.round(stop)}ms` : null,
+    start !== null ? `話し始めるまで ${Math.round(start)}ms` : null,
+  ]
+    .filter((x) => x !== null)
+    .join('、');
+}
+
 /** G が E2a の拒否を initiative.discarded へ写すときの頭（monitor.ts の rejected）。 */
 const E2A_COPY_PREFIX = 'e2a_rejected:';
 
@@ -269,6 +306,7 @@ export class CandidateTracker {
   private aborted = 0;
   private rejected = 0;
   private readonly drops: DropRow[] = [];
+  private readonly notes: CandidateNoteRow[] = [];
   private seq = 0;
 
   add(event: ResearchEvent): void {
@@ -308,6 +346,28 @@ export class CandidateTracker {
       case 'initiative.aborted':
         this.aborted += 1;
         break;
+      case 'initiative.not_offered':
+        this.addNote(event, '今は申し出ない（通常応答の後へ持ち越し）', `理由 ${event.reason}`, null, event.candidate_id);
+        break;
+      case 'initiative.response_material':
+        this.addNote(event, '通常応答に材料を渡した', `渡しただけ（使われたかは不明）${event.prompt_version}`, event.proposed_utterance.value, event.candidate_id);
+        break;
+      case 'initiative.response_reflection':
+        this.addNote(event, '材料の反映（推定）', reflectionDetail(event), event.proposed_utterance.value, event.candidate_id);
+        break;
+      case 'initiative.already_said': {
+        const c = event.comparison.value;
+        this.addNote(event, `すでに話した内容で撤回（${event.stage}）`, `類似度 ${c.similarity.toFixed(2)}／基準 ${c.threshold}（${c.method}）、一致 ${event.matched_origin} #${event.matched_audio_playback_id}`, event.proposed_utterance.value, event.candidate_id);
+        break;
+      }
+      case 'negotiation.cue_reaction':
+        this.addNote(event, '合図への反応（観測値）', cueReactionDetail(event), null, event.candidate_id);
+        break;
+      case 'negotiation.decision':
+        if (event.stage === 'speech_selection' || event.stage === 'candidate_audio') {
+          this.addNote(event, `発話の${event.stage === 'speech_selection' ? '選択' : '音声'}: ${event.outcome}`, event.reasons.join('、'), null, event.candidate_id.value);
+        }
+        break;
       default:
         break;
     }
@@ -322,6 +382,11 @@ export class CandidateTracker {
   private addDrop(row: DropRow): void {
     this.drops.unshift(row);
     if (this.drops.length > MAX_ROWS) this.drops.length = MAX_ROWS;
+  }
+
+  private addNote(event: ResearchEvent, kind: string, detail: string, model_text: string | null, candidate_id: string | null): void {
+    this.notes.unshift({ key: `n/${this.seq++}`, t_ms: event.t_monotonic_ms, kind, detail, model_text, candidate_id });
+    if (this.notes.length > MAX_ROWS) this.notes.length = MAX_ROWS;
   }
 
   private addDiscarded(event: Discarded): void {
@@ -383,6 +448,7 @@ export class CandidateTracker {
       aborted: this.aborted,
       rejected: this.rejected,
       drops: this.drops.slice(),
+      notes: this.notes.slice(),
     };
   }
 }

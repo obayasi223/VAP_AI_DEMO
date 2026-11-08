@@ -16,7 +16,7 @@ import {
   peekFrameKind,
   type PcmFrame,
 } from '@llm-vap/contracts/binary';
-import { ClockEstimator, RenderClock } from './clock_sync';
+import { ClockEstimator, RenderClock, ThreadAxisEstimator } from './clock_sync';
 import { PolyphaseResampler, designResampler, type ResamplerDesign } from './dsp/resampler';
 import type {
   FromWorklet,
@@ -38,6 +38,7 @@ const scope = self as unknown as WorkerScope;
 const MAX_PENDING_CONTROL = 256;
 const CLOCK_BURST = 6;
 const CLOCK_BURST_INTERVAL_MS = 100;
+const AXIS_PING_INTERVAL_MS = 500;
 const RECONNECT_MIN_MS = 250;
 const RECONNECT_MAX_MS = 5000;
 /** Node が「このセッションは別のタブで接続中」として新しい接続を断る close code（apps/orchestrator/src/ws/server.ts）。 */
@@ -64,6 +65,7 @@ let contextState: TransportInit['contextState'] = 'suspended';
 let visibility: TransportInit['visibility'] = 'visible';
 let renderClock: RenderClock | null = null;
 const clock = new ClockEstimator();
+const axis = new ThreadAxisEstimator();
 let pingSeq = 0;
 let burstLeft = 0;
 let clockTimer: ReturnType<typeof setTimeout> | null = null;
@@ -90,8 +92,15 @@ let latestAudioFrame = 0;
 let expectedAudioFrame: number | null = null;
 
 function clientNow(): number {
+  // 測定があれば往復の差を使う（主スレッドの軸）。timeOrigin の引き算は測定が届くまでの代用。
+  const offset = axis.offsetMs;
+  if (offset !== null) return Math.max(0, performance.now() + offset);
   const originMs = init === null ? performance.timeOrigin : init.mainTimeOrigin;
   return Math.max(0, performance.timeOrigin + performance.now() - originMs);
+}
+
+function axisPing(): void {
+  toMain({ t: 'axis_ping', worker_t_ms: performance.now() });
 }
 
 function toMain(message: WorkerToMain): void {
@@ -144,6 +153,13 @@ function toAudioSamples(contextFrames: number): number {
   return Math.floor((contextFrames * SAMPLE_RATE_HZ) / init.sampleRateHz);
 }
 
+function axisReport(): TransportStats['thread_axis'] {
+  const offset = axis.offsetMs;
+  const rtt = axis.rttMs;
+  if (offset === null || rtt === null || init === null) return null;
+  return { offset_ms: offset, rtt_ms: rtt, skew_ms: offset - (performance.timeOrigin - init.mainTimeOrigin) };
+}
+
 function stats(): TransportStats {
   const rate = init?.sampleRateHz ?? SAMPLE_RATE_HZ;
   return {
@@ -163,6 +179,7 @@ function stats(): TransportStats {
     audio_frame: latestAudioFrame,
     render_lag_ms: renderClock?.renderLagMs ?? 0,
     worklet_arrival_delay_ms: renderClock?.arrivalDelayMs ?? 0,
+    thread_axis: axisReport(),
   };
 }
 
@@ -354,7 +371,7 @@ function onJson(text: string): void {
           type: 'clock.report',
           offset_ms: estimate.offset_ms,
           rtt_ms: estimate.rtt_ms,
-          uncertainty_ms: estimate.uncertainty_ms,
+          uncertainty_ms: estimate.uncertainty_ms + axis.uncertaintyMs,
           samples: estimate.samples,
           client_t_ms: receivedAt,
         });
@@ -528,6 +545,9 @@ scope.onmessage = (event: MessageEvent<MainToWorker>) => {
       renderClock = new RenderClock(message.init.sampleRateHz);
       worklet.onmessage = onWorklet;
       setInterval(sendAudioReport, message.init.reportIntervalMs);
+      // 時間軸の測定: 主スレッドが詰まると RTT が伸びるので繰り返して最小を採る。
+      axisPing();
+      setInterval(axisPing, AXIS_PING_INTERVAL_MS);
       connect();
       break;
     case 'latency':
@@ -543,6 +563,9 @@ scope.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case 'send':
       sendControl(message.message);
+      break;
+    case 'axis_pong':
+      axis.add(message.worker_t_ms, message.main_t_ms, performance.now());
       break;
     case 'shutdown':
       shuttingDown = true;

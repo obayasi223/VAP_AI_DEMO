@@ -62,6 +62,11 @@ const NONE = json({ decision: 'NONE' });
 const USER_BACK: { p: [number, number, boolean]; loud: boolean } = { p: [0.1, 0.1, true], loud: true };
 const candidateContext = (r: Rig) => r.tts().contexts.find((c) => c.sent.join('').includes(UTTERANCE));
 const msgs = <T extends NodeToBrowser['type']>(r: Rig, type: T) => r.link.of(type);
+/** first の最後の送信が second の最初の送信より前。 */
+const sentBefore = (r: Rig, first: NodeToBrowser['type'], second: NodeToBrowser['type']) => {
+  const order = r.link.json.map((m) => m.type);
+  return order.lastIndexOf(first) >= 0 && order.lastIndexOf(first) < order.indexOf(second);
+};
 const states = (r: Rig) =>
   r.events.ofType('candidate.state_changed').map((e) => `${e.from ?? 'null'}->${e.to}:${e.cause_source === 'code' ? e.cause : e.decision}`);
 
@@ -96,6 +101,7 @@ describe('initiative_inhale（提案: 吸気で合図してから話す）', () 
     expect(begin).not.toBeNull();
     expect(msgs(rig, 'breath.cue')).toHaveLength(1); // 再吸気しない
     expect(msgs(rig, 'breath.prepare')).toEqual([{ type: 'breath.prepare', candidate_id: 'c_0001' }]); // 短い準備動作だけ
+    expect(sentBefore(rig, 'breath.prepare', 'playback.begin')).toBe(true); // 合図は音より先に届く
     expect(states(rig)).toEqual([
       'null->INTENT_READY:NEW',
       'INTENT_READY->BREATH_INHALE:signal_gate_allowed',
@@ -134,6 +140,7 @@ describe('initiative_inhale（提案: 吸気で合図してから話す）', () 
     expect(states(rig).slice(-2)).toEqual(['BREATH_INHALE->BREATH_HOLD_OR_READY:inhale_completed', 'BREATH_HOLD_OR_READY->SPEAKING:turn_allowed']);
     expect(msgs(rig, 'breath.release').at(-1)).toMatchObject({ reason: 'speech_started' });
     expect(msgs(rig, 'breath.prepare')).toEqual([]); // 吸気から直接話すときは解除だけ
+    expect(sentBefore(rig, 'breath.release', 'playback.begin')).toBe(true); // 合図は音より先に届く
   });
 
   it('吸気中に許可が出ている間は、準備済みの通常応答も始めない（吸気を終えてから候補を話す）', async () => {
