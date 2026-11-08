@@ -18,6 +18,7 @@ import {
   type VRM,
 } from '@pixiv/three-vrm';
 import type { GazeReport, GazeTarget } from '@llm-vap/contracts';
+import type { AvatarModelSpec } from './avatar_models';
 import { BlinkLayer, BlinkScheduler } from './blink';
 import {
   BREATH_CHEST_EXPRESSION,
@@ -39,6 +40,8 @@ import { computeRms, MouthLayer, VolumeMouthSource, mouthOpenAmount, type MouthS
 import { SaccadeGenerator, SaccadeLayer } from './saccade';
 import { boneSignForMeta, LayerStack, type AvatarLayer } from './pose';
 import { matcapScaleFor, mipmapAllowed, pixelRatioFor, resolveRenderSettings, type RenderSettings } from './render_settings';
+import type { AvatarRig } from './rig';
+import { createGlbRig } from './rig_glb';
 import { RAD2DEG, type Rng } from './util';
 
 export type Framing = 'bust' | 'face';
@@ -46,6 +49,8 @@ export type Framing = 'bust' | 'face';
 export interface AvatarOptions {
   container: HTMLElement;
   modelUrl: string;
+  /** モデルの種類と対応表（avatar_models.ts）。省略は VRM（従来どおり）。 */
+  model?: AvatarModelSpec;
   framing?: Framing;
   rng?: Rng;
   onProgress?: (loadedBytes: number, totalBytes: number) => void;
@@ -55,6 +60,17 @@ export interface AvatarOptions {
   render?: Partial<RenderSettings> | 'h1';
   /** 吸気の phase の遷移（rAF 時刻つき）。inhale の nowMs が吸気が最初に描かれたフレーム。記録は呼び出し側。 */
   onBreathPhase?: (event: BreathPhaseEvent) => void;
+  /** 測定用（/dev/avatar_measure）。毎フレーム render の直後に呼ぶ。指定がなければ何もしない。 */
+  onFrameRendered?: (timing: FrameTiming) => void;
+}
+
+/** 1フレームの時刻（performance.now の軸）。 */
+export interface FrameTiming {
+  rafMs: number;
+  startedMs: number;
+  renderedMs: number;
+  /** 描いたフレームの胸郭モーフの重み（吸気の最初の変化の検出に使う）。 */
+  chestWeight: number;
 }
 
 /** 読める形で公開する値。avatar.* イベントは契約に無いので、今は取りに来てもらう。 */
@@ -170,24 +186,12 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   const rng = options.rng ?? Math.random;
 
   const gltf = await loadGltf(options);
-  const vrm = gltf.userData.vrm as VRM | undefined;
-  if (!vrm) throw new Error(`VRM として読めなかった: ${options.modelUrl}`);
-  if (!vrm.lookAt || !vrm.expressionManager) throw new Error('VRM に lookAt か表情が無い');
-  const { lookAt, expressionManager, humanoid } = vrm;
-
-  VRMUtils.rotateVRM0(vrm);
-  // 見えない頂点を落とす処理は H2 の胸モーフ生成に影響しうるので入れない。
-  VRMUtils.combineSkeletons(gltf.scene);
-  vrm.scene.traverse((object) => {
-    object.frustumCulled = false;
-  });
-
   const settings = resolveRenderSettings(options.render);
-  prepareMaterials(vrm, settings);
+  const rig = options.model?.kind === 'glb' ? createGlbRig(gltf.scene, options.model) : createVrmRig(gltf, options.modelUrl, settings);
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(settings.background);
-  scene.add(vrm.scene);
+  scene.add(rig.root);
   const key = new THREE.DirectionalLight(0xffffff, settings.keyIntensity);
   key.position.set(...settings.keyPosition);
   const fill = new THREE.AmbientLight(0xffffff, settings.ambientIntensity);
@@ -200,7 +204,7 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   renderer.toneMapping = THREE.NoToneMapping;
   const applyPixelRatio = () => renderer.setPixelRatio(pixelRatioFor(window.devicePixelRatio, settings));
   applyPixelRatio();
-  applyTextureFiltering(vrm, settings, renderer.capabilities.getMaxAnisotropy());
+  rig.prepareTextures(renderer.capabilities.getMaxAnisotropy());
   container.appendChild(renderer.domElement);
   renderer.domElement.style.display = 'block';
 
@@ -217,10 +221,6 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(container);
 
-  registerMorphExpressions(vrm);
-  // 姿勢を当てる前（ボーンがバインド時の位置）に作る。
-  const breathMorph = registerChestMorph(vrm);
-
   const stack = new LayerStack();
   const mouth = new VolumeMouthSource();
   const lipSync = new AlignmentMouthSource(mouth, () => performance.now());
@@ -235,7 +235,7 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   const expression = new ExpressionLayer(rng, () => mouthOpenAmount(mouthLayer.shape));
   const breathPhaseListeners = new Set<(event: BreathPhaseEvent) => void>();
   const breath = new BreathLayer(rng, {
-    output: { chest: breathMorph.chestBone },
+    output: rig.breathOutput,
     speechOpen: () => mouthOpenAmount(mouthLayer.shape),
     setIdleScale: (scale) => {
       idle.suppression = scale;
@@ -258,43 +258,22 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
 
   const gazeReporter = new GazeReporter((report) => options.onGazeReport?.(report));
 
-  const sign = boneSignForMeta(vrm.meta.metaVersion);
   const applyPose = (dtMs: number, nowMs: number) => {
     blinkScheduler.speaking = expression.features.speaking > 0.5;
     const frame = stack.step({ dtMs, nowMs });
-    for (const [name, offset] of frame.bones) {
-      humanoid.getNormalizedBoneNode(name as VRMHumanBoneName)?.rotation.set(offset.x * sign.x, offset.y * sign.y, offset.z * sign.z);
-    }
-    // 前のフレームの頭の行列でカメラへの向きを求め、そらす量を足す。1フレーム遅れは問題にならない。
-    lookAt.lookAt(camera.position);
-    const baseYaw = lookAt.yaw;
-    const basePitch = lookAt.pitch;
-    lookAt.yaw = baseYaw * frame.eye.userWeight + frame.eye.yawDeg;
-    lookAt.pitch = basePitch * frame.eye.userWeight + frame.eye.pitchDeg;
-    for (const [name, weight] of frame.expressions) expressionManager.setValue(name, weight);
-    if (settings.springBones) {
-      vrm.update(Math.min(dtMs, MAX_SPRING_DT_MS) / 1000);
-    } else {
-      // vrm.update から spring bone だけを除いたもの（切り分け用）。
-      humanoid.update();
-      lookAt.update(dtMs / 1000);
-      expressionManager.update();
-      vrm.nodeConstraintManager?.update();
-    }
+    rig.applyFrame(frame, camera, dtMs);
   };
 
   // 最初の姿勢を当ててからカメラを置き、髪の揺れを新しい姿勢で初期化する。
   applyPose(0, performance.now());
-  vrm.scene.updateMatrixWorld(true);
-  vrm.springBoneManager?.setInitState();
-  vrm.springBoneManager?.reset();
+  rig.settle();
 
   const eyePosition = new THREE.Vector3();
   let currentFraming: Framing = options.framing ?? 'bust';
   let viewYawRad = 0;
   const placeCamera = (framing: Framing) => {
     currentFraming = framing;
-    lookAt.getLookAtWorldPosition(eyePosition);
+    rig.eyeWorldPosition(eyePosition);
     // bust は参加者画面の既定。ビデオ通話くらいの距離（頭から胸まで）で、カメラは目の高さ（目線が合う）。
     // 縦の画角 20 度、距離 1.6m で約 0.56m が写る。目が上から約 36% の高さに来るよう少し下を向ける。
     const distance = framing === 'face' ? 1.1 : 1.6;
@@ -306,7 +285,7 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   placeCamera(options.framing ?? 'bust');
 
   // シーングラフから読む頭の向き。
-  const headNode = humanoid.getRawBoneNode('head');
+  const headNode = rig.rawBone('head');
   const restHeadInverse = new THREE.Quaternion();
   headNode?.getWorldQuaternion(restHeadInverse);
   restHeadInverse.invert();
@@ -324,16 +303,6 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
       rollDeg: Math.atan2(-up.x, up.y) * RAD2DEG,
     };
   };
-  const leftEye = humanoid.getNormalizedBoneNode('leftEye');
-  const rightEye = humanoid.getNormalizedBoneNode('rightEye');
-  const eyeEuler = new THREE.Euler(0, 0, 0, 'YXZ');
-  const readEye = (node: THREE.Object3D | null) => {
-    if (!node) return { yawDeg: 0, pitchDeg: 0 };
-    eyeEuler.setFromQuaternion(node.quaternion, 'YXZ');
-    // 頭と同じ規約（pitch の正が下）で返す。
-    return { yawDeg: eyeEuler.y * RAD2DEG, pitchDeg: eyeEuler.x * sign.x * RAD2DEG };
-  };
-
   let rafId = 0;
   let lastMs: number | null = null;
   let disposed = false;
@@ -347,6 +316,7 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   const tick = (nowMs: number) => {
     if (disposed) return;
     rafId = requestAnimationFrame(tick);
+    const frameStartedMs = options.onFrameRendered ? performance.now() : 0;
     const dtMs = lastMs === null ? 16 : Math.min(nowMs - lastMs, MAX_LAYER_DT_MS);
     if (lastMs !== null && nowMs > lastMs) {
       const instant = 1000 / (nowMs - lastMs);
@@ -369,6 +339,7 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
       applyPose(dtMs * timeScale, layerClockMs);
     }
     renderer.render(scene, camera);
+    options.onFrameRendered?.({ rafMs: nowMs, startedMs: frameStartedMs, renderedMs: performance.now(), chestWeight: breath.telemetry().chestWeight });
     gazeReporter.rendered(nowMs);
     frameCount += 1;
     lastRafMs = nowMs;
@@ -431,8 +402,8 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
     addLayer: (layer, position) => stack.add(layer, position ?? null),
     removeLayer: (name) => stack.remove(name),
     getTelemetry: () => {
-      const left = readEye(leftEye);
-      const right = readEye(rightEye);
+      const left = rig.readEye('left');
+      const right = rig.readEye('right');
       const g = gazeLayer.state;
       return {
         frame: frameCount,
@@ -441,7 +412,7 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
         mouth: {
           open: mouthOpenAmount(mouthLayer.shape),
           shape: { ...mouthLayer.shape },
-          appliedAa: expressionManager.getValue('aa') ?? 0,
+          appliedAa: rig.expressionValue('aa'),
           mode: lipSync.mode,
           playbackPositionMs: lipSync.playbackPositionMs(),
         },
@@ -452,8 +423,8 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
           target: g.target,
           awayAmount: g.awayAmount,
           settled: g.settled,
-          eyeInputYawDeg: lookAt.yaw,
-          eyeInputPitchDeg: lookAt.pitch,
+          eyeInputYawDeg: rig.eyeInput().yawDeg,
+          eyeInputPitchDeg: rig.eyeInput().pitchDeg,
           leftEyeYawDeg: left.yawDeg,
           leftEyePitchDeg: left.pitchDeg,
           rightEyeYawDeg: right.yawDeg,
@@ -465,9 +436,9 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
         layers: stack.names(),
       };
     },
-    getModelInfo: () => ({ ...describeModel(vrm), breathMorph }),
+    getModelInfo: () => ({ ...rig.describe(), breathMorph: rig.breathMorph }),
     getBoneWorldPosition: (name) => {
-      const node = humanoid.getRawBoneNode(name as VRMHumanBoneName);
+      const node = rig.rawBone(name);
       if (!node) return null;
       const position = node.getWorldPosition(new THREE.Vector3());
       return { x: position.x, y: position.y, z: position.z };
@@ -477,10 +448,81 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
       disposed = true;
       cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
-      VRMUtils.deepDispose(vrm.scene);
+      rig.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     },
+  };
+}
+
+/** VRM の適合層。従来 createAvatar の中にあった処理をそのままここへ移した（動作は変えない）。 */
+function createVrmRig(gltf: Awaited<ReturnType<typeof loadGltf>>, modelUrl: string, settings: RenderSettings): AvatarRig {
+  const vrm = gltf.userData.vrm as VRM | undefined;
+  if (!vrm) throw new Error(`VRM として読めなかった: ${modelUrl}`);
+  if (!vrm.lookAt || !vrm.expressionManager) throw new Error('VRM に lookAt か表情が無い');
+  const { lookAt, expressionManager, humanoid } = vrm;
+
+  VRMUtils.rotateVRM0(vrm);
+  // 見えない頂点を落とす処理は H2 の胸モーフ生成に影響しうるので入れない。
+  VRMUtils.combineSkeletons(gltf.scene);
+  vrm.scene.traverse((object) => {
+    object.frustumCulled = false;
+  });
+  prepareMaterials(vrm, settings);
+  registerMorphExpressions(vrm);
+  // 姿勢を当てる前（ボーンがバインド時の位置）に作る。
+  const breathMorph = registerChestMorph(vrm);
+  const sign = boneSignForMeta(vrm.meta.metaVersion);
+  const leftEye = humanoid.getNormalizedBoneNode('leftEye');
+  const rightEye = humanoid.getNormalizedBoneNode('rightEye');
+  const eyeEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+  return {
+    kind: 'vrm',
+    root: vrm.scene,
+    breathMorph,
+    breathOutput: { chest: breathMorph.chestBone },
+    applyFrame(frame, camera, dtMs) {
+      for (const [name, offset] of frame.bones) {
+        humanoid.getNormalizedBoneNode(name as VRMHumanBoneName)?.rotation.set(offset.x * sign.x, offset.y * sign.y, offset.z * sign.z);
+      }
+      // 前のフレームの頭の行列でカメラへの向きを求め、そらす量を足す。1フレーム遅れは問題にならない。
+      lookAt.lookAt(camera.position);
+      const baseYaw = lookAt.yaw;
+      const basePitch = lookAt.pitch;
+      lookAt.yaw = baseYaw * frame.eye.userWeight + frame.eye.yawDeg;
+      lookAt.pitch = basePitch * frame.eye.userWeight + frame.eye.pitchDeg;
+      for (const [name, weight] of frame.expressions) expressionManager.setValue(name, weight);
+      if (settings.springBones) {
+        vrm.update(Math.min(dtMs, MAX_SPRING_DT_MS) / 1000);
+      } else {
+        // vrm.update から spring bone だけを除いたもの（切り分け用）。
+        humanoid.update();
+        lookAt.update(dtMs / 1000);
+        expressionManager.update();
+        vrm.nodeConstraintManager?.update();
+      }
+    },
+    settle() {
+      vrm.scene.updateMatrixWorld(true);
+      vrm.springBoneManager?.setInitState();
+      vrm.springBoneManager?.reset();
+    },
+    prepareTextures: (maxAnisotropy) => applyTextureFiltering(vrm, settings, maxAnisotropy),
+    eyeWorldPosition: (target) => {
+      lookAt.getLookAtWorldPosition(target);
+    },
+    rawBone: (role) => humanoid.getRawBoneNode(role as VRMHumanBoneName),
+    readEye: (side) => {
+      const node = side === 'left' ? leftEye : rightEye;
+      if (!node) return { yawDeg: 0, pitchDeg: 0 };
+      eyeEuler.setFromQuaternion(node.quaternion, 'YXZ');
+      // 頭と同じ規約（pitch の正が下）で返す。
+      return { yawDeg: eyeEuler.y * RAD2DEG, pitchDeg: eyeEuler.x * sign.x * RAD2DEG };
+    },
+    eyeInput: () => ({ yawDeg: lookAt.yaw, pitchDeg: lookAt.pitch }),
+    expressionValue: (name) => expressionManager.getValue(name) ?? 0,
+    describe: () => describeModel(vrm),
+    dispose: () => VRMUtils.deepDispose(vrm.scene),
   };
 }
 

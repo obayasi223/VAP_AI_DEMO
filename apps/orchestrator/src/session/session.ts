@@ -34,6 +34,7 @@ import {
   encodePcmFrame,
   present,
 } from '@llm-vap/contracts';
+import type { AvatarReport } from '@llm-vap/contracts';
 import type {
   BrowserToNode,
   ClientHello,
@@ -174,6 +175,9 @@ export class Session {
   /** 会話の音声の保存。設定がなければ null（何も書かない）。 */
   private audioRecorder: SessionAudioRecorder | null = null;
   private manifestDetails: SessionManifestDetails | null = null;
+  /** 画面が報告した使ったアバター（manifest の avatar）。未報告は null。 */
+  private avatarManifest: Omit<AvatarReport, 'type'> | null = null;
+  private manifestWrite: Promise<unknown> = Promise.resolve();
   private readonly unsubscribe: Unsubscribe[] = [];
   private tickTimer: NodeJS.Timeout | null = null;
   private closed = false;
@@ -379,9 +383,15 @@ export class Session {
   /** manifest を書く。音声の保存の有無（session_audio）は必ず載せる。 */
   private describeWithAudio(audio?: SessionAudioManifest): Promise<boolean> {
     if (this.manifestDetails === null) return Promise.resolve(false);
-    const session_audio = audio ?? this.audioRecorder?.manifest() ?? sessionAudioOffManifest('SAVE_SESSION_AUDIO_not_set');
-    const details: SessionManifestDetails & { session_audio: SessionAudioManifest } = { ...this.manifestDetails, session_audio };
-    return this.options.log.describe(details);
+    // 書き込みは同じ一時ファイルを使うので順番に。開始直後の avatar.report と重なると rename が失敗する。
+    const write = this.manifestWrite.then(() => {
+      if (this.manifestDetails === null) return false;
+      const session_audio = audio ?? this.audioRecorder?.manifest() ?? sessionAudioOffManifest('SAVE_SESSION_AUDIO_not_set');
+      const details: SessionManifestDetails & { session_audio: SessionAudioManifest } = { ...this.manifestDetails, session_audio, avatar: this.avatarManifest };
+      return this.options.log.describe(details);
+    });
+    this.manifestWrite = write.catch(() => false);
+    return write;
   }
 
   /** 設定があるときだけ音声の保存を始める。起動ログに保存の有無を必ず出す。 */
@@ -708,6 +718,12 @@ export class Session {
     switch (message.type) {
       case 'client.hello':
         return; // 接続の層で扱う
+      case 'avatar.report': {
+        const { type: _type, ...record } = message;
+        this.avatarManifest = record;
+        void this.describeWithAudio();
+        return;
+      }
       case 'clock.ping':
         this.send({
           type: 'clock.pong',

@@ -17,4 +17,7 @@ export * from './pose';
 export * from './render_settings';
 export * from './saccade';
 export { seededRng, type Rng } from './util';
-export type { Avatar, AvatarModelInfo, AvatarOptions, AvatarTelemetry, BreathMorphInfo, Framing } from './runtime';
+export * from './avatar_models';
+export * from './dev_measure';
+export type { Avatar, AvatarModelInfo, AvatarOptions, AvatarTelemetry, BreathMorphInfo, FrameTiming, Framing } from './runtime';
+export type { AvatarRig } from './rig';

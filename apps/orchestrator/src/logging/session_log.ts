@@ -48,6 +48,8 @@ export interface ManifestProvider {
 export interface SessionManifestDetails {
   condition: Condition;
   policy_id: string;
+  /** 使ったアバター（画面の avatar.report）。未報告は null。 */
+  avatar?: Record<string, unknown> | null;
   providers: Record<string, ManifestProvider>;
   /** 発話希望の判定（G）の状態。止めた・作れなかったときは理由。 */
   initiative?: {

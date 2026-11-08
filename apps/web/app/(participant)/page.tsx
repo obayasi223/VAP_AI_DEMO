@@ -4,6 +4,8 @@
  * 参加者画面（レーン J）。「はじめる」を1回押すと、あとはハンズフリーで話せる。
  * クエリ: ?ws=ws://localhost:8787/ws（既定は NEXT_PUBLIC_ORCHESTRATOR_WS_URL、なければ同じホストの 8787）
  *         ?model=/models/xxx.vrm
+ *         ?avatar=rocketbox|none（既定は VRM。NEXT_PUBLIC_AVATAR でも指定できる。参加者画面には選択肢を出さない。docs/avatar_swap_eval.md）
+ *         ?breath_sound=0.025（吸気音の音量。0 で無音）
  *         ?condition=reactive|initiative_inhale|initiative_no_cue（開始画面の選択の初期値。既定は
  *           NEXT_PUBLIC_DEFAULT_CONDITION、なければ未選択で orchestrator の CONDITION に任せる）
  *         ?conversation_kind=joint_thinking|companion ?timing_strategy=llm|immediate|v2（開始画面の選択の初期値。
@@ -14,6 +16,7 @@
  */
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Avatar } from '../../src/avatar';
+import { avatarRecord, resolveAvatarChoice } from '../../src/avatar/avatar_models';
 import {
   CONDITION_LABELS,
   CONVERSATION_KIND_LABELS,
@@ -22,6 +25,7 @@ import {
   TIMING_STRATEGY_LABELS,
   type ParticipantView,
 } from '../../src/session/participant';
+import { parseBreathSoundGain } from '../../src/session/breath_sound';
 import type { Condition } from '@llm-vap/contracts/common';
 import type { ConversationKind, TimingStrategy } from '@llm-vap/contracts';
 
@@ -56,7 +60,6 @@ function initialCondition(): Condition | null {
   return isCondition(env) ? env : null;
 }
 
-const DEFAULT_MODEL = '/models/Sendagaya_Shino.vrm';
 
 declare global {
   interface Window {
@@ -124,6 +127,7 @@ export default function ParticipantPage() {
       wsUrl: defaultWsUrl(),
       avatar: () => avatarRef.current,
       onView: setView,
+      breathSoundGain: parseBreathSoundGain(new URLSearchParams(window.location.search).get('breath_sound')),
     });
   }
 
@@ -132,13 +136,29 @@ export default function ParticipantPage() {
     if (!container) return;
     let cancelled = false;
     let created: Avatar | null = null;
-    const modelUrl = new URLSearchParams(window.location.search).get('model') ?? DEFAULT_MODEL;
+    const query = new URLSearchParams(window.location.search);
+    const choice = resolveAvatarChoice({ avatarQuery: query.get('avatar'), modelQuery: query.get('model'), env: process.env.NEXT_PUBLIC_AVATAR });
+    if (choice.rejected !== null) console.warn(`[avatar] unknown avatar id (${choice.rejected.slice(0, 40)}); using ${choice.id}`);
+    // 測定用（dev のみ）: 読み込みの後、自動で「はじめる」を押す（Chrome の --autoplay-policy=no-user-gesture-required が要る）。
+    const autoStart = process.env.NODE_ENV !== 'production' && query.get('autostart') === '1';
+    const startForMeasure = () => {
+      if (!autoStart) return;
+      void controllerRef.current?.start({ condition: initialCondition(), conversation_kind: initialChoice('conversation_kind', undefined, CONVERSATION_KINDS), timing_strategy: initialChoice('timing_strategy', undefined, TIMING_STRATEGIES) });
+    };
     (async () => {
       try {
+        if (choice.spec === null || choice.url === null) {
+          // ?avatar=none: 描画なしの比較（測定用）。会話はできる。
+          setAvatarStatus('');
+          controllerRef.current?.setAvatarRecord(avatarRecord(choice, 'disabled'));
+          startForMeasure();
+          return;
+        }
         const { createAvatar } = await import('../../src/avatar/runtime');
         const avatar = await createAvatar({
           container,
-          modelUrl,
+          modelUrl: choice.url,
+          model: choice.spec,
           framing: 'bust',
           onGazeReport: (report) => controllerRef.current?.gazeRendered(report),
         });
@@ -149,9 +169,13 @@ export default function ParticipantPage() {
         created = avatar;
         avatarRef.current = avatar;
         setAvatarStatus('');
+        controllerRef.current?.setAvatarRecord(avatarRecord(choice, 'loaded'));
+        startForMeasure();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         avatarErrorRef.current = message;
+        controllerRef.current?.setAvatarRecord(avatarRecord(choice, 'failed', message.slice(0, 300)));
+        startForMeasure();
         setAvatarStatus(`アバターを表示できません（${message}）。会話はできます。`);
       }
     })();

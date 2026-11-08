@@ -32,10 +32,10 @@ export interface ChestMorphParams {
 }
 
 export const DEFAULT_CHEST_MORPH: ChestMorphParams = {
-  forwardM: 0.016,
-  lateralM: 0.007,
-  backM: 0.002,
-  upM: 0.006,
+  forwardM: 0.019,
+  lateralM: 0.0083,
+  backM: 0.0024,
+  upM: 0.0071,
   verticalSigma: 0.75,
   centerOffset: 0.1,
   axisForward: 0.5,

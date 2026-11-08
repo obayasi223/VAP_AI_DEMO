@@ -1410,6 +1410,88 @@
         "client_t_ms"
       ],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "avatar.report"
+        },
+        "avatar_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "vrm",
+            "glb",
+            "none"
+          ]
+        },
+        "model_url": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "default",
+            "query",
+            "env",
+            "model_query"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "loaded",
+            "failed",
+            "disabled"
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 300
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "breath_sound_gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "client_t_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "avatar_id",
+        "kind",
+        "model_url",
+        "source",
+        "status",
+        "error",
+        "breath_sound_gain",
+        "client_t_ms"
+      ],
+      "additionalProperties": false
     }
   ]
 }

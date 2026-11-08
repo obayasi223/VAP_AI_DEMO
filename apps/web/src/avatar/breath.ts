@@ -24,7 +24,7 @@
  *  聞き手の姿勢へ戻る。発話の失敗（音声が来ない、途中で止まる）は release('withdrawn') で発話の戻りの途中からでも戻す。
  *
  * 胸郭は読み込み時に作る専用モーフを中心に、上胸の小さな反り、肩・鎖骨の小さな挙上（上腕で逆補正）、首・頭の微小な姿勢、
- * 口のわずかな開き、眉を時系列でずらして重ねる。視線は既定では触らない（吸気の効果と分離）。吸気音は持たない。
+ * 口のわずかな開き、眉を時系列でずらして重ねる。視線は既定では触らない（吸気の効果と分離）。吸気音は session/breath_sound.ts。
  *
  * three と VRM に依存しない。書く名前は output で差し替える。時刻は update の dt を積んだ内部時刻で、
  * startInhale／release／prepareShort は次のフレームから効く。deferred／withdrawn の脱力の途中に来た吸気は今の姿勢から受ける。
@@ -166,7 +166,8 @@ export interface BreathParams {
 }
 
 export const DEFAULT_NORMAL_BREATH: NormalBreathParams = {
-  depth: 0.22,
+  // 胸郭モーフの変位を 1.19 倍にしたぶん下げ、通常呼吸の見た目の大きさは保つ。
+  depth: 0.185,
   periodMs: 4200,
   periodJitter: 0.15,
   inhaleFraction: 0.4,
@@ -174,16 +175,17 @@ export const DEFAULT_NORMAL_BREATH: NormalBreathParams = {
   shoulderDeg: 0,
 };
 
+// 吸気の大きさは、合図として見えやすいよう実際の吸気より誇張している（利用者の指定。暫定で未校正）。
 export const DEFAULT_PREP_BREATH: PrepBreathParams = {
-  depth: 0.9,
-  chestPitchDeg: -1.6,
+  depth: 1,
+  chestPitchDeg: -2.15,
   neckCompensation: 0.5,
   armPitchCompensation: 1,
-  shoulderDeg: 3.2,
+  shoulderDeg: 4.4,
   armCompensation: 1,
-  headPitchDeg: -1.4,
-  mouthOpen: 0.12,
-  brow: 0.18,
+  headPitchDeg: -1.9,
+  mouthOpen: 0.145,
+  brow: 0.24,
   holdMaxMs: HOLD_MAX_MS,
   holdChestLevel: 0.96,
   holdMouthLevel: 0.85,

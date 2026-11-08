@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 function controllerWith(avatar: Avatar | null) {
-  const controller = new ParticipantController({ wsUrl: 'ws://127.0.0.1:8787/ws', avatar: () => avatar, onView: () => undefined });
+  const controller = new ParticipantController({ wsUrl: 'ws://127.0.0.1:8787/ws', avatar: () => avatar, onView: () => undefined, breathSoundGain: 0 });
   const sent: unknown[] = [];
   (controller as unknown as { audio: { send(m: unknown): void } }).audio = { send: (m) => sent.push(m) };
   const deliver = (m: NodeToBrowser) => (controller as unknown as { onMessage(m: NodeToBrowser): void }).onMessage(m);

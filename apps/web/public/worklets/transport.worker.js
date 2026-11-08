@@ -19905,6 +19905,19 @@ var GazeReport = external_exports.strictObject({
   visible: external_exports.boolean(),
   client_t_ms: Maybe(NonNegativeMs)
 });
+var AvatarReport = external_exports.strictObject({
+  type: external_exports.literal("avatar.report"),
+  avatar_id: external_exports.string().min(1).max(64),
+  kind: external_exports.enum(["vrm", "glb", "none"]),
+  model_url: external_exports.string().max(512).nullable(),
+  /** 指定の出どころ（既定／?avatar=／環境変数／?model=）。 */
+  source: external_exports.enum(["default", "query", "env", "model_query"]),
+  status: external_exports.enum(["loaded", "failed", "disabled"]),
+  error: external_exports.string().max(300).nullable(),
+  /** 吸気音の音量（ノイズの振幅の頂点。0 は無音）。 */
+  breath_sound_gain: external_exports.number().min(0).max(1),
+  client_t_ms: NonNegativeMs
+});
 var BrowserToNode = external_exports.discriminatedUnion("type", [
   ClientHello,
   ClockPing,
@@ -19914,7 +19927,8 @@ var BrowserToNode = external_exports.discriminatedUnion("type", [
   PlaybackEnded,
   AudioReport,
   GazeReport,
-  SignalReport
+  SignalReport,
+  AvatarReport
 ]);
 var ServerHello = external_exports.strictObject({
   type: external_exports.literal("server.hello"),

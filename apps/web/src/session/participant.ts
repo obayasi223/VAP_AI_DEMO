@@ -24,8 +24,10 @@ import type {
 } from '@llm-vap/contracts/browser_rpc';
 import { startBrowserAudio, type BrowserAudioSession, type LinkState } from '../audio';
 import type { Avatar } from '../avatar';
+import type { AvatarRecord } from '../avatar/avatar_models';
 import type { BreathController, BreathPhaseEvent } from '../avatar/breath';
 import { BreathSignalReporter } from '../avatar/breath_signal';
+import { BreathSound, DEFAULT_BREATH_SOUND_GAIN } from './breath_sound';
 
 /** 研究条件の表示名（開始画面の選択）。本番の実験では選択を隠す（NEXT_PUBLIC_HIDE_CONDITION_PICKER）。 */
 export const CONDITION_LABELS: Record<Condition, string> = {
@@ -160,6 +162,8 @@ export interface ParticipantOptions {
   wsUrl: string;
   avatar: () => Avatar | null;
   onView: (view: ParticipantView) => void;
+  /** 吸気音の音量（0 は無音）。省略は既定。 */
+  breathSoundGain?: number;
 }
 
 export class ParticipantController {
@@ -188,6 +192,8 @@ export class ParticipantController {
   private readonly breathCandidates = new Map<string, string>();
   /** breath.prepare の候補（短い準備は cue_id が null のことがある）。 */
   private prepareCandidate: string | null = null;
+  private avatarRecord: AvatarRecord | null = null;
+  private breathSound: BreathSound | null = null;
   private breathReportedAvatar: Avatar | null = null;
   private breathReportUnsubscribe: (() => void) | null = null;
   /** アバターの吸気の局面の実時刻を signal.report へ（started の一部と ended、記録だけ）。 */
@@ -220,6 +226,21 @@ export class ParticipantController {
   private update(patch: Partial<ParticipantView>): void {
     this.view = { ...this.view, ...patch };
     this.options.onView(this.view);
+  }
+
+  private get breathSoundGain(): number {
+    return this.options.breathSoundGain ?? DEFAULT_BREATH_SOUND_GAIN;
+  }
+
+  /** 使ったアバターの記録（manifest の avatar へ）。読み込みの結果が出たら呼ぶ。接続前なら接続後に送る。 */
+  setAvatarRecord(record: AvatarRecord): void {
+    this.avatarRecord = record;
+    this.sendAvatarRecord();
+  }
+
+  private sendAvatarRecord(): void {
+    if (this.avatarRecord === null || this.audio === null) return;
+    this.audio.send({ type: 'avatar.report', ...this.avatarRecord, breath_sound_gain: this.breathSoundGain, client_t_ms: performance.now() });
   }
 
   /** アバターの onGazeReport から呼ぶ。 */
@@ -267,6 +288,7 @@ export class ParticipantController {
       return;
     }
     const audio = this.audio;
+    this.sendAvatarRecord();
     const analyser = audio.context.createAnalyser();
     analyser.fftSize = 1024;
     audio.outputNode.connect(analyser);
@@ -370,6 +392,8 @@ export class ParticipantController {
       message.type === 'breath.cue'
         ? breath.startInhale({ cue_id: message.cue_id, duration_ms: message.duration_ms })
         : breath.release(message.reason);
+    if (message.type === 'breath.release') this.breathSound?.stop();
+    else if (applied && (typeof document === 'undefined' || document.visibilityState === 'visible')) this.playBreathSound(message.duration_ms);
     const phase: SignalReport['phase'] =
       message.type === 'breath.cue' ? 'inhale' : message.reason === 'speech_started' ? 'pre_speech' : 'relax';
     const report = (visible: boolean, t: number | null, nullReason = 'not_visible') => {
@@ -388,6 +412,12 @@ export class ParticipantController {
     // 背景タブでは rAF が来ないので、見えていなければその場で visible=false を返す。
     else if (typeof document !== 'undefined' && document.visibilityState !== 'visible') report(false, null);
     else requestAnimationFrame((t) => report(true, t));
+  }
+
+  private playBreathSound(durationMs: number): void {
+    if (this.audio === null) return;
+    this.breathSound ??= new BreathSound(this.audio.context, this.breathSoundGain);
+    this.breathSound.play(durationMs);
   }
 
   /** 吸気の局面の報告をアバターへつなぐ（アバターの作り直しに備えて毎回確かめる）。 */
@@ -412,6 +442,8 @@ export class ParticipantController {
 
   async stop(): Promise<void> {
     this.clearPrepareTimer();
+    this.breathSound?.stop();
+    this.breathSound = null;
     this.breathReportUnsubscribe?.();
     this.breathReportUnsubscribe = null;
     this.breathReportedAvatar = null;

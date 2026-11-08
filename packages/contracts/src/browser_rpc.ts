@@ -209,6 +209,25 @@ export const GazeReport = z.strictObject({
 });
 export type GazeReport = z.infer<typeof GazeReport>;
 
+/**
+ * 使ったアバターの記録（実験の刺激の記録）。manifest の avatar に残す。
+ * 読み込みの結果なので、失敗して会話だけ続いた場合も status: 'failed' で残る。
+ */
+export const AvatarReport = z.strictObject({
+  type: z.literal('avatar.report'),
+  avatar_id: z.string().min(1).max(64),
+  kind: z.enum(['vrm', 'glb', 'none']),
+  model_url: z.string().max(512).nullable(),
+  /** 指定の出どころ（既定／?avatar=／環境変数／?model=）。 */
+  source: z.enum(['default', 'query', 'env', 'model_query']),
+  status: z.enum(['loaded', 'failed', 'disabled']),
+  error: z.string().max(300).nullable(),
+  /** 吸気音の音量（ノイズの振幅の頂点。0 は無音）。 */
+  breath_sound_gain: z.number().min(0).max(1),
+  client_t_ms: NonNegativeMs,
+});
+export type AvatarReport = z.infer<typeof AvatarReport>;
+
 /** Browser→Node の JSON。 */
 export const BrowserToNode = z.discriminatedUnion('type', [
   ClientHello,
@@ -220,6 +239,7 @@ export const BrowserToNode = z.discriminatedUnion('type', [
   AudioReport,
   GazeReport,
   SignalReport,
+  AvatarReport,
 ]);
 export type BrowserToNode = z.infer<typeof BrowserToNode>;
 
