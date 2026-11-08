@@ -244,8 +244,8 @@ describe('phase の遷移', () => {
     return { atHold, samples, env };
   }
 
-  it('成功（speech_started）: 口はすぐ口形へ譲り、胸は話しながら長く戻る', () => {
-    const { atHold, samples } = runRelease('speech_started', [P.speechMouthYieldMs + 2 * DT, 700, P.speechExhaleMs + 100]);
+  it('成功（speech_started）: 声が来なければ上限まで口の準備を保って閉じ、胸は話しながら長く戻る', () => {
+    const { atHold, samples } = runRelease('speech_started', [P.speechMouthWaitMs + P.speechMouthYieldMs + 2 * DT, 700, P.speechExhaleMs + 100]);
     expect(atHold.mouth).toBeGreaterThan(0.6);
     expect(samples[0]).toMatchObject({ phase: 'release', lastReleaseCause: 'speech_started', releaseKind: 'speech' });
     expect(samples[0]!.prep.mouth).toBe(0);
@@ -359,7 +359,7 @@ describe('prepareShort（deferred の後に許可が出たときの短い準備�
     expect(ready.prep.chest).toBeLessThan(peakChest * 0.6);
     expect(ready.prep.chest).toBeGreaterThanOrEqual(residual.chest - 1e-9);
     layer.release('speech_started');
-    step(P.speechMouthYieldMs + 2 * DT);
+    step(P.speechMouthWaitMs + P.speechMouthYieldMs + 2 * DT);
     expect(layer.telemetry()).toMatchObject({ releaseKind: 'speech' });
     expect(layer.telemetry().prep.mouth).toBe(0);
     expect(events.filter((e) => e.phase === 'inhale').map((e) => e.kind)).toEqual(['prep', 'short']);

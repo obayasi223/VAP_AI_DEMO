@@ -3,7 +3,7 @@
  * 語境界・時間比例の口形は同じ口を実装して Avatar.setMouthSource で差し替える（計画 §4.7）。
  */
 import type { AvatarLayer, LayerContext, PoseFrame } from './pose';
-import { clamp01, smoothAsymmetric } from './util';
+import { clamp, clamp01, smoothAsymmetric } from './util';
 
 /** VRM の5母音の重み。 */
 export interface MouthShape {
@@ -52,8 +52,44 @@ export function rmsToOpen(rms: number, mapping: LevelMapping = DEFAULT_LEVEL_MAP
   return Math.pow(t, mapping.gamma);
 }
 
+/**
+ * 再生音の大きさへの追従（暫定）。TTS の声の大きさは提供元と声で違い、固定の dB の写像では大きい TTS で口が開いたままになる
+ * （ElevenLabs の実音声は発声区間の中央値 -16dB、上位 10% が -11dB で、固定の天井 -14dB を常に超えていた。docs/speech_motion_audit.md）。
+ * 直近の声の上限を参照に持ち、参照から widthDb 下までを開きへ写す。絶対の床（mapping.floorDb）より小さい音では開かない。
+ */
+export interface LevelAdaptation {
+  /** 参照の初期値。 */
+  initialRefDb: number;
+  /** 参照の範囲。 */
+  minRefDb: number;
+  maxRefDb: number;
+  /** 参照の下から何 dB までを開きに写すか。 */
+  widthDb: number;
+  /** 1 より大きいと谷がより閉じる。 */
+  gamma: number;
+  /** 参照が上がる速さ（ms）。 */
+  riseMs: number;
+  /** 発声の範囲（参照から widthDb 以内）で下がる速さ（ms）。 */
+  fallMs: number;
+  /** 範囲外の小さい音が続いたときに下がる速さ（ms）。声が大きく小さくなっても、やがて開くため。 */
+  slowFallMs: number;
+}
+
+export const DEFAULT_LEVEL_ADAPTATION: LevelAdaptation = {
+  initialRefDb: -16,
+  minRefDb: -28,
+  maxRefDb: -6,
+  widthDb: 16,
+  gamma: 1.2,
+  riseMs: 60,
+  fallMs: 1500,
+  slowFallMs: 8000,
+};
+
 export interface VolumeMouthOptions {
   mapping: LevelMapping;
+  /** null は固定の写像（mapping だけ）。 */
+  adaptation: LevelAdaptation | null;
   attackMs: number;
   releaseMs: number;
   /** closeNow の後の閉じる速さ。発話停止と同時に閉じるため短い。 */
@@ -66,8 +102,9 @@ export interface VolumeMouthOptions {
 
 export const DEFAULT_VOLUME_MOUTH: VolumeMouthOptions = {
   mapping: DEFAULT_LEVEL_MAPPING,
-  attackMs: 30,
-  releaseMs: 80,
+  adaptation: DEFAULT_LEVEL_ADAPTATION,
+  attackMs: 22,
+  releaseMs: 50,
   closeMs: 25,
   staleAfterMs: 150,
   maxOpen: 0.85,
@@ -76,12 +113,14 @@ export const DEFAULT_VOLUME_MOUTH: VolumeMouthOptions = {
 export class VolumeMouthSource implements MouthSource {
   private readonly options: VolumeMouthOptions;
   private level = 0;
+  private refDb: number;
   private open = 0;
   private sinceLevelMs = Number.POSITIVE_INFINITY;
   private closing = false;
 
   constructor(options: Partial<VolumeMouthOptions> = {}) {
     this.options = { ...DEFAULT_VOLUME_MOUTH, ...options };
+    this.refDb = this.options.adaptation?.initialRefDb ?? 0;
   }
 
   /** 再生中の RMS を入れる。一定間隔で呼び続けること（来なくなると閉じる）。 */
@@ -106,11 +145,24 @@ export class VolumeMouthSource implements MouthSource {
     // 判定してから進める。描画が遅くて dt が staleAfterMs より長くても、前のフレームの後に届いた音量は新しい。
     const fresh = !this.closing && this.sinceLevelMs <= this.options.staleAfterMs;
     this.sinceLevelMs += dtMs;
-    const target = fresh ? rmsToOpen(this.level, this.options.mapping) : 0;
+    const target = fresh ? this.levelToOpen(dtMs) : 0;
     const release = this.closing ? this.options.closeMs : this.options.releaseMs;
     this.open = smoothAsymmetric(this.open, target, dtMs, this.options.attackMs, release);
     if (this.open < 1e-3) this.open = 0;
     return { ...CLOSED_MOUTH, aa: this.open * this.options.maxOpen };
+  }
+
+  /** 今の音量 → 口の開き（0〜1）。追従があれば参照を更新する。 */
+  private levelToOpen(dtMs: number): number {
+    const { mapping, adaptation } = this.options;
+    if (adaptation === null) return rmsToOpen(this.level, mapping);
+    if (!(this.level > 0)) return 0;
+    const db = 20 * Math.log10(this.level);
+    if (db <= mapping.floorDb) return 0;
+    const tau = db > this.refDb ? adaptation.riseMs : db > this.refDb - adaptation.widthDb ? adaptation.fallMs : adaptation.slowFallMs;
+    this.refDb = clamp(db + (this.refDb - db) * Math.exp(-Math.max(dtMs, 0) / tau), adaptation.minRefDb, adaptation.maxRefDb);
+    const floor = Math.max(mapping.floorDb, this.refDb - adaptation.widthDb);
+    return Math.pow(clamp01((db - floor) / Math.max(this.refDb - floor, 1e-6)), adaptation.gamma);
   }
 }
 

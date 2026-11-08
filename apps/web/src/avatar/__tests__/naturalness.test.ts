@@ -204,7 +204,7 @@ describe('ExpressionLayer', () => {
     expect([...frame.bones.keys()]).toEqual(['head']);
   });
 
-  it('発話中: 頭が小さく動き（2 度未満）、relaxed を弱め、眉が上がることがある', () => {
+  it('発話中: 頭が小さく動き（3.2 度未満）、relaxed を弱め、眉が上がることがある', () => {
     const syllables = (t: number) => {
       const phrase = Math.floor(t / 2500);
       const inPhrase = t % 2500 < 1800;
@@ -213,7 +213,8 @@ describe('ExpressionLayer', () => {
     const { series } = run(syllables, 60);
     const pitch = series.pitch.map(Math.abs);
     const yaw = series.yaw.map(Math.abs);
-    expect(Math.max(...pitch)).toBeLessThan(2);
+    // 上限は揺れ（0.8）、強調（0.5）、句の切れ目のうなずき（1.8）の合計（docs/speech_motion_audit.md）。
+    expect(Math.max(...pitch)).toBeLessThan(3.2);
     expect(Math.max(...yaw)).toBeLessThan(1.5);
     expect(sd(series.pitch)).toBeGreaterThan(0.1);
     expect(Math.min(...series.relaxed)).toBeLessThan(DEFAULT_EXPRESSION.relaxedIdle * 0.7);

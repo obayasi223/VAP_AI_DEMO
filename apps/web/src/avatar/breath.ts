@@ -23,6 +23,9 @@
  *  どの局面でも、何も来なくても終わりがあり（吸気 → 保持の上限 → deferred の形で脱力 → idle、発話の戻りも有限）、
  *  聞き手の姿勢へ戻る。発話の失敗（音声が来ない、途中で止まる）は release('withdrawn') で発話の戻りの途中からでも戻す。
  *
+ * 発話中の胸（吸気の時系列とは別、吸気の局面には触らない）: 話している間は通常呼吸を止め、胸は吐き続け、休止で胸だけ小さく吸う。
+ * 休止を見てから吸うので、吸う長さは休止の長さで決まる。深さと間隔は暫定（docs/speech_motion_audit.md）。
+ *
  * 胸郭は読み込み時に作る専用モーフを中心に、上胸の小さな反り、肩・鎖骨の小さな挙上（上腕で逆補正）、首・頭の微小な姿勢、
  * 口のわずかな開き、眉を時系列でずらして重ねる。視線は既定では触らない（吸気の効果と分離）。吸気音は session/breath_sound.ts。
  *
@@ -126,6 +129,8 @@ export interface PrepBreathParams {
   speechExhaleMs: number;
   /** 成功: 口の準備を口形へ譲る速さ（ms）。 */
   speechMouthYieldMs: number;
+  /** 成功: 声が来るまで口の準備を保つ上限（ms）。発話開始の指示は最初の音より先に届く。暫定。 */
+  speechMouthWaitMs: number;
 
   /** deferred: 声を出さずに吐く長さ（胸、ms）。他の部位はこれに比例。 */
   deferredExhaleMs: number;
@@ -192,6 +197,7 @@ export const DEFAULT_PREP_BREATH: PrepBreathParams = {
   holdBrowLevel: 0.5,
   speechExhaleMs: 2200,
   speechMouthYieldMs: 70,
+  speechMouthWaitMs: 350,
   deferredExhaleMs: 1300,
   deferredChestResidual: 0.2,
   deferredMouthResidual: 0.4,
@@ -212,6 +218,29 @@ export const DEFAULT_PREP_BREATH: PrepBreathParams = {
 };
 
 export const DEFAULT_BREATH: BreathParams = { normal: DEFAULT_NORMAL_BREATH, prep: DEFAULT_PREP_BREATH };
+
+/**
+ * 発話中の胸（胸郭モーフの重み）。値は暫定で、発話前の吸気と紛らわしくないよう、胸だけで通常呼吸程度の小ささにしている。
+ * 文献は間隔の目安だけ（Wang et al. 2010 の英語の自発発話でブレスグループ 4.35s、吸気 0.58s。docs/speech_motion_audit.md）。
+ */
+export const SPEECH_BREATH = {
+  /** 休止で吸うときの深さ（胸郭モーフの重みの目標）。 */
+  depth: 0.17,
+  /** 吸う速さの時定数（ms）。 */
+  inhaleTauMs: 190,
+  /** 吐く速さ（重み/ms）。 */
+  exhalePerMs: 0.17 / 3200,
+  /** この長さ閉じたら息継ぎを始める（ms）。TTS の読点の休止は 200〜300ms ほどなので短くしてある。 */
+  pauseMs: 160,
+  /** 前の息継ぎからの最短の間隔（ms）。 */
+  minGapMs: 1800,
+  /** 吸い続ける上限（ms）。 */
+  maxInhaleMs: 600,
+  /** この間、口が閉じ続けたら発話が終わったとみなす（ms）。 */
+  speechHoldMs: 900,
+  /** 出力の平滑化（ms）。 */
+  smoothMs: 60,
+} as const;
 
 // ---- 時系列の包絡（純粋関数） ----
 
@@ -493,6 +522,15 @@ export class BreathLayer implements AvatarLayer, BreathController {
   private normalPhase = 0;
   private normalPeriodMs: number;
   private chestWeight = 0;
+  /** 話している間の胸（胸郭モーフの重み）。 */
+  private speechChest = 0;
+  private speechChestOut = 0;
+  private silentMs = Number.POSITIVE_INFINITY;
+  private sinceCatchMs = Number.POSITIVE_INFINITY;
+  private catchMs: number | null = null;
+  private speechEngaged = false;
+  /** 発話の戻りで、口の準備を譲り始めた時刻（release の起点から）。null は声待ち。 */
+  private speechMouthStartMs: number | null = null;
   private ignored = 0;
 
   constructor(
@@ -592,6 +630,11 @@ export class BreathLayer implements AvatarLayer, BreathController {
       if (prepValue !== 0) from[channel] = clamp01(from[channel] + (wave * normalValue) / prepValue);
     };
     transfer('chest', normal.depth, prep.depth);
+    // 発話中の胸も引き取る（話し終わった直後に吸い始めても胸がへこまない）。
+    if (prep.depth !== 0) from.chest = clamp01(from.chest + this.speechChestOut / prep.depth);
+    this.speechChest = 0;
+    this.speechChestOut = 0;
+    this.catchMs = null;
     transfer('head', normal.headPitchDeg, prep.headPitchDeg);
     transfer('shoulder', normal.shoulderDeg, prep.shoulderDeg);
     this.normalGain = 0;
@@ -613,6 +656,7 @@ export class BreathLayer implements AvatarLayer, BreathController {
   private beginRelease(cause: ReleaseCause): void {
     const kind: ReleaseKind = cause === 'speech_started' ? 'speech' : cause === 'withdrawn' ? 'withdrawn' : 'deferred';
     this.releaseKind = kind;
+    this.speechMouthStartMs = null;
     this.releaseFrom = { ...this.values };
     this.spec = releaseSpec(kind, this.params.prep);
     this.lastCause = cause;
@@ -683,6 +727,13 @@ export class BreathLayer implements AvatarLayer, BreathController {
       }
       case 'release': {
         this.values = releaseValues(t, this.releaseFrom, this.spec, this.releaseKind ?? 'withdrawn');
+        if (this.releaseKind === 'speech') {
+          // 発話開始の指示は最初の音より先に届く。声が出るまで口の準備を保ち、声が出たら（または上限で）譲る。
+          if (this.speechMouthStartMs === null && (this.speechOpen() > SPEECH_OPEN_THRESHOLD || t >= prep.speechMouthWaitMs)) this.speechMouthStartMs = t;
+          const startMs = this.speechMouthStartMs;
+          const yieldMs = Math.max(prep.speechMouthYieldMs, 1);
+          this.values.mouth = startMs === null ? this.releaseFrom.mouth : this.releaseFrom.mouth * relaxCurve((t - startMs) / yieldMs);
+        }
         if (t >= releaseTotalMs(this.spec)) {
           this.values = { ...ZERO_CHANNELS };
           this.enter('idle', this.lastCause);
@@ -705,18 +756,51 @@ export class BreathLayer implements AvatarLayer, BreathController {
     }
 
     // 発話の口形が開いたら口の準備を譲る（ぶつけない）。切らずに滑らかに。
-    this.mouthYield = smoothAsymmetric(this.mouthYield, this.speechOpen() > SPEECH_OPEN_THRESHOLD ? 1 : 0, dtMs, 40, 120);
+    const voiced = this.speechOpen() > SPEECH_OPEN_THRESHOLD;
+    this.mouthYield = smoothAsymmetric(this.mouthYield, voiced ? 1 : 0, dtMs, 40, 120);
 
     // 待機の揺れと通常呼吸: 準備の間と戻った直後は抑え、ゆっくり戻す。
     const active = this.current !== 'idle';
     const recovering = !active && this.timeMs - this.idleSinceMs < prep.postSuppressMs;
     const suppressed = active || recovering;
-    this.normalGain = smoothAsymmetric(this.normalGain, suppressed ? 0 : 1, dtMs, 1200, 80);
-    this.idleScale = smoothAsymmetric(this.idleScale, suppressed ? prep.idleDuringPrep : 1, dtMs, 900, prep.idleSuppressMs);
+    const normal = this.params.normal;
+
+    // 話している間の胸。通常呼吸を止め、吐き続け、休止で胸だけ小さく吸う。吸気（局面）の値には触らない。
+    this.silentMs = voiced ? 0 : this.silentMs + dt;
+    this.sinceCatchMs += dt;
+    const speaking = voiced || this.silentMs < SPEECH_BREATH.speechHoldMs;
+    if (voiced && !this.speechEngaged) {
+      // 話し始め。通常呼吸の胸を引き取り、へこませない。その前に息があったものとして、すぐには吸わない。
+      this.speechChest = this.speechChestOut + normalBreathWave(this.normalPhase, normal.inhaleFraction) * this.normalGain * normal.depth;
+      this.speechChestOut = this.speechChest;
+      this.normalGain = 0;
+      this.sinceCatchMs = 0;
+    }
+    this.speechEngaged = speaking;
+    if (this.catchMs !== null) {
+      this.catchMs += dt;
+      if (voiced || this.catchMs >= SPEECH_BREATH.maxInhaleMs || !speaking) this.catchMs = null;
+    }
+    const canCatch = this.current === 'idle' || (this.current === 'release' && this.releaseKind === 'speech');
+    if (this.catchMs === null && canCatch && speaking && !voiced && this.silentMs >= SPEECH_BREATH.pauseMs && this.sinceCatchMs >= SPEECH_BREATH.minGapMs) {
+      this.catchMs = 0;
+      this.sinceCatchMs = 0;
+    }
+    if (this.catchMs !== null) {
+      this.speechChest += (SPEECH_BREATH.depth - this.speechChest) * (1 - Math.exp(-dt / SPEECH_BREATH.inhaleTauMs));
+    } else {
+      this.speechChest = Math.max(0, this.speechChest - SPEECH_BREATH.exhalePerMs * dt);
+    }
+    this.speechChestOut += (this.speechChest - this.speechChestOut) * (1 - Math.exp(-dt / SPEECH_BREATH.smoothMs));
+    if (this.speechChestOut < 1e-4 && this.speechChest === 0) this.speechChestOut = 0;
+
+    // 話している間は通常呼吸を止める。発話が始まった後は待機の揺れの抑えを解く（発話中に頭が止まらないように）。
+    this.normalGain = smoothAsymmetric(this.normalGain, suppressed || speaking ? 0 : 1, dtMs, 1200, 80);
+    const speechFlow = this.releaseKind === 'speech' || this.lastCause === 'speech_started';
+    this.idleScale = smoothAsymmetric(this.idleScale, suppressed && !speechFlow ? prep.idleDuringPrep : 1, dtMs, 900, prep.idleSuppressMs);
     this.setIdleScale(this.idleScale);
 
     // 通常呼吸。
-    const normal = this.params.normal;
     this.normalPhase += dtMs / this.normalPeriodMs;
     if (this.normalPhase >= 1) {
       this.normalPhase -= Math.floor(this.normalPhase);
@@ -726,7 +810,7 @@ export class BreathLayer implements AvatarLayer, BreathController {
 
     const v = this.values;
     const o = this.output;
-    this.chestWeight = clamp01(wave * normal.depth + v.chest * prep.depth);
+    this.chestWeight = clamp01(wave * normal.depth + v.chest * prep.depth + this.speechChestOut);
     frame.addExpression(o.chestMorph, this.chestWeight);
     const chestPitch = v.chest * prep.chestPitchDeg * DEG2RAD;
     if (chestPitch !== 0) {
