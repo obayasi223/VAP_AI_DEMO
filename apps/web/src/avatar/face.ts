@@ -4,7 +4,9 @@
  * 感情は推定しない（根拠のない演出になる）。使う手掛かりは自分の発話の音量の包絡（口の開き）だけ:
  *  - 待機は relaxed を少しだけ足して、無表情の硬さを和らげる。話している間は口形とぶつかるので弱める。
  *  - 句の頭（ポーズの後に話し始めた時）に、ときどき眉を少し上げる。強調（包絡の立ち上がり）でもわずかに上げる。
- *  - 話している間、強調に合わせて頭を少しうなずかせ、ゆっくりした揺れを足す。
+ *  - 話している間、ゆっくりした頭の揺れを足し、強調（包絡の立ち上がり）ではごく小さくうなずく。
+ *  - 休止を伴う句の切れ目で、ときどき小さくうなずく（Ishi et al. 2007 の日本語の自由会話で、うなずきは強い句境界の最終音節に出て、
+ *    ピッチアクセントごとには出ない。ここでは休止を検出してから動かすので最終音節より少し遅い。docs/speech_motion_audit.md）。
  * 肩・鎖骨・胸は書かない（吸気と紛らわしい動き、計画 §4.7）。値は未評価で、過剰に見えないよう小さくしている。
  */
 import { SmoothNoise } from './idle';
@@ -26,6 +28,14 @@ export interface ExpressionOptions {
   emphasisBrow: number;
   /** 強調でのうなずき（度、正が下）。 */
   nodDeg: number;
+  /** 句の切れ目のうなずき（度）と確率、長さ（ms）。 */
+  phraseNodDeg: number;
+  phraseNodProbability: number;
+  phraseNodMs: number;
+  /** この間、口が閉じたら句の切れ目とみなす（ms）。 */
+  phraseEndMs: number;
+  /** 句の切れ目とみなすのに必要な、直前の発声の長さ（ms）。 */
+  phraseMinSpeechMs: number;
   speechYawDeg: number;
   speechRollDeg: number;
   speechPitchDeg: number;
@@ -44,11 +54,16 @@ export const DEFAULT_EXPRESSION: ExpressionOptions = {
   phraseBrowMs: 700,
   phrasePauseMs: 450,
   emphasisBrow: 0.12,
-  nodDeg: 1.1,
-  speechYawDeg: 0.9,
-  speechRollDeg: 0.7,
-  speechPitchDeg: 0.5,
-  speechNoiseSpanMs: 1300,
+  nodDeg: 0.5,
+  phraseNodDeg: 1.8,
+  phraseNodProbability: 0.5,
+  phraseNodMs: 520,
+  phraseEndMs: 180,
+  phraseMinSpeechMs: 400,
+  speechYawDeg: 1.3,
+  speechRollDeg: 0.9,
+  speechPitchDeg: 0.8,
+  speechNoiseSpanMs: 1000,
   openThreshold: 0.04,
 };
 
@@ -59,6 +74,8 @@ export interface SpeechFeatures {
   emphasis: number;
   /** このフレームで句が始まった。 */
   phraseStart: boolean;
+  /** このフレームで、休止を伴う句の切れ目になった（発声の後に phraseEndMs 閉じた）。 */
+  phraseEnd: boolean;
 }
 
 /** 口の開きの列 → 話している度合い、強調、句の頭。 */
@@ -67,17 +84,23 @@ export class SpeechActivity {
   private fast = 0;
   private slow = 0;
   private silentMs = Number.POSITIVE_INFINITY;
+  private voicedMs = 0;
 
-  constructor(private readonly options: Pick<ExpressionOptions, 'openThreshold' | 'phrasePauseMs'> = DEFAULT_EXPRESSION) {}
+  constructor(private readonly options: Pick<ExpressionOptions, 'openThreshold' | 'phrasePauseMs' | 'phraseEndMs' | 'phraseMinSpeechMs'> = DEFAULT_EXPRESSION) {}
 
   update(open: number, dtMs: number): SpeechFeatures {
     const active = open > this.options.openThreshold;
     const phraseStart = active && this.silentMs >= this.options.phrasePauseMs;
+    const previousSilentMs = this.silentMs;
     this.silentMs = active ? 0 : this.silentMs + dtMs;
+    // 短い閉じ（子音）は同じ句の中の発声として数え続ける。
+    if (active) this.voicedMs += dtMs;
+    const phraseEnd = !active && previousSilentMs < this.options.phraseEndMs && this.silentMs >= this.options.phraseEndMs && this.voicedMs >= this.options.phraseMinSpeechMs;
+    if (!active && this.silentMs >= this.options.phraseEndMs) this.voicedMs = 0;
     this.speaking = smoothAsymmetric(this.speaking, active || this.silentMs < 300 ? 1 : 0, dtMs, 150, 700);
     this.fast = smoothAsymmetric(this.fast, open, dtMs, 50, 120);
     this.slow = smoothAsymmetric(this.slow, open, dtMs, 450, 450);
-    return { speaking: this.speaking, emphasis: clamp01((this.fast - this.slow) / 0.3), phraseStart };
+    return { speaking: this.speaking, emphasis: clamp01((this.fast - this.slow) / 0.3), phraseStart, phraseEnd };
   }
 }
 
@@ -89,7 +112,8 @@ export class ExpressionLayer implements AvatarLayer {
   private readonly speechNoise: SmoothNoise[];
   private browPulseMs = Number.POSITIVE_INFINITY;
   private nod = 0;
-  features: SpeechFeatures = { speaking: 0, emphasis: 0, phraseStart: false };
+  private phraseNodMs = Number.POSITIVE_INFINITY;
+  features: SpeechFeatures = { speaking: 0, emphasis: 0, phraseStart: false, phraseEnd: false };
   /** 0〜1。H2 などで表情を止めたいときに下げる。 */
   intensity = 1;
 
@@ -122,11 +146,14 @@ export class ExpressionLayer implements AvatarLayer {
     frame.addExpression('relaxed', relaxed * k);
 
     this.nod = smoothAsymmetric(this.nod, f.emphasis * f.speaking, dt, 90, 260);
+    if (f.phraseEnd && this.rng() < o.phraseNodProbability) this.phraseNodMs = 0;
+    this.phraseNodMs += dt;
+    const phraseNod = this.phraseNodMs < o.phraseNodMs ? Math.sin(Math.PI * (this.phraseNodMs / o.phraseNodMs)) * o.phraseNodDeg * k : 0;
     const [yawNoise, rollNoise, pitchNoise] = this.speechNoise.map((n) => n.update(dt)) as [number, number, number];
     const s = f.speaking * k;
     frame.addBone(
       'head',
-      (this.nod * o.nodDeg * k + pitchNoise * o.speechPitchDeg * s) * DEG2RAD,
+      (this.nod * o.nodDeg * k + phraseNod + pitchNoise * o.speechPitchDeg * s) * DEG2RAD,
       yawNoise * o.speechYawDeg * s * DEG2RAD,
       rollNoise * o.speechRollDeg * s * DEG2RAD,
     );
