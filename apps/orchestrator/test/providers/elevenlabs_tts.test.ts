@@ -5,7 +5,7 @@ import { FakeElevenLabsServer } from '@llm-vap/testkit';
 import type { FakeElevenLabsOptions } from '@llm-vap/testkit';
 import { ElevenLabsTtsProvider, mapAlignment } from '../../src/providers/tts/index';
 import type { ElevenLabsConnection, ElevenLabsOptions, LostContext } from '../../src/providers/tts/index';
-import { ElevenLabsProviderError, classifyElevenLabsError, createElevenLabsTtsProviderFromEnv, toChunkRelative } from '../../src/providers/tts/index';
+import { ElevenLabsProviderError, classifyElevenLabsError, createElevenLabsTtsProviderFromEnv, elevenLabsVoiceOptionsFromEnv, toChunkRelative } from '../../src/providers/tts/index';
 import { WebSocketServer } from 'ws';
 import type { AddressInfo } from 'node:net';
 
@@ -220,6 +220,67 @@ describe('ElevenLabs（F の偽サーバー）', () => {
   });
 });
 
+
+describe('ElevenLabs の声の設定（docs/tts_consistency.md）', () => {
+  async function capture(options: Partial<ElevenLabsOptions>) {
+    const urls: string[] = [];
+    const received: Record<string, unknown>[] = [];
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    await new Promise<void>((r) => wss.once('listening', () => r()));
+    wss.on('connection', (socket, request) => {
+      urls.push(request.url ?? '');
+      socket.on('message', (raw) => received.push(JSON.parse(String(raw)) as Record<string, unknown>));
+    });
+    cleanups.push(() => new Promise<void>((r) => { for (const c of wss.clients) c.terminate(); wss.close(() => r()); }));
+    const provider = new ElevenLabsTtsProvider({
+      api_key: API_KEY,
+      voice_id: 'voice',
+      time: new ManualTimeSource(1),
+      provider_class: 'test_double',
+      options: { base_url: `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`, final_wait_ms: 50, ...options },
+    });
+    const connection = (await provider.open({ preferred_sample_rate_hz: 24000 })) as ElevenLabsConnection;
+    cleanups.unshift(() => connection.close());
+    return { connection, urls, received, provider };
+  }
+
+  it('既定は seed を接続のクエリに付け、voice_settings は送らない（登録済みの声の設定のまま）', async () => {
+    const { connection, urls, received, provider } = await capture({});
+    connection.openContext({ audio_playback_id: 1, generation: 1 });
+    await until(() => received.length > 0);
+    expect(new URL(urls[0] as string, 'http://x').searchParams.get('seed')).toBe('20261109');
+    expect(received[0]?.voice_settings).toBeUndefined();
+    expect(provider.describeSettings()).toMatchObject({ seed: 20261109, voice_settings: null, voice_settings_source: 'stored_on_voice', model_id: 'eleven_flash_v2_5' });
+  });
+
+  it('voice_settings は各文脈の最初のメッセージにだけ付き、seed=null ならクエリに付かない', async () => {
+    const voice_settings = { stability: 0.9, speed: 1 };
+    const { connection, urls, received, provider } = await capture({ seed: null, voice_settings });
+    const context = connection.openContext({ audio_playback_id: 1, generation: 1 });
+    connection.openContext({ audio_playback_id: 2, generation: 1 });
+    context.sendText('今');
+    await until(() => received.length >= 3);
+    expect(new URL(urls[0] as string, 'http://x').searchParams.has('seed')).toBe(false);
+    expect(received[0]?.voice_settings).toEqual(voice_settings);
+    expect(received[1]?.voice_settings).toEqual(voice_settings);
+    expect(received[2]?.text).toBe('今');
+    expect(received[2]?.voice_settings).toBeUndefined();
+    expect(provider.describeSettings()).toMatchObject({ seed: null, voice_settings, voice_settings_source: 'sent_per_context' });
+  });
+
+  it('環境変数: 未設定は何も上書きせず、off で seed を外し、範囲外は起動時に失敗する', () => {
+    expect(elevenLabsVoiceOptionsFromEnv({})).toEqual({});
+    expect(elevenLabsVoiceOptionsFromEnv({ ELEVENLABS_SEED: 'off' })).toEqual({ seed: null });
+    expect(elevenLabsVoiceOptionsFromEnv({ ELEVENLABS_SEED: '42', ELEVENLABS_STABILITY: '0.9', ELEVENLABS_SPEAKER_BOOST: '0' })).toEqual({
+      seed: 42,
+      voice_settings: { stability: 0.9, use_speaker_boost: false },
+    });
+    expect(() => elevenLabsVoiceOptionsFromEnv({ ELEVENLABS_SEED: '1.5' })).toThrow(/integer/);
+    expect(() => elevenLabsVoiceOptionsFromEnv({ ELEVENLABS_SEED: '4294967296' })).toThrow(/ELEVENLABS_SEED/);
+    expect(() => elevenLabsVoiceOptionsFromEnv({ ELEVENLABS_STABILITY: 'high' })).toThrow(/ELEVENLABS_STABILITY/);
+    expect(() => elevenLabsVoiceOptionsFromEnv({ ELEVENLABS_SPEED: '1.5' })).toThrow(/ELEVENLABS_SPEED/);
+  });
+});
 
 /** 実 API で観察した動作を再現する小さなサーバー（flush で isFinal なし、close_context 後も音声が届く、エラーは接続後のメッセージ）。 */
 async function realLikeServer(behaviour: { first_message_error?: { error: string; message: string }; reject?: { status: number; body: unknown } } = {}) {

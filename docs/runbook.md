@@ -47,6 +47,7 @@ python3 -m venv .venv                # Python 3.12（DEPENDENCIES_LOCK.md）
 - `CONDITION`：既定は `reactive`。
 - `*_PROVIDER_CLASS`：`test_double` にすると台本の偽物になります。
 - `ELEVENLABS_LANGUAGE_NORMALIZATION`：既定は 0。11-08 の実測では、1 にしても読みは変わりませんでした。
+- `ELEVENLABS_SEED`：既定は暫定の固定値、`off` で付けません。`ELEVENLABS_STABILITY` などの声の設定は未設定なら送りません（登録済みの声の設定のまま）。使った値は manifest の `tts_settings` に残ります。根拠と限界は `docs/tts_consistency.md`。
 - `ORCHESTRATOR_HOST`：既定は `127.0.0.1`。
 - `ALLOWED_ORIGINS`：WS と `/health` を使える画面。既定は `http://localhost:3000,http://127.0.0.1:3000`。画面を別のポートで開くときに足します。
 - `ORCHESTRATOR_CLIENT_TOKEN`：Origin のない接続（Node のスクリプトなど）を通す合言葉。既定はなし（断る）。使うときは `ws://localhost:8787/research?token=<値>`。

@@ -51,6 +51,8 @@ export interface SessionManifestDetails {
   /** 使ったアバター（画面の avatar.report）。未報告は null。 */
   avatar?: Record<string, unknown> | null;
   providers: Record<string, ManifestProvider>;
+  /** 音声合成の設定（モデル、voice_settings、seed）。設定を持たないプロバイダは null。 */
+  tts_settings?: Record<string, unknown> | null;
   /** 発話希望の判定（G）の状態。止めた・作れなかったときは理由。 */
   initiative?: {
     running: boolean;

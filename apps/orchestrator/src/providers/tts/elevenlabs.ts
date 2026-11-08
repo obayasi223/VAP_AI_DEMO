@@ -77,6 +77,27 @@ export interface ElevenLabsOptions {
    * 資料では日本語のみ対応で遅延が増える。multi-stream-input での効果は docs/provider_matrix.md を参照。
    */
   apply_language_text_normalization: boolean;
+  /**
+   * 文脈の最初のメッセージに付ける voice_settings。null は送らない（ElevenLabs に登録した声の設定がそのまま使われる）。
+   * 値の根拠は docs/tts_consistency.md。
+   */
+  voice_settings: ElevenLabsVoiceSettings | null;
+  /**
+   * multi-stream-input の seed（接続のクエリ、0〜4294967295）。null は付けない。資料は決定性を保証しない。
+   * 既定の値に意味はない（暫定）。docs/tts_consistency.md の実測で、同じ文の繰り返しは同一の波形になり、
+   * 別の文の間の音量のばらつきが減り、最初の音声までの時間は変わらなかった。声の高さの文の間の差は減っていない。
+   */
+  seed: number | null;
+}
+
+/** 資料の RealtimeVoiceSettings。省略した項目はサーバー側の扱いに任せる（登録の値か既定かは資料に記載なし）。 */
+export interface ElevenLabsVoiceSettings {
+  stability?: number;
+  similarity_boost?: number;
+  style?: number;
+  use_speaker_boost?: boolean;
+  /** 0.7〜1.2。 */
+  speed?: number;
 }
 
 export const DEFAULT_ELEVENLABS_OPTIONS: ElevenLabsOptions = {
@@ -93,6 +114,8 @@ export const DEFAULT_ELEVENLABS_OPTIONS: ElevenLabsOptions = {
   retry_max_ms: 5000,
   down_after_attempts: 3,
   apply_language_text_normalization: false,
+  voice_settings: null,
+  seed: 20261109,
 };
 
 /** 失敗の種類。LLM の GeminiProviderError と同じ考え方で、呼び出し側が文字列を解釈しなくてよいようにする。 */
@@ -328,8 +351,9 @@ export class ElevenLabsConnection implements TtsConnection {
       throw new Error(`too many active contexts (max ${MAX_CONTEXTS})`);
     }
     this.contexts.set(context.context_id, context);
-    // 資料の手順: 空白1文字で文脈を始める。
-    this.send({ context_id: context.context_id, text: ' ' });
+    // 資料の手順: 空白1文字で文脈を始める。voice_settings は文脈の最初のメッセージでだけ受け付けられる。
+    const voiceSettings = this.options.voice_settings;
+    this.send({ context_id: context.context_id, text: ' ', ...(voiceSettings ? { voice_settings: voiceSettings } : {}) });
     return context;
   }
 
@@ -452,6 +476,7 @@ export class ElevenLabsConnection implements TtsConnection {
       language_code: this.options.language_code,
     });
     if (this.options.apply_language_text_normalization) query.set('apply_language_text_normalization', 'true');
+    if (this.options.seed !== null) query.set('seed', String(this.options.seed));
     return `${this.options.base_url}/v1/text-to-speech/${encodeURIComponent(this.config.voice_id)}/multi-stream-input?${query}`;
   }
 
@@ -742,6 +767,18 @@ export class ElevenLabsTtsProvider implements TtsProvider {
   constructor(private readonly config: ElevenLabsProviderConfig) {
     this.model_version = config.options?.model_id ?? DEFAULT_ELEVENLABS_OPTIONS.model_id;
     this.provider_class = config.provider_class ?? 'production';
+  }
+
+  /** manifest に残す声の設定。voice_settings が null なら登録済みの声の設定が使われている。 */
+  describeSettings(): Record<string, unknown> {
+    const options = { ...DEFAULT_ELEVENLABS_OPTIONS, ...this.config.options };
+    return {
+      model_id: options.model_id,
+      language_code: options.language_code,
+      voice_settings: options.voice_settings,
+      voice_settings_source: options.voice_settings === null ? 'stored_on_voice' : 'sent_per_context',
+      seed: options.seed,
+    };
   }
 
   async open(config: TtsConnectionConfig): Promise<ElevenLabsConnection> {

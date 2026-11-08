@@ -90,6 +90,14 @@ export interface ElevenLabsMultiMessage {
   flush?: boolean;
   close_context?: boolean;
   xi_api_key?: string;
+  /** 文脈の最初のメッセージでだけ意味を持つ（docs/tts_consistency.md）。 */
+  voice_settings?: {
+    stability?: number;
+    similarity_boost?: number;
+    style?: number;
+    use_speaker_boost?: boolean;
+    speed?: number;
+  };
 }
 
 /** 資料はチャンク内の相対値、実測では flush をまたぐと文脈の累積。基準は受信側で判定する（C の toChunkRelative）。 */
