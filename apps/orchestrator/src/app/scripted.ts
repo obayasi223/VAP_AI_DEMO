@@ -79,6 +79,8 @@ export interface EnergyScriptedSttOptions {
   final_after_silence_ms?: number;
   /** 1文字あたりの発話の長さ。interim の伸び方に使う。 */
   ms_per_char?: number;
+  /** セッションの先頭からこの長さの mic は発話として数えない（VAP の助走が終わってから台本を始める E2E 用）。 */
+  ignore_audio_before_ms?: number;
 }
 
 class EnergyScriptedSttSession implements SttSession {
@@ -87,6 +89,7 @@ class EnergyScriptedSttSession implements SttSession {
   private segmentId = 0;
   private asrSegmentId = 0;
   private asrFrameStart: number;
+  private readonly sessionStartFrame: number;
   private revision = 0;
   private scriptIndex = 0;
   private voicedSamples = 0;
@@ -100,10 +103,12 @@ class EnergyScriptedSttSession implements SttSession {
     private readonly options: Required<Omit<EnergyScriptedSttOptions, 'emitter'>> & { emitter?: EventEmitter },
   ) {
     this.asrFrameStart = config.start_audio_frame;
+    this.sessionStartFrame = config.start_audio_frame;
   }
 
   pushAudio(audio_frame: number, mic: Int16Array): void {
     const end = audio_frame + mic.length;
+    if (((end - this.sessionStartFrame) / SAMPLE_RATE_HZ) * 1000 < this.options.ignore_audio_before_ms) return;
     const voiced = rmsDbfs(mic) >= this.options.voiced_dbfs;
     if (voiced) {
       if (!this.active) {
@@ -202,6 +207,7 @@ export class EnergyScriptedSttProvider implements SttProvider {
       voiced_dbfs: -40,
       final_after_silence_ms: 600,
       ms_per_char: 120,
+      ignore_audio_before_ms: 0,
       stable_interim: false,
       ...options,
     };

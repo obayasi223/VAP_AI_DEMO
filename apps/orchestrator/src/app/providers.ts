@@ -42,6 +42,9 @@ function scriptedInitiative(env: NodeJS.ProcessEnv): ScriptedInitiativeMode {
   return value;
 }
 
+/** 吸気の後の声の E2E の台本の開始。声は VAP が新しいときだけ鳴るので、VAP の助走（policy の vap_rewarm_ms = 10 秒）の後に延期を起こす。 */
+const SCRIPTED_DEFER_START_MS = 11_000;
+
 export type Built<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 export interface SessionProviders {
@@ -135,7 +138,7 @@ export async function createSessionProviders(input: {
     const second = scripted && scriptedSecondJudgementMode(mode);
     stt = {
       ok: true,
-      value: new EnergyScriptedSttProvider({ time, emitter, ...(scripted ? { stable_interim: true, script: second ? INITIATIVE_LONG_STT_SCRIPT : INITIATIVE_STT_SCRIPT } : {}), ...(second ? { ms_per_char: 90 } : {}) }),
+      value: new EnergyScriptedSttProvider({ time, emitter, ...(scripted ? { stable_interim: true, script: second ? INITIATIVE_LONG_STT_SCRIPT : INITIATIVE_STT_SCRIPT } : {}), ...(second ? { ms_per_char: 90 } : {}), ...(mode === 'defer_on_input' ? { ignore_audio_before_ms: SCRIPTED_DEFER_START_MS } : {}) }),
     };
   } else {
     try {
