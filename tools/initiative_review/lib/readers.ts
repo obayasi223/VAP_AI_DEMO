@@ -229,6 +229,10 @@ export interface StateRecord {
   to: string;
   cause: string;
   provenance: Provenance;
+  /** コード由来の原因（CandidateCause）。モデルの判定による遷移は null。 */
+  code_cause: string | null;
+  /** WITHDRAW の内容の分類（LLM の出力）。無ければ null。 */
+  withdraw_kind: string | null;
 }
 
 export interface DropRecord {
@@ -540,6 +544,8 @@ function readStateChanged(e: RawEvent, c: Collected): void {
     to: str(e.to) ?? '不明',
     cause: fromModel ? `LLM の判定 ${String(e.decision)}（${String(e.request_id)}）` : `コード: ${String(e.cause)}`,
     provenance: fromModel ? 'model_output' : 'code',
+    code_cause: fromModel ? null : str(e.cause),
+    withdraw_kind: fromModel ? str(e.withdraw_kind) : null,
   });
 }
 

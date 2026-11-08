@@ -319,3 +319,66 @@ describe('二段判定（initiative.desire と initiative.timing）', () => {
     expect(item.timeline.some((r) => r.event === 'turn.outcome')).toBe(true);
   });
 });
+
+describe('吸気の後の結末（延期と内容の撤回の区別）', () => {
+  type Ev = Record<string, unknown>;
+  const isState = (e: Ev) => e.event === 'candidate.state_changed';
+  const all = syntheticEvents() as Ev[];
+  const cue = all.find((e) => isState(e) && e.to === 'BREATH_INHALE') as Ev;
+  /** 吸気より後の遷移を除いた合成ログに、指定の遷移を足す。 */
+  const withStates = (...steps: Array<[string, string, Ev, number?]>): ReviewItem => {
+    const head = all.filter((e) => !(isState(e) && e.to === 'WITHDRAWN'));
+    const extra = steps.map(([from, to, cause, version], i) => {
+      const { cause: _cause, ...envelope } = cue;
+      return { ...envelope, t_monotonic_ms: 6000 + i * 100, from, to, ...cause, candidate_version: { value: version ?? 1 } };
+    });
+    return candidate(load({ events: [...head, ...extra] }));
+  };
+  const code = (cause: string): Ev => ({ cause_source: 'code', cause });
+  const model = (kind?: string): Ev => ({ cause_source: 'model_decision', decision: 'WITHDRAW', request_id: 'ini_0003', ...(kind ? { withdraw_kind: { source: 'model_output', value: kind } } : {}) });
+  const DEFER: [string, string, Ev] = ['BREATH_HOLD_OR_READY', 'DEFERRED', code('user_continued')];
+
+  it('延期の後に話した: 延期あり、結末は発話', () => {
+    const view = withStates(DEFER, ['DEFERRED', 'SPEAKING', code('turn_allowed')], ['SPEAKING', 'SPOKEN', code('speech_finished')]).after_cue;
+    expect(view).toMatchObject({ deferred: true, ending: 'spoken', withdraw_kind: null });
+    expect(view?.label).toBe('吸気 → 延期 → 発話');
+  });
+
+  it('延期の後に内容で撤回した: 延期と内容の撤回を両方残す', () => {
+    const view = withStates(DEFER, ['DEFERRED', 'WITHDRAWN', model('premise_changed')]).after_cue;
+    expect(view).toMatchObject({ deferred: true, ending: 'content_withdrawn', withdraw_kind: 'premise_changed', code_cause: null });
+    expect(view?.label).toBe('吸気 → 延期 → 内容の撤回（前提が変わった）');
+  });
+
+  it.each(['normal_response_started', 'expired', 'audio_unavailable'])('延期の後の %s は内容の撤回にしない', (cause) => {
+    const view = withStates(DEFER, ['DEFERRED', 'WITHDRAWN', code(cause)]).after_cue;
+    expect(view).toMatchObject({ deferred: true, ending: 'not_spoken_other', code_cause: cause, withdraw_kind: null });
+    expect(view?.label).toContain('内容の撤回ではない');
+  });
+
+  it('延期せずに内容で撤回した: 延期なし', () => {
+    expect(withStates(['BREATH_INHALE', 'WITHDRAWN', model('question_resolved')]).after_cue).toMatchObject({ deferred: false, deferred_at: null, ending: 'content_withdrawn' });
+  });
+
+  it('発言済みはコードの照合でも生成段の分類でも already_said', () => {
+    expect(withStates(DEFER, ['DEFERRED', 'WITHDRAWN', code('already_said')]).after_cue?.ending).toBe('already_said');
+    expect(withStates(DEFER, ['DEFERRED', 'WITHDRAWN', model('already_said')]).after_cue?.ending).toBe('already_said');
+  });
+
+  it('延期の後に内容を更新して話した: 更新の回数を残す', () => {
+    const view = withStates(DEFER, ['DEFERRED', 'SPEAKING', code('turn_allowed'), 2], ['SPEAKING', 'SPOKEN', code('speech_finished'), 2]).after_cue;
+    expect(view).toMatchObject({ deferred: true, revisions: 1, ending: 'spoken' });
+    expect(view?.label).toBe('吸気 → 延期 → 内容の更新 ×1 → 発話');
+  });
+
+  it('再生に失敗したら発話にしない。延期中で記録が終われば未解決', () => {
+    expect(withStates(['BREATH_HOLD_OR_READY', 'SPEAKING', code('turn_allowed')], ['SPEAKING', 'WITHDRAWN', code('speech_failed')]).after_cue?.ending).toBe('not_spoken_other');
+    expect(withStates(DEFER).after_cue).toMatchObject({ ending: 'unresolved', ending_at: null, deferred: true });
+  });
+
+  it('吸気のない候補と、候補でない判定は null', () => {
+    const noCue = all.filter((e) => !(isState(e) && (e.to === 'BREATH_INHALE' || e.to === 'WITHDRAWN')));
+    expect(candidate(load({ events: noCue })).after_cue).toBeNull();
+    expect(load().items.filter((i) => i.candidate_id === null).every((i) => i.after_cue === null)).toBe(true);
+  });
+});

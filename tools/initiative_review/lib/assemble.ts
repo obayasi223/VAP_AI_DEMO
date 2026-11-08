@@ -5,7 +5,7 @@
  *  - dropped: 判定がコードに棄てられた要求（stale、ゲート、保留など）。適用されなかったので候補にならないが、見て評価できるようにする。
  */
 import { conversationLabel, fieldsFrom, num, unwrapValue, type Collected, type DecisionRecord, type LlmRecord, type RawEvent, type SttRecord } from './readers';
-import type { DecisionStep, Field, InhaleRecord, RateAxis, ReflectionView, ReviewItem, SpeechOutcome, SpeechRecord, StableSnapshot, TimelineRow, TranscriptLine } from './model';
+import type { AfterCueEnding, AfterCueView, DecisionStep, Field, InhaleRecord, RateAxis, ReflectionView, ReviewItem, SpeechOutcome, SpeechRecord, StableSnapshot, TimelineRow, TranscriptLine } from './model';
 
 const FRAMES_PER_MS = 16;
 
@@ -200,7 +200,65 @@ function headlineOf(steps: DecisionStep[]): string {
   return runs.map(([token, n]) => (n > 1 ? `${token} ×${n}` : token)).join(' → ');
 }
 
-interface ItemShell extends Omit<ReviewItem, 'context_before' | 'context_after' | 'audio_sec' | 'rate_axes'> {
+const WITHDRAW_KIND_LABEL: Record<string, string> = {
+  question_resolved: '疑問が解消した',
+  premise_changed: '前提が変わった',
+  topic_moved: '話題が移った',
+  already_said: 'すでに話した',
+};
+
+const CODE_CAUSE_LABEL: Record<string, string> = {
+  normal_response_started: '通常応答が先に始まった',
+  expired: '期限切れ',
+  evidence_lost: '根拠の発話が ASR の修正で消えた',
+  stale_result: '判定が古くなった',
+  audio_unavailable: '候補の音声を用意できなかった',
+  speech_failed: '再生に失敗した',
+  speech_no_audio: '音が出なかった',
+  woz: '実験者の操作',
+};
+
+/** 候補の状態の列から、吸気の後の結末を読む。延期と内容の撤回を別の項目にする（延期の後に撤回されることもあるため）。 */
+function afterCueOf(states: Collected['states']): AfterCueView | null {
+  const cue = states.find((s) => s.to === 'BREATH_INHALE');
+  if (cue === undefined) return null;
+  const deferredState = states.find((s) => s.to === 'DEFERRED');
+  const last = states.at(-1) as Collected['states'][number];
+  const revisions = cue.candidate_version !== null && last.candidate_version !== null ? Math.max(0, last.candidate_version - cue.candidate_version) : 0;
+  const spoken = states.find((s) => s.to === 'SPOKEN');
+  const withdrawn = states.find((s) => s.to === 'WITHDRAWN');
+  let ending: AfterCueEnding = 'unresolved';
+  let endingLabel = '結末の記録なし';
+  if (spoken !== undefined) {
+    ending = 'spoken';
+    endingLabel = '発話';
+  } else if (withdrawn !== undefined) {
+    const kind = withdrawn.withdraw_kind;
+    if (kind === 'already_said' || withdrawn.code_cause === 'already_said') {
+      ending = 'already_said';
+      endingLabel = '撤回（すでに話した内容）';
+    } else if (withdrawn.code_cause === null) {
+      ending = 'content_withdrawn';
+      endingLabel = `内容の撤回（${kind === null ? '分類なし' : (WITHDRAW_KIND_LABEL[kind] ?? kind)}）`;
+    } else {
+      ending = 'not_spoken_other';
+      endingLabel = `話さず終了・内容の撤回ではない（${CODE_CAUSE_LABEL[withdrawn.code_cause] ?? withdrawn.code_cause}）`;
+    }
+  }
+  const end = spoken ?? withdrawn ?? null;
+  return {
+    deferred: deferredState !== undefined,
+    deferred_at: deferredState?.t_ms ?? null,
+    revisions,
+    ending,
+    ending_at: end?.t_ms ?? null,
+    withdraw_kind: withdrawn?.withdraw_kind ?? null,
+    code_cause: withdrawn?.code_cause ?? null,
+    label: ['吸気', ...(deferredState ? ['延期'] : []), ...(revisions > 0 ? [`内容の更新 ×${revisions}`] : []), endingLabel].join(' → '),
+  };
+}
+
+interface ItemShell extends Omit<ReviewItem, 'context_before' | 'context_after' | 'audio_sec' | 'rate_axes' | 'after_cue'> {
   rate_axes?: RateAxis[];
 }
 
@@ -494,6 +552,7 @@ export function assemble(c: Collected, ctx: AssembleContext): { items: ReviewIte
         prompt_versions: versions,
         headline: headlineOf(item.decisions) + (item.final_state === null ? '' : `（${item.final_state}）`),
         timeline: item.timeline.sort((a, b) => a.t_ms - b.t_ms),
+        after_cue: item.candidate_id === null ? null : afterCueOf(c.states.filter((s) => s.candidate_id === item.candidate_id)),
         context_before: before.map((l) => l.id),
         context_after: after.map((l) => l.id),
         audio_sec: map.secondsAtT(item.anchor_t_ms),

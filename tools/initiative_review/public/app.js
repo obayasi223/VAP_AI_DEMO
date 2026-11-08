@@ -355,6 +355,20 @@ function actualBlock(item) {
   return rows.length === 0 ? el('p', { class: 'note', text: '吸気も発話も起きていません。' }) : el('table', {}, rows);
 }
 
+// 吸気の後の結末。「延期」は話す時点の先送りで、「内容の撤回」とは別の項目として出す。
+function afterCueBlock(item) {
+  const view = item.after_cue;
+  if (!view) return el('p', { class: 'note', text: '吸気を見せていない候補です。' });
+  const ending = { spoken: '発話した', content_withdrawn: '内容を撤回した', already_said: 'すでに話した内容なので撤回した', not_spoken_other: '話さずに終わった（内容は撤回していない）', unresolved: '記録の終わりまで結末がない' }[view.ending];
+  return el(
+    'table',
+    {},
+    el('tr', {}, el('th', { text: '流れ' }), el('td', { text: view.label })),
+    el('tr', {}, el('th', { text: '延期' }), el('td', { text: view.deferred ? `あり（${fmtT(view.deferred_at)}）` : 'なし' })),
+    el('tr', {}, el('th', { text: '結末' }), el('td', { text: `${ending}${view.ending_at === null ? '' : `（${fmtT(view.ending_at)}）`}` })),
+  );
+}
+
 // 通常応答に渡した材料（渡した版）と、実際に話した文の比較。反映はコードの文字の一致からの推定で、確定ではない。
 function reflectionBlock(item) {
   if (item.kind !== 'candidate') return null;
@@ -476,6 +490,8 @@ function renderDetail() {
     ...item.decisions.map((step, index) => stepCard(step, index, item)),
     el('h3', { text: '遷移（候補の状態の遷移、交渉、合図、棄却）' }),
     el('div', { class: 'panel' }, timelineTable(item)),
+    el('h3', { text: '吸気の後の結末（延期と内容の撤回は別）' }),
+    el('div', { class: 'panel' }, afterCueBlock(item)),
     el('h3', { text: '実際に吸気や発話が起きた時刻' }),
     el('div', { class: 'panel' }, actualBlock(item)),
     el('h3', { text: '通常応答に渡した材料と、反映の推定（渡した版、実際に話した文、推定の一致）' }),

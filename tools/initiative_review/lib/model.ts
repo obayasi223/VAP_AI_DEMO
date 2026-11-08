@@ -101,6 +101,31 @@ export interface ReflectionView {
   estimate_text: string | null;
 }
 
+/**
+ * 吸気を見せた候補の結末。「延期（話す時点を先送りした）」と「内容の撤回（言う必要がなくなった）」を分けて出す。
+ *  - content_withdrawn: 後続の発話を見た生成段の WITHDRAW（内容の撤回）。
+ *  - already_said: AI がすでに話した内容だった（コードの照合か、生成段の分類）。
+ *  - not_spoken_other: 内容は撤回していないが話せずに終わった（通常応答が先に始まった、期限切れ、音声の失敗など）。
+ *  - unresolved: 記録の終わりまで結末がない。
+ */
+export type AfterCueEnding = 'spoken' | 'content_withdrawn' | 'already_said' | 'not_spoken_other' | 'unresolved';
+
+export interface AfterCueView {
+  /** 吸気の後に延期（DEFERRED）を通ったか。結末とは独立に見る。 */
+  deferred: boolean;
+  deferred_at: number | null;
+  /** 吸気より後に内容を更新した回数（候補の版の差）。 */
+  revisions: number;
+  ending: AfterCueEnding;
+  ending_at: number | null;
+  /** 生成段の撤回の分類（LLM の出力）。 */
+  withdraw_kind: string | null;
+  /** コード由来の原因（CandidateCause）。 */
+  code_cause: string | null;
+  /** 画面に出す一行（例: 吸気 → 延期 → 内容の撤回（前提が変わった））。 */
+  label: string;
+}
+
 export type ItemKind = 'candidate' | 'none' | 'dropped';
 export type RateAxis = 'content' | 'timing' | 'wait_withdraw';
 
@@ -125,6 +150,8 @@ export interface ReviewItem {
   speech: SpeechRecord[];
   /** 通常応答に渡した材料と、実際に話した文との比較（反映は推定で、確定ではない）。 */
   reflection: ReflectionView[];
+  /** 吸気を見せた候補の結末。吸気のなかった候補と、候補でない判定は null。 */
+  after_cue: AfterCueView | null;
   /** 表示する前後の会話（lines の id）。 */
   context_before: string[];
   context_after: string[];
