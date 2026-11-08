@@ -194,3 +194,73 @@ describe('二段判定の行（initiative.desire と initiative.timing）', () =
     expect(decisions[1]).toMatchObject({ stage: 'timing', decision: 'WAIT_FOR_TURN_END', model_call: true, request_id: 'ini_0001_timing' });
   });
 });
+
+describe('候補の周辺の出来事（持ち越し、材料、反映、重複の撤回、合図への反応）', () => {
+  const event = (fields: Record<string, unknown>) => ({ t_monotonic_ms: 10, ...fields }) as unknown as ResearchEvent;
+
+  it('表の行になり、LLM の文は別の欄に分かれる', () => {
+    const tracker = new CandidateTracker();
+    tracker.add(event({ event: 'initiative.not_offered', candidate_id: 'c_0001', reason: 'wait_for_turn_end' }));
+    tracker.add(
+      event({
+        event: 'initiative.response_material',
+        candidate_id: 'c_0001',
+        prompt_version: 'pending_material_v1',
+        proposed_utterance: { source: 'model_output', value: 'それって何ですか' },
+      }),
+    );
+    tracker.add(
+      event({
+        event: 'initiative.response_reflection',
+        candidate_id: 'c_0001',
+        spoken_outcome: 'partly_spoken',
+        proposed_utterance: { source: 'model_output', value: 'それって何ですか' },
+        estimated_reflected: { value: false },
+        estimate: { value: { containment: 0.2, threshold: 0.5 } },
+      }),
+    );
+    tracker.add(
+      event({
+        event: 'initiative.already_said',
+        candidate_id: 'c_0002',
+        stage: 'after_ai_speech',
+        proposed_utterance: { source: 'model_output', value: '同じです' },
+        comparison: { source: 'verified', value: { method: 'char_2gram_cosine', similarity: 0.91, threshold: 0.8, matched_text: '同じです' }, method: 'code' },
+        matched_origin: 'response',
+        matched_audio_playback_id: 7,
+      }),
+    );
+    tracker.add(
+      event({
+        event: 'negotiation.cue_reaction',
+        candidate_id: 'c_0003',
+        ended_by: 'ai_speech_started',
+        ticks: 10,
+        user_speaking_ticks: 4,
+        user_speaking_at_cue: true,
+        time_to_user_stop_ms: { value: 480 },
+        time_to_user_start_ms: { value: null, null_reason: 'x' },
+      }),
+    );
+    tracker.add(event({ event: 'negotiation.decision', stage: 'speech_selection', candidate_id: { value: 'c_0003' }, outcome: 'response', reasons: ['direct_question'] }));
+    tracker.add(event({ event: 'negotiation.decision', stage: 'signal_gate', candidate_id: { value: 'c_0003' }, outcome: 'blocked', reasons: ['ai_speaking'] }));
+
+    const notes = tracker.summary().notes;
+    expect(notes.map((n) => n.kind)).toEqual([
+      '発話の選択: response',
+      '合図への反応（観測値）',
+      'すでに話した内容で撤回（after_ai_speech）',
+      '材料の反映（推定）',
+      '通常応答に材料を渡した',
+      '今は申し出ない（通常応答の後へ持ち越し）',
+    ]);
+    expect(notes[1]!.detail).toContain('止まるまで 480ms');
+    expect(notes[2]!.detail).toContain('類似度 0.91');
+    expect(notes[3]!.model_text).toBe('それって何ですか');
+    expect(notes[5]!.model_text).toBeNull();
+
+    const html = renderToStaticMarkup(createElement(CandidatePanel, { candidates: tracker.summary() }));
+    expect(html).toContain('candidate-notes');
+    expect(html).toContain('材料の反映（推定）');
+  });
+});

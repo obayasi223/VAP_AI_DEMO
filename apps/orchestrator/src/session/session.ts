@@ -503,10 +503,10 @@ export class Session {
         pending_material: (request) => this.negotiation?.responseMaterial(request, this.time.monotonicMs()) ?? null,
       }),
       sink: {
-        begin: (m) => this.send({ type: 'playback.begin', ...m }),
-        pcm: (frame) => this.link?.sendBinary(encodePcmFrame(frame)),
-        alignment: (m) => this.send({ type: 'playback.alignment', ...m }),
-        stop: (m) => this.send({ type: 'playback.stop', ...m }),
+        begin: (m) => this.afterCandidateRelease(() => this.send({ type: 'playback.begin', ...m })),
+        pcm: (frame) => this.afterCandidateRelease(() => this.link?.sendBinary(encodePcmFrame(frame))),
+        alignment: (m) => this.afterCandidateRelease(() => this.send({ type: 'playback.alignment', ...m })),
+        stop: (m) => this.afterCandidateRelease(() => this.send({ type: 'playback.stop', ...m })),
       },
       time: this.time,
       // none のときは VocalCueWiring が null で、これまでと同じ emitter のまま。
@@ -1067,6 +1067,14 @@ export class Session {
     }
   }
 
+  /** 候補の開始の間だけ、下りの音声の送信を止める（合図の解除を先に送るため）。 */
+  private playbackHold: (() => void)[] | null = null;
+
+  private afterCandidateRelease(send: () => void): void {
+    if (this.playbackHold !== null) this.playbackHold.push(send);
+    else send();
+  }
+
   /** この tick で始めたのが候補の発話か（dispatch の start_speech で通常応答の撤回をしないため）。 */
   private startedCandidate = false;
   /** 候補の発話を始めたときの人の発話（1 音も出ないまま失敗したら、通常の応答の経路へ戻すための文）。 */
@@ -1168,7 +1176,12 @@ export class Session {
   private startCandidateSpeech(choice: CandidateChoice, audio_playback_id: number, now: number): string | null {
     if (this.speech === null || this.negotiation === null) return 'speech_unavailable';
     if (this.link === null) return 'browser_detached';
+    // 合図の解除（breath.release／breath.prepare）を playback.begin より先に送る。音の開始より身体の合図を先に届ける。
+    this.playbackHold = [];
     const refused = this.negotiation.startCandidate(choice, audio_playback_id, now);
+    const held = this.playbackHold;
+    this.playbackHold = null;
+    for (const flush of held) flush();
     if (refused !== null) {
       this.counters.start_refused[refused] = (this.counters.start_refused[refused] ?? 0) + 1;
       return refused;

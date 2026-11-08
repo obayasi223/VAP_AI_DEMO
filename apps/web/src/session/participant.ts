@@ -22,7 +22,7 @@ import type {
   SignalReport,
   TrackSettings,
 } from '@llm-vap/contracts/browser_rpc';
-import { startBrowserAudio, type BrowserAudioSession, type LinkState } from '../audio';
+import { startBrowserAudio, type BrowserAudioSession, type LinkState, type TransportStats } from '../audio';
 import type { Avatar } from '../avatar';
 import type { AvatarRecord } from '../avatar/avatar_models';
 import type { BreathController, BreathPhaseEvent } from '../avatar/breath';
@@ -178,7 +178,7 @@ export class ParticipantController {
   /** E2E 向けの記録。 */
   readonly record = {
     gazeCommands: [] as { target: GazeTarget; client_t_ms: number }[],
-    gazeReports: [] as GazeReport[],
+    gazeReports: [] as (GazeReport & { reported_t_ms: number })[],
     /** 届いた吸気の合図と解除（E2E 向け）。breath は BreathController を呼べたか。 */
     breathCommands: [] as { type: 'breath.cue' | 'breath.release' | 'breath.prepare'; cue_id: string | null; reason?: string; client_t_ms: number; breath: boolean }[],
     signalReports: [] as SignalReport[],
@@ -186,6 +186,7 @@ export class ParticipantController {
     mouthSamplesWhilePlaying: 0,
     maxMouthOpen: 0,
     messages: [] as string[],
+    threadAxis: null as TransportStats['thread_axis'],
   };
 
   /** breath.prepare の後に release('speech_started') を呼ぶ予約（撤回が来たら取り消す）。 */
@@ -247,7 +248,7 @@ export class ParticipantController {
 
   /** アバターの onGazeReport から呼ぶ。 */
   gazeRendered(report: GazeReport): void {
-    this.record.gazeReports.push(report);
+    this.record.gazeReports.push({ ...report, reported_t_ms: performance.now() });
     this.audio?.send(report);
   }
 
@@ -285,6 +286,9 @@ export class ParticipantController {
           this.update({ link: state });
         },
         onError: (detail) => this.record.messages.push(`error: ${detail}`),
+        onStats: (stats) => {
+          this.record.threadAxis = stats.thread_axis;
+        },
       });
     } catch (error) {
       this.update({ phase: 'failed', error: describeStartError(error) });

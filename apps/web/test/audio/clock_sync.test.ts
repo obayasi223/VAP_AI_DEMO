@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ClockEstimator, RenderClock } from '../../src/audio/clock_sync';
+import { ClockEstimator, RenderClock, ThreadAxisEstimator } from '../../src/audio/clock_sync';
 
 describe('ClockEstimator', () => {
   it('RTT が最小の標本を採る', () => {
@@ -18,6 +18,19 @@ describe('ClockEstimator', () => {
     const e = c.add(5000, 6030, 5040);
     expect(e?.rtt_ms).toBe(40);
     expect(e?.samples).toBe(1);
+  });
+});
+
+describe('ThreadAxisEstimator', () => {
+  it('RTT が最小の往復から差を求め、timeOrigin に依らない', () => {
+    const a = new ThreadAxisEstimator();
+    expect(a.offsetMs).toBeNull();
+    a.add(1000, 6500, 1400); // 主スレッドが詰まった往復（rtt 400）
+    a.add(2000, 7300, 2002); // rtt 2、offset 5299
+    a.add(3000, 8999, 3100); // rtt 100 は採らない
+    expect(a.offsetMs).toBeCloseTo(5299);
+    expect(a.rttMs).toBe(2);
+    expect(a.uncertaintyMs).toBe(1);
   });
 });
 

@@ -20211,6 +20211,25 @@ var ClockEstimator = class {
     this.samples.length = 0;
   }
 };
+var ThreadAxisEstimator = class {
+  best = null;
+  /** workerSent と workerReceived は Worker の now、mainT は主スレッドの now。 */
+  add(workerSentMs, mainMs, workerReceivedMs) {
+    const rtt = workerReceivedMs - workerSentMs;
+    if (this.best === null || rtt < this.best.rtt_ms) {
+      this.best = { offset_ms: mainMs - (workerSentMs + workerReceivedMs) / 2, rtt_ms: rtt };
+    }
+  }
+  get offsetMs() {
+    return this.best === null ? null : this.best.offset_ms;
+  }
+  get uncertaintyMs() {
+    return this.best === null ? 0 : this.best.rtt_ms / 2;
+  }
+  get rttMs() {
+    return this.best === null ? null : this.best.rtt_ms;
+  }
+};
 var RenderClock = class {
   constructor(rate, windowObservations = 256) {
     this.rate = rate;
@@ -20426,6 +20445,7 @@ var scope = self;
 var MAX_PENDING_CONTROL = 256;
 var CLOCK_BURST = 6;
 var CLOCK_BURST_INTERVAL_MS = 100;
+var AXIS_PING_INTERVAL_MS = 500;
 var RECONNECT_MIN_MS = 250;
 var RECONNECT_MAX_MS = 5e3;
 var SESSION_OPEN_ELSEWHERE_CODE = 4e3;
@@ -20443,6 +20463,7 @@ var contextState = "suspended";
 var visibility = "visible";
 var renderClock = null;
 var clock = new ClockEstimator();
+var axis = new ThreadAxisEstimator();
 var pingSeq = 0;
 var burstLeft = 0;
 var clockTimer = null;
@@ -20466,8 +20487,13 @@ var workletCounters = { underrun_count: 0, underrun_frames: 0, stale_chunks: 0, 
 var latestAudioFrame = 0;
 var expectedAudioFrame = null;
 function clientNow() {
+  const offset = axis.offsetMs;
+  if (offset !== null) return Math.max(0, performance.now() + offset);
   const originMs = init === null ? performance.timeOrigin : init.mainTimeOrigin;
   return Math.max(0, performance.timeOrigin + performance.now() - originMs);
+}
+function axisPing() {
+  toMain({ t: "axis_ping", worker_t_ms: performance.now() });
 }
 function toMain(message) {
   scope.postMessage(message);
@@ -20510,6 +20536,12 @@ function toAudioSamples(contextFrames) {
   if (init === null) return 0;
   return Math.floor(contextFrames * SAMPLE_RATE_HZ / init.sampleRateHz);
 }
+function axisReport() {
+  const offset = axis.offsetMs;
+  const rtt = axis.rttMs;
+  if (offset === null || rtt === null || init === null) return null;
+  return { offset_ms: offset, rtt_ms: rtt, skew_ms: offset - (performance.timeOrigin - init.mainTimeOrigin) };
+}
 function stats() {
   const rate = init?.sampleRateHz ?? SAMPLE_RATE_HZ;
   return {
@@ -20528,7 +20560,8 @@ function stats() {
     rpc_errors: counters.rpc_errors,
     audio_frame: latestAudioFrame,
     render_lag_ms: renderClock?.renderLagMs ?? 0,
-    worklet_arrival_delay_ms: renderClock?.arrivalDelayMs ?? 0
+    worklet_arrival_delay_ms: renderClock?.arrivalDelayMs ?? 0,
+    thread_axis: axisReport()
   };
 }
 function sendAudioReport() {
@@ -20702,7 +20735,7 @@ function onJson(text) {
           type: "clock.report",
           offset_ms: estimate.offset_ms,
           rtt_ms: estimate.rtt_ms,
-          uncertainty_ms: estimate.uncertainty_ms,
+          uncertainty_ms: estimate.uncertainty_ms + axis.uncertaintyMs,
           samples: estimate.samples,
           client_t_ms: receivedAt
         });
@@ -20862,6 +20895,8 @@ scope.onmessage = (event) => {
       renderClock = new RenderClock(message.init.sampleRateHz);
       worklet.onmessage = onWorklet;
       setInterval(sendAudioReport, message.init.reportIntervalMs);
+      axisPing();
+      setInterval(axisPing, AXIS_PING_INTERVAL_MS);
       connect();
       break;
     case "latency":
@@ -20877,6 +20912,9 @@ scope.onmessage = (event) => {
       break;
     case "send":
       sendControl(message.message);
+      break;
+    case "axis_pong":
+      axis.add(message.worker_t_ms, message.main_t_ms, performance.now());
       break;
     case "shutdown":
       shuttingDown = true;

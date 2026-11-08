@@ -11,7 +11,8 @@
  */
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { loadavg, tmpdir } from 'node:os';
+import { PerformanceObserver } from 'node:perf_hooks';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
@@ -36,7 +37,7 @@ interface ParticipantHandle {
       trackSettings: { echoCancellation: { value: boolean | null }; noiseSuppression: { value: boolean | null }; autoGainControl: { value: boolean | null } } | null;
       [key: string]: unknown;
     };
-    record: { mouthOpenWhilePlaying: number; mouthSamplesWhilePlaying: number; maxMouthOpen: number; gazeReports: { target: string; visible: boolean; client_t_ms: { value: number | null } }[]; gazeCommands: { target: string; client_t_ms: number }[]; messages: string[]; breathCommands: { type: string; breath: boolean }[]; signalReports: { phase: string }[] };
+    record: { mouthOpenWhilePlaying: number; mouthSamplesWhilePlaying: number; maxMouthOpen: number; gazeReports: { target: string; visible: boolean; client_t_ms: { value: number | null }; reported_t_ms: number }[]; gazeCommands: { target: string; client_t_ms: number }[]; messages: string[]; breathCommands: { type: string; breath: boolean }[]; signalReports: { phase: string }[]; threadAxis: { offset_ms: number; rtt_ms: number; skew_ms: number } | null };
   };
   avatar(): unknown;
   avatarError(): string | null;
@@ -44,6 +45,7 @@ interface ParticipantHandle {
 declare global {
   interface Window {
     __participant?: ParticipantHandle;
+    __longTasks?: { start_ms: number; duration_ms: number }[];
   }
 }
 
@@ -158,6 +160,9 @@ async function openParticipant(browser: Browser, query = ''): Promise<Page> {
   const page = await browser.newPage({ viewport: { width: 320, height: 240 } });
   page.on('pageerror', (e) => console.log(`  pageerror: ${String(e)}`));
   await page.addInitScript('window.__name = (f) => f');
+  // 視線の遅れの切り分け用: 主スレッドの長いタスク（longtask）を集める。
+  await page.addInitScript(`window.__longTasks = [];
+    try { new PerformanceObserver((list) => { for (const e of list.getEntries()) window.__longTasks.push({ start_ms: e.startTime, duration_ms: e.duration }); }).observe({ type: 'longtask', buffered: true }); } catch {}`);
   // 初回は Next のコンパイルで時間がかかる。
   await page.goto(`http://127.0.0.1:${WEB_PORT}/?ws=${encodeURIComponent(`ws://127.0.0.1:${ORCH_PORT}/ws`)}${query}`, {
     waitUntil: 'load',
@@ -170,8 +175,37 @@ async function openParticipant(browser: Browser, query = ''): Promise<Page> {
   return page;
 }
 
+/** Node のイベントループの遅れと負荷の記録（視線の遅れの切り分け用）。 */
+function startLoopMonitor(): { stop(): { lags: { at_wall: number; lag_ms: number }[]; load: { at_wall: number; load1: number }[]; gc: { at_wall: number; ms: number; kind: number }[] } } {
+  const lags: { at_wall: number; lag_ms: number }[] = [];
+  const load: { at_wall: number; load1: number }[] = [];
+  const gc: { at_wall: number; ms: number; kind: number }[] = [];
+  const gcObserver = new PerformanceObserver((list) => {
+    for (const e of list.getEntries()) if (e.duration >= 50) gc.push({ at_wall: performance.timeOrigin + e.startTime, ms: e.duration, kind: (e as unknown as { detail: { kind: number } }).detail.kind });
+  });
+  gcObserver.observe({ entryTypes: ['gc'] });
+  // 単調時計で測る（WSL の時計は約 33 秒ごとに +1.3 秒ほど飛ぶ。Date.now だと止まって見える。docs/overnight_verification.md）。
+  let expected = performance.now() + 20;
+  const timer = setInterval(() => {
+    const now = performance.now();
+    const lag = now - expected;
+    if (lag > 60) lags.push({ at_wall: Date.now(), lag_ms: Math.round(lag) });
+    expected = now + 20;
+  }, 20);
+  const loadTimer = setInterval(() => load.push({ at_wall: Date.now(), load1: loadavg()[0]! }), 2000);
+  return {
+    stop: () => {
+      clearInterval(timer);
+      clearInterval(loadTimer);
+      gcObserver.disconnect();
+      return { lags, load, gc };
+    },
+  };
+}
+
 async function main(): Promise<void> {
   loadDotEnv();
+  const loopMonitor = startLoopMonitor();
   const workDir = await mkdtemp(path.join(process.env.E2E_WORKDIR ?? tmpdir(), 'e2e-'));
   results.work_dir = workDir;
   console.log(`work dir: ${workDir}`);
@@ -256,9 +290,11 @@ async function main(): Promise<void> {
         const r = c.record.gazeReports[i]!;
         delays.push(r.visible && r.client_t_ms.value !== null ? r.client_t_ms.value - cmd.client_t_ms : 'superseded');
       }
-      return { view: c.current(), gazeCommandToRenderMs: delays, record: { ...c.record, gazeReports: c.record.gazeReports.length, gazeCommands: c.record.gazeCommands.length } };
+      const reports = c.record.gazeReports.map((r) => ({ target: r.target, visible: r.visible, raf_ms: r.client_t_ms.value, reported_t_ms: r.reported_t_ms }));
+      return { view: c.current(), gazeCommandToRenderMs: delays, gaze_trace: { commands: c.record.gazeCommands, reports, long_tasks: window.__longTasks ?? [], thread_axis: c.record.threadAxis }, record: { ...c.record, gazeReports: c.record.gazeReports.length, gazeCommands: c.record.gazeCommands.length } };
     });
     results.participant_view_1 = view1;
+    results.loop_monitor_main_window = { at: Date.now() };
     check('参加者画面: リンクが ready', view1.view.link === 'ready', view1.view.link);
     check('参加者画面: AEC/NS/AGC が false で返る', view1.view.trackSettings?.echoCancellation.value === false && view1.view.trackSettings?.noiseSuppression.value === false && view1.view.trackSettings?.autoGainControl.value === false, view1.view.trackSettings);
     check('口: 再生中に口が開いた', view1.record.mouthOpenWhilePlaying > 0, { open_frames: view1.record.mouthOpenWhilePlaying, frames: view1.record.mouthSamplesWhilePlaying, max: view1.record.maxMouthOpen });
@@ -293,7 +329,12 @@ async function main(): Promise<void> {
 
     // ---- 2b. 2つ目のタブ: 断られ、張り直さず、1つ目の会話は続く -------------------------------
     const tab2 = await openParticipant(browser);
-    await tab2.click('#start');
+    // 高負荷では 2 つ目のタブの描画で主スレッドが詰まり、既定の 30 秒で要素を見つけられないことがある（docs/overnight_verification.md）。
+    await tab2.click('#start', { timeout: 90_000 }).catch(async (error: unknown) => {
+      const state = await tab2.evaluate(() => ({ start: document.querySelector('#start') !== null, phase: window.__participant?.controller.current() })).catch((e: unknown) => String(e));
+      console.log(`  tab2 click failed: ${JSON.stringify(state).slice(0, 400)}`);
+      throw error;
+    });
     let tab2Link = '';
     for (const until = Date.now() + 20_000; Date.now() < until && tab2Link !== 'elsewhere'; await sleep(200)) {
       tab2Link = await tab2.evaluate(() => window.__participant!.controller.current().link);
@@ -477,6 +518,9 @@ async function main(): Promise<void> {
       const dir7 = path.join(config.sessions_dir, session7.session_id);
       analyseVocalCue(readEvents(path.join(dir7, 'events.jsonl')), JSON.parse(readFileSync(path.join(dir7, 'manifest.json'), 'utf8')) as Record<string, unknown>, results.session7 as { candidate_spoken: boolean; assistant_texts: string[] } | null);
     }
+  } catch (error) {
+    failures.push(`exception: ${String(error).split('\n')[0]}`);
+    throw error;
   } finally {
     await browser?.close().catch(() => undefined);
     if (next?.pid) {
@@ -489,6 +533,7 @@ async function main(): Promise<void> {
     await server.close().catch(() => undefined);
     await maai.stop('e2e_done').catch(() => undefined);
     results.failures = failures;
+    results.loop_monitor = loopMonitor.stop();
     const out = path.join(workDir, 'e2e_result.json');
     await writeFile(out, JSON.stringify(results, null, 2));
     console.log(`\nresult: ${out}`);
@@ -715,28 +760,44 @@ function analyse(events: ResearchEvent[], session: Session, gazeSettings: GazeSe
   const changes = decisions.filter((d, i) => d.target !== (i === 0 ? 'user' : decisions[i - 1]!.target));
   // ブラウザは目標の変化ごとに順に報告する（描画、または描画前に上書きされた未描画）。前から順に対応づけ、
   // 1つの報告を2つの判断に使わない（後の同じ向きの描画で、消えた報告を埋め合わせない）。
-  // 対応づけと遅れは、orchestrator が受け取った順と時刻で見る。rendered_at はブラウザの時計を換算した値で、
-  // 実測では判断より 0.5〜0.7 秒前になる回があり（報告の受信は判断の後）、時刻で照合すると別の描画に対応してしまう。
-  type Outcome = { kind: 'rendered'; lag_ms: number; rendered_at_minus_decision_ms: number } | { kind: 'superseded' | 'hidden' | 'missing' | 'page_closed' };
+  // 対応づけは orchestrator が受け取った順で見る（報告は順に来る）。遅れは rendered_at（ブラウザの rAF 時刻を換算した値）と
+  // 判断の t_monotonic の差で測る。wall_clock は WSL の時計の飛び（約 33 秒ごとに +1.3 秒）で伸びるので使わない
+  // （docs/overnight_verification.md）。rAF の時刻はフレームの開始なので、命令の受信より少し前になりうる。
+  type Outcome = { kind: 'rendered'; receipt_lag_wall_ms: number; rendered_at_minus_decision_ms: number } | { kind: 'superseded' | 'hidden' | 'missing' | 'page_closed' | 'link_down' };
+  // 切断の間に出た判断はブラウザへ届かない（gaze.command は再送しない）。切断試験の区間を照合から外す。
+  const linkDown: [number, number][] = [];
+  let closedAt: number | null = null;
+  for (const e of ofType(events, 'provider.status')) {
+    if (e.provider !== 'browser_link') continue;
+    if (e.reason.value === 'ws_closed') closedAt = e.t_monotonic_ms;
+    else if ('null_reason' in e.reason && e.reason.null_reason === 'reattached' && closedAt !== null) {
+      linkDown.push([closedAt, e.t_monotonic_ms]);
+      closedAt = null;
+    }
+  }
+  const inLinkDown = (t: number) => linkDown.some(([a, b]) => t >= a && t <= b);
   const logIndex = new Map<ResearchEvent, number>(events.map((e, i) => [e, i]));
   let cursor = 0;
   const outcomes: Outcome[] = changes.map((d) => {
+    if (inLinkDown(d.t_monotonic_ms)) return { kind: 'link_down' };
     for (let i = cursor; i < rendered.length; i += 1) {
       const r = rendered[i]!;
       if (r.target !== d.target) continue;
       if (logIndex.get(r)! < logIndex.get(d)!) continue;
       cursor = i + 1;
-      if (r.visible) return { kind: 'rendered', lag_ms: Date.parse(r.wall_clock) - Date.parse(d.wall_clock), rendered_at_minus_decision_ms: r.rendered_at - d.t_monotonic_ms };
-      return { kind: r.null_reason === 'superseded_before_render' ? 'superseded' : 'hidden' };
+      if (r.visible) return { kind: 'rendered', receipt_lag_wall_ms: Date.parse(r.wall_clock) - Date.parse(d.wall_clock), rendered_at_minus_decision_ms: r.rendered_at - d.t_monotonic_ms };
+      if (r.null_reason === 'superseded_before_render') return { kind: 'superseded' };
+      // ページを閉じる瞬間は visibility が hidden になり rAF が来ない（page_hidden_no_raf）。閉じる直前の分だけ page_closed と同じ扱いにする。
+      // 実行の途中で hidden になったものは失敗のまま（描画が止まる不具合を通さない）。
+      if (mainPageClosedAtWall !== null && Date.parse(d.wall_clock) >= mainPageClosedAtWall - 1000) return { kind: 'page_closed' };
+      return { kind: 'hidden' };
     }
     if (mainPageClosedAtWall !== null && Date.parse(d.wall_clock) >= mainPageClosedAtWall - 1000) return { kind: 'page_closed' };
     return { kind: 'missing' };
   });
-  // 1 秒以内: 受信までの遅れ（描画の遅れの上限。報告の戻りの遅れも含む）か、ブラウザの描画時刻のどちらかで確かめる。
-  // 描画時刻が判断より前になった回は時計の値が信用できないので、描画時刻の根拠には使わない。
-  const reflected = outcomes.filter(
-    (o) => o.kind === 'rendered' && (o.lag_ms <= 1000 || (o.rendered_at_minus_decision_ms >= 0 && o.rendered_at_minus_decision_ms <= 1000)),
-  );
+  // 1 秒以内: 描画時刻（rAF、換算済み）で確かめる。閾値は 1000ms のまま。-RENDER_CLOCK_TOLERANCE_MS より前は時計の異常として通さない。
+  const RENDER_CLOCK_TOLERANCE_MS = 150;
+  const reflected = outcomes.filter((o) => o.kind === 'rendered' && o.rendered_at_minus_decision_ms >= -RENDER_CLOCK_TOLERANCE_MS && o.rendered_at_minus_decision_ms <= 1000);
   const superseded = outcomes.filter((o) => o.kind === 'superseded');
   // 保持時間（原著にない、docs/known_gaps.md §7）: 逸らしの長さと、戻してから再び逸らすまでの間。
   const holdAway = gazeSettings.hold_away_min_ms;
@@ -763,7 +824,12 @@ function analyse(events: ResearchEvent[], session: Session, gazeSettings: GazeSe
     target_changes: changes.length,
     reflected_within_1s: reflected.length,
     superseded_before_render: superseded.length,
-    outcomes: outcomes.map((o) => (o.kind === 'rendered' ? Math.round(o.lag_ms) : o.kind)),
+    hidden_reported: outcomes.filter((o) => o.kind === 'hidden').length,
+    link_down: outcomes.filter((o) => o.kind === 'link_down').length,
+    outcomes: outcomes.map((o) => (o.kind === 'rendered' ? Math.round(o.rendered_at_minus_decision_ms) : o.kind)),
+    receipt_lag_wall_ms: outcomes.flatMap((o) => (o.kind === 'rendered' ? [Math.round(o.receipt_lag_wall_ms)] : [])),
+    decision_t_ms: changes.map((d) => Math.round(d.t_monotonic_ms)),
+    decision_wall: changes.map((d) => d.wall_clock),
     rendered_at_minus_decision_ms: outcomes.flatMap((o) => (o.kind === 'rendered' ? [Math.round(o.rendered_at_minus_decision_ms)] : [])),
     away_ms: awayMs,
     away_returned_immediately: changes.filter((c, i) => c.target === 'user' && changes[i - 1]?.target === 'away' && IMMEDIATE_RETURN.test(c.reason)).map((c) => c.reason),
@@ -774,7 +840,7 @@ function analyse(events: ResearchEvent[], session: Session, gazeSettings: GazeSe
   check('視線: AI 発話中のポーズで gaze.decision が発生', inPause.length >= 1, results.gaze);
   check(
     '視線: 向きの変わった gaze.decision ごとに、1 秒以内の描画（同じ向き）か「未描画で上書き」の報告がある',
-    changes.length > 0 && reflected.length + superseded.length + outcomes.filter((o) => o.kind === 'page_closed').length === changes.length,
+    changes.length > 0 && reflected.length + superseded.length + outcomes.filter((o) => o.kind === 'page_closed' || o.kind === 'link_down').length === changes.length,
     results.gaze,
   );
   check('視線: 逸らしが保持時間より短く戻らない（人の発話、割り込み、発話の終わり、鮮度切れを除く）', shortAway.length === 0, { hold_away_min_ms: holdAway, short: shortAway });

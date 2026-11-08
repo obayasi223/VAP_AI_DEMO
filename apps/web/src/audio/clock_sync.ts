@@ -54,6 +54,35 @@ export class ClockEstimator {
   }
 }
 
+/**
+ * Worker の performance.now() を主スレッドの performance.now() へ写す差。timeOrigin の引き算は使わない
+ * （Chromium の timeOrigin は文脈ごとに実時計へ換算され、ずれることがある。実測で 1.3 秒。docs/overnight_verification.md）。
+ * メッセージの往復で測り、RTT が最小の標本を採る。誤差は RTT/2。
+ */
+export class ThreadAxisEstimator {
+  private best: { offset_ms: number; rtt_ms: number } | null = null;
+
+  /** workerSent と workerReceived は Worker の now、mainT は主スレッドの now。 */
+  add(workerSentMs: number, mainMs: number, workerReceivedMs: number): void {
+    const rtt = workerReceivedMs - workerSentMs;
+    if (this.best === null || rtt < this.best.rtt_ms) {
+      this.best = { offset_ms: mainMs - (workerSentMs + workerReceivedMs) / 2, rtt_ms: rtt };
+    }
+  }
+
+  get offsetMs(): number | null {
+    return this.best === null ? null : this.best.offset_ms;
+  }
+
+  get uncertaintyMs(): number {
+    return this.best === null ? 0 : this.best.rtt_ms / 2;
+  }
+
+  get rttMs(): number | null {
+    return this.best === null ? null : this.best.rtt_ms;
+  }
+}
+
 export class RenderClock {
   private readonly offsets: Float64Array;
   private count = 0;
