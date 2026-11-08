@@ -186,7 +186,14 @@ describe('状態の表示とログ（指摘 10、13、14）', () => {
       policy_id: 'ja',
       providers: { stt: { provider_class: 'test_double' }, tts: { provider_class: 'test_double' }, llm: { provider_class: 'test_double' } },
     });
+    expect(rig.described[0]?.tts_settings).toBeNull();
     expect(rig.link.of('server.hello')[0]?.is_fake).toBe(true);
+  });
+
+  it('音声合成の設定（モデル、voice_settings、seed）を manifest に残す', async () => {
+    const settings = { model_id: 'm', voice_settings: null, seed: 1 };
+    rig = await createRig({ ttsSettings: settings });
+    expect(rig.described[0]?.tts_settings).toEqual(settings);
   });
 });
 

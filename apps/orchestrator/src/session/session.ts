@@ -355,6 +355,7 @@ export class Session {
       condition: this.options.condition,
       policy_id: this.options.policy.policy_id,
       providers: manifest,
+      tts_settings: providers.tts.ok ? (providers.tts.value.describeSettings?.() ?? null) : null,
       initiative: {
         running: this.initiative !== null,
         reason: this.initiativeReason,

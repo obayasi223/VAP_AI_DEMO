@@ -212,6 +212,8 @@ export interface TtsConnection {
 
 export interface TtsProvider extends ProviderIdentity {
   open(config: TtsConnectionConfig): Promise<TtsConnection>;
+  /** manifest に残す合成の設定（モデル、声の設定、seed など）。持たないプロバイダは省略。 */
+  describeSettings?(): Record<string, unknown>;
 }
 
 /** 文脈 ID の共通の作り方。 */

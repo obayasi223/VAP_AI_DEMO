@@ -185,13 +185,14 @@ function stagedSetup(timing_strategy: 'llm' | 'immediate'): Pick<InitiativeSetup
 }
 
 export async function createRig(
-  options: { policy?: Policy; maai?: boolean; reply?: string; initiative?: RigInitiative; condition?: Condition; sessionAudio?: SessionOptions['sessionAudio'] } = {},
+  options: { policy?: Policy; maai?: boolean; reply?: string; initiative?: RigInitiative; condition?: Condition; sessionAudio?: SessionOptions['sessionAudio']; ttsSettings?: Record<string, unknown> } = {},
 ): Promise<Rig> {
   const time = new ManualTimeSource(1000);
   const events = new MemoryEventSink();
   const emitter = createEventEmitter({ time, session_id: 's_test', condition: () => 'reactive', sink: events });
   const sttProvider = new ScriptedSttProvider(() => time.monotonicMs());
   const ttsProvider = new ScriptedTtsProvider({ ms_per_char: 100, chars_per_chunk: 4 });
+  if (options.ttsSettings) Object.assign(ttsProvider, { describeSettings: () => options.ttsSettings });
   const llm = new ScriptedLlmProvider({ responder: () => options.reply ?? '三時からです。', chars_per_delta: 3 });
   const initiativeLlm = options.initiative
     ? new ScriptedLlmProvider({
