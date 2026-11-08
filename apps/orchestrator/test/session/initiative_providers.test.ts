@@ -24,8 +24,23 @@ describe('発話希望の判定を動かす条件', () => {
       expect(config.initiative_conditions).toEqual(['reactive', 'initiative_no_cue', 'initiative_inhale']);
       expect(initiative).toMatchObject({ enabled: true, reason: null, prompt_version: 'initiative-ja-v2' });
       expect(initiative?.llm).toBeInstanceOf(ScriptedReplyLlm);
-      expect(initiative?.persona?.persona_id).toBe('exhibition_colleague');
+      // 既定の persona は自由な会話向けの暫定のもの（PERSONA_FILE で展示会の同僚へ戻せる）。
+      expect(initiative?.persona?.persona_id).toBe('conversation_partner');
     }
+  });
+
+  it('PERSONA_FILE で展示会の同僚（反例の予備実験用）を選べる', async () => {
+    const { initiative } = await setupFor({ PERSONA_FILE: 'config/persona.ja.json' });
+    expect(initiative?.persona?.persona_id).toBe('exhibition_colleague');
+  });
+
+  it('セッションの条件（condition）を渡すと、起動時の CONDITION でなくそれで判定を動かすかを決める', async () => {
+    const env = { ...base, CONDITION: 'initiative_inhale', INITIATIVE_CONDITIONS: 'initiative_inhale' };
+    const config = readConfig(env);
+    const off = await createSessionProviders({ config, time, emitter, env, condition: 'reactive' });
+    expect(off.initiative).toMatchObject({ enabled: false, reason: 'disabled_for_condition:reactive' });
+    const on = await createSessionProviders({ config, time, emitter, env });
+    expect(on.initiative?.enabled).toBe(true);
   });
 
   it('INITIATIVE_CONDITIONS に無い条件では止め、LLM を作らない。none で全部止める', async () => {

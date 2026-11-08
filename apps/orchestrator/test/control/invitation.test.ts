@@ -1,7 +1,7 @@
 /** 招待の語句検出。STT の文字列の照合で、語句は自作の案（実対話の誤検出率は未測定）。 */
 import { describe, expect, it } from 'vitest';
 import { detectInvitation } from '../../src/control';
-import { Driver, T0, hri2025, ja, kinds, ready, turnAllowed } from './helpers';
+import { Driver, T0, hri2025, ja, jaAppendixA, kinds, ready, turnAllowed } from './helpers';
 
 const source = { segment_id: 3, transcript_revision: 42 };
 
@@ -49,7 +49,7 @@ describe('TurnManager の招待', () => {
   const USER: [number, number, boolean] = [0.3, 0.3, false];
 
   it('ja: VAP が譲渡を示さなくても、発話終了から MIN_GAP 後に許可し、根拠を残す', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { p: [0.3, 0.3, true], text: 'お先にどうぞ' });
     d.tick(T0 + 499, { p: USER });
     expect(d.state.permitted_to_speak).toBe(false);
@@ -64,20 +64,20 @@ describe('TurnManager の招待', () => {
     });
   });
   it('ja: 利用者が話している間は許可しない', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { p: [0.3, 0.3, true], text: 'どうぞ' });
     d.tick(T0 + 5000, { p: [0.3, 0.3, true] });
     expect(d.state.permitted_to_speak).toBe(false);
   });
   it('ja: 続きが認識されて文末でなくなれば取り消す', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { p: [0.3, 0.3, true], text: 'どうぞ' });
     expect(d.state.invitation.detected).toBe(true);
     d.tick(T0 + 20, { p: USER, text: 'どうぞよろしく' });
     expect(d.state.invitation.detected).toBe(false);
   });
   it('ja: AI が話し始めたら招待は消える', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { p: [0.3, 0.3, true], text: 'どうぞ' });
     d.tick(T0 + 200, { p: USER }); // 準備の起動
     d.tick(T0 + 500, { p: USER, prefetch: ready() });

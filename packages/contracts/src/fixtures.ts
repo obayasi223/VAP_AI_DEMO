@@ -411,6 +411,32 @@ export const VALID_FIXTURES: Record<SchemaName, { name: string; value: unknown }
     },
     { name: 'signal.sent', value: { ...signal, event: 'signal.sent', sent_at: 1210 } },
     {
+      name: 'negotiation.decision/signal_gate',
+      value: {
+        ...envelope,
+        event: 'negotiation.decision',
+        stage: 'signal_gate',
+        candidate_id: present('c_0007'),
+        candidate_version: present(1),
+        candidate_state: 'INTENT_READY',
+        outcome: 'cue',
+        reasons: ['fresh', 'ai_silent', 'cooldown_passed', 'single_active_candidate', 'candidate_audio_ready'],
+      },
+    },
+    {
+      name: 'negotiation.decision/speech_selection',
+      value: {
+        ...envelope,
+        event: 'negotiation.decision',
+        stage: 'speech_selection',
+        candidate_id: absent('no_active_candidate'),
+        candidate_version: absent('no_active_candidate'),
+        candidate_state: null,
+        outcome: 'response',
+        reasons: ['no_active_candidate'],
+      },
+    },
+    {
       name: 'session.client',
       value: {
         ...envelope,
@@ -783,6 +809,12 @@ export const VALID_FIXTURES: Record<SchemaName, { name: string; value: unknown }
       value: { type: 'signal.command', candidate_id: 'c_0007', phase: 'inhale', parameters: { depth: 0.6 } },
     },
     { name: 'gaze.command', value: { type: 'gaze.command', target: 'away' } },
+    { name: 'breath.cue', value: { type: 'breath.cue', cue_id: 'cue_0001', candidate_id: 'c_0007', duration_ms: 450 } },
+    {
+      name: 'breath.release',
+      value: { type: 'breath.release', cue_id: 'cue_0001', candidate_id: 'c_0007', reason: 'deferred' },
+    },
+    { name: 'breath.prepare', value: { type: 'breath.prepare', candidate_id: 'c_0007' } },
     {
       name: 'session.status',
       value: { type: 'session.status', degraded: true, reasons: ['vap_stale'] },

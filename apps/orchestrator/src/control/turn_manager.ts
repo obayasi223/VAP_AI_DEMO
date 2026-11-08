@@ -12,6 +12,7 @@ import { absent, present } from '@llm-vap/contracts';
 import type {
   Maybe,
   Policy,
+  StartGuard,
   TurnAllowedPayload,
   TurnDecision,
   TurnInputs,
@@ -23,9 +24,9 @@ import { judgeGaze } from './gaze';
 import { NO_INVITATION, detectInvitation } from './invitation';
 import { prepareTrigger, similarityGate } from './prepare';
 import { START_ACK_TIMEOUT_MS, controlSettings } from './settings';
-import type { ControlOptions, ControlSettings, YieldTimeout } from './settings';
+import type { AfterAiSpeechSettings, ControlOptions, ControlSettings, YieldTimeout } from './settings';
 import { createInitialState } from './state';
-import type { Speaking, TurnState, UtteranceBuffer, WantToSpeak } from './state';
+import type { IgnoredFragment, Speaking, TurnState, UtteranceBuffer, WantToSpeak } from './state';
 import { readVap } from './vap_direction';
 import type { VapView } from './vap_direction';
 import { assessVapFreshness } from './vap_freshness';
@@ -39,14 +40,20 @@ export function turnGptTimeout(p: number, table: readonly YieldTimeout[]): numbe
 }
 
 /** 利用者の発話文の積み上げ。STT の text は final で切れるので、segment の中で連結する。 */
-function appendToUtterance(buffer: UtteranceBuffer | null, t: TranscriptSnapshot): UtteranceBuffer {
+function appendToUtterance(buffer: UtteranceBuffer | null, t: TranscriptSnapshot, aiSpeaking = false): UtteranceBuffer {
   if (buffer === null || buffer.segment_id !== t.segment_id) {
-    return { segment_id: t.segment_id, closed_text: '', asr_segment_id: t.asr_segment_id, current_text: t.text };
+    return {
+      segment_id: t.segment_id,
+      closed_text: '',
+      asr_segment_id: t.asr_segment_id,
+      current_text: t.text,
+      started_during_ai: aiSpeaking,
+    };
   }
   if (buffer.asr_segment_id !== t.asr_segment_id) {
     // final の is_final を見ない。tick の間に final と次の interim が来ると final を受け取れないため。
     return {
-      segment_id: t.segment_id,
+      ...buffer,
       closed_text: buffer.closed_text + buffer.current_text,
       asr_segment_id: t.asr_segment_id,
       current_text: t.text,
@@ -131,9 +138,11 @@ function observeTranscript(s: TurnState, tick: Tick): void {
   const t = inputs.transcript.value;
   // 境界より前の音声に属する結果は旧 segment のもの（計画 §4.1）。今のターンの入力にしない。
   if (t !== null && t.segment_id >= s.segment_id && t.transcript_revision !== s.asr_revision) {
-    s.utterance = appendToUtterance(s.utterance, t);
+    s.utterance = appendToUtterance(s.utterance, t, isAiSpeaking(s));
     const text = s.utterance.closed_text + s.utterance.current_text;
     s.asr_result = normalizeForSimilarity(text) === '' ? null : text;
+    // 断片から文が伸びたら、新しい発話として扱う（after_ai_speech）。
+    if (s.ignored_fragment !== null && !isIgnoredFragment(s, text)) s.ignored_fragment = null;
     s.asr_revision = t.transcript_revision;
     s.last_asr_time = now;
     const detection = detectInvitation(text, t);
@@ -196,6 +205,8 @@ function decidePrepare(s: TurnState, tick: Tick, prefetch: TurnInputs['prefetch'
   if (settings.corrected && (s.speaking.phase === 'starting' || s.speaking.phase === 'playing')) return false;
   const text = s.asr_result;
   if (text === null || s.last_sent_asr_result === text) return false; // L45
+  // 原著にない: AI の発話中の短い断片には応答を準備しない（after_ai_speech）。
+  if (isIgnoredFragment(s, text)) return false;
   const trigger = prepareTrigger({
     completion_p: s.turngpt_output,
     elapsed_since_asr_ms: now - (s.last_asr_time as number),
@@ -278,11 +289,14 @@ function decideWithVap(s: TurnState, tick: Tick, view: VapView): Permission {
   }
   const reasons: string[] = [];
   let source: TurnAllowedPayload['decision_source'] = 'vap';
+  const guard = settings.start_guard;
+  // 原著にない（ja の start_guard）: どの経路でも最小の間を延ばす。null なら MIN_GAP_TIME のまま。
+  const minGap = Math.max(c.MIN_GAP_TIME_MS, guard?.min_gap_ms ?? 0);
   // L64: turn_shift_allowed は毎 tick 計算し直す。
   let allowed = false;
   if (view.p_now_ai > c.VAP_PNOW_YIELD && view.p_future_ai > c.VAP_PFUT_YIELD) {
     // L66〜L69
-    if (now - (s.user_turn_end_time as number) >= c.MIN_GAP_TIME_MS) {
+    if (now - (s.user_turn_end_time as number) >= minGap) {
       allowed = true;
       reasons.push('L67_vap_yield');
     }
@@ -290,14 +304,17 @@ function decideWithVap(s: TurnState, tick: Tick, view: VapView): Permission {
     s.user_turn_end_time = now; // L71
   }
   const gap = now - (s.user_speak_end_time as number);
-  if (gap >= turnGptTimeout(s.turngpt_output, settings.yield_timeouts)) {
+  const timeout = turnGptTimeout(s.turngpt_output, settings.yield_timeouts);
+  const wait = completionTimeoutWait(timeout, guard, view.p_now_ai);
+  if (gap >= wait) {
     // L74〜L76
     if (!allowed) source = 'completion_timeout';
     allowed = true;
     reasons.push('L74_completion_timeout');
+    if (wait > timeout) reasons.push(`start_guard:wait=${wait}ms`);
   }
   // 原著にない追加。L67 と同じ最小時間を守る。
-  if (settings.invitation_grants_turn && s.invitation.detected && gap >= c.MIN_GAP_TIME_MS) {
+  if (settings.invitation_grants_turn && s.invitation.detected && gap >= minGap) {
     allowed = true;
     source = 'invitation';
     reasons.unshift(`invitation:${s.invitation_rule_id}`);
@@ -308,6 +325,63 @@ function decideWithVap(s: TurnState, tick: Tick, view: VapView): Permission {
     reason: allowed ? reasons.join('+') : 'no_yield_signal',
     gap_ms: present(gap),
   };
+}
+
+/**
+ * L74 の待ち。原著は turnGptTimeout(p) のまま。ja の start_guard は最小の間を延ばし、VAP が AI 側を支持して
+ * いない（p_now_ai が下限未満）ときはさらに長く待つ。ja_rules_v1 の p は TurnGPT と尺度が違い、
+ * 話の途中の言い切り（「〜ですね」）でも 0.75 を返すため（docs/known_gaps.md §10）。
+ */
+function completionTimeoutWait(timeout: number, guard: StartGuard | null, pNowAi: number): number {
+  if (guard === null) return timeout;
+  let wait = Math.max(timeout, guard.min_gap_ms);
+  if (pNowAi < guard.completion_timeout_min_p_ai) wait = Math.max(wait, guard.completion_timeout_low_p_min_ms);
+  return wait;
+}
+
+/** after_ai_speech: 今の文が応答の対象にしない断片か。 */
+function isIgnoredFragment(s: TurnState, text: string): boolean {
+  const f = s.ignored_fragment;
+  return f !== null && f.segment_id === s.segment_id && normalizeForSimilarity(f.text) === normalizeForSimilarity(text);
+}
+
+/** 断片とみなす理由。対象でなければ null。 */
+export function fragmentReason(text: string, after: AfterAiSpeechSettings): string | null {
+  const normalized = normalizeForSimilarity(text);
+  if (normalized === '') return null;
+  const chars = [...normalized].length;
+  if (chars <= after.fragment_max_chars) return `short:chars=${chars}`;
+  let rest = normalized;
+  while (rest !== '') {
+    const phrase = after.backchannel_phrases.find((p) => rest.startsWith(p));
+    if (phrase === undefined) return null;
+    rest = rest.slice(phrase.length);
+  }
+  return `backchannel:chars=${chars}`;
+}
+
+/**
+ * AI の発話が終わった tick（原著にない、ja の after_ai_speech）。
+ *  - 利用者の発話の終わりの時刻を AI の発話の終わりへ数え直す。AI の発話中の利用者の声で L74 の待ちが
+ *    満ちていて、話し終えた直後に AI が続けて話し始めるのを防ぐ。
+ *  - 自然に終わったとき、AI の発話中に始まり、もう止んでいる短い断片（相槌など）を応答の対象から外す。
+ *    割り込みで止めた後（stopping から）は外さない（人が発話権を取ろうとした）。
+ */
+function onAiSpeechEnded(s: TurnState, tick: Tick, natural: boolean): void {
+  const after = tick.settings.after_ai_speech;
+  if (after === null) return;
+  const { now } = tick;
+  if (after.rebase_user_end_times) {
+    s.user_speak_end_time = Math.max(s.user_speak_end_time as number, now);
+    s.user_turn_end_time = Math.max(s.user_turn_end_time as number, now);
+  }
+  const u = s.utterance;
+  const text = s.asr_result;
+  if (!natural || s.user_speaking || u === null || text === null) return;
+  if (u.segment_id !== s.segment_id || u.started_during_ai !== true) return;
+  const reason = fragmentReason(text, after);
+  if (reason === null) return;
+  s.ignored_fragment = { segment_id: s.segment_id, text, transcript_revision: s.asr_revision, reason, at: now };
 }
 
 /** 鮮度切れの間（計画 §4.1 の表）。fallback_energy は VAP として扱わず、別の decision_source で残す。 */
@@ -416,8 +490,13 @@ function step(settings: ControlSettings, previous: TurnState, inputs: TurnInputs
   const tick: Tick = { inputs, now, settings, view, freshnessReason: freshness.reason, decisions, completionAdopted: false };
 
   applyFreshness(s, tick, freshness.freshness);
+  const speakingBefore: Speaking['phase'] = s.speaking.phase;
   s.speaking = syncSpeaking(s.speaking, inputs.playback, now);
+  const speakingAfter: Speaking['phase'] = s.speaking.phase;
   observeTranscript(s, tick);
+  if ((speakingBefore === 'playing' || speakingBefore === 'stopping') && speakingAfter === 'silent') {
+    onAiSpeechEnded(s, tick, speakingBefore === 'playing');
+  }
 
   const prefetch = superviseCurrentPrepare(s, tick);
   const preparedNow = decidePrepare(s, tick, prefetch);
@@ -427,6 +506,10 @@ function step(settings: ControlSettings, previous: TurnState, inputs: TurnInputs
   if (settings.corrected && permission.allowed && isAiSpeaking(s)) {
     permission.allowed = false;
     permission.reason = 'ai_speaking';
+  }
+  // 許可は出ても、断片には準備しないので話し始めない。ログで分かるように理由を足す。
+  if (permission.allowed && s.asr_result !== null && isIgnoredFragment(s, s.asr_result)) {
+    permission.reason += `+ignored_ai_speech_fragment:${(s.ignored_fragment as IgnoredFragment).reason}`;
   }
   s.permitted_to_speak = permission.allowed;
 
@@ -455,6 +538,7 @@ function step(settings: ControlSettings, previous: TurnState, inputs: TurnInputs
       at_audio_frame: inputs.received_audio_frame,
     }); // L80（U-3）
     s.utterance = null;
+    s.ignored_fragment = null;
     s.invitation = NO_INVITATION;
     s.invitation_rule_id = null;
     s.prepare_track = null;

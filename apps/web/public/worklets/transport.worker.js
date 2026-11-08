@@ -19961,6 +19961,23 @@ var SignalCommand = external_exports.strictObject({
   phase: SignalPhase,
   parameters: SignalParameters
 });
+var BreathCue = external_exports.strictObject({
+  type: external_exports.literal("breath.cue"),
+  cue_id: NonEmptyString,
+  candidate_id: CandidateId,
+  duration_ms: external_exports.number().int().min(1)
+});
+var BreathReleaseReason = external_exports.enum(["speech_started", "deferred", "withdrawn"]);
+var BreathRelease = external_exports.strictObject({
+  type: external_exports.literal("breath.release"),
+  cue_id: NonEmptyString,
+  candidate_id: CandidateId,
+  reason: BreathReleaseReason
+});
+var BreathPrepare = external_exports.strictObject({
+  type: external_exports.literal("breath.prepare"),
+  candidate_id: CandidateId
+});
 var GazeCommand = external_exports.strictObject({
   type: external_exports.literal("gaze.command"),
   target: GazeTarget
@@ -20001,7 +20018,10 @@ var NodeToBrowser = external_exports.discriminatedUnion("type", [
   PlaybackAlignment,
   SignalCommand,
   GazeCommand,
-  SessionStatus
+  SessionStatus,
+  BreathCue,
+  BreathRelease,
+  BreathPrepare
 ]);
 
 // ../../packages/contracts/src/binary.ts

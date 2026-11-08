@@ -907,6 +907,70 @@
         }
       },
       {
+        "name": "negotiation.decision/signal_gate",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "negotiation.decision",
+          "stage": "signal_gate",
+          "candidate_id": {
+            "value": "c_0007"
+          },
+          "candidate_version": {
+            "value": 1
+          },
+          "candidate_state": "INTENT_READY",
+          "outcome": "cue",
+          "reasons": [
+            "fresh",
+            "ai_silent",
+            "cooldown_passed",
+            "single_active_candidate",
+            "candidate_audio_ready"
+          ]
+        }
+      },
+      {
+        "name": "negotiation.decision/speech_selection",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "negotiation.decision",
+          "stage": "speech_selection",
+          "candidate_id": {
+            "value": null,
+            "null_reason": "no_active_candidate"
+          },
+          "candidate_version": {
+            "value": null,
+            "null_reason": "no_active_candidate"
+          },
+          "candidate_state": null,
+          "outcome": "response",
+          "reasons": [
+            "no_active_candidate"
+          ]
+        }
+      },
+      {
         "name": "session.client",
         "value": {
           "schema_version": 1,
@@ -2035,6 +2099,31 @@
         "value": {
           "type": "gaze.command",
           "target": "away"
+        }
+      },
+      {
+        "name": "breath.cue",
+        "value": {
+          "type": "breath.cue",
+          "cue_id": "cue_0001",
+          "candidate_id": "c_0007",
+          "duration_ms": 450
+        }
+      },
+      {
+        "name": "breath.release",
+        "value": {
+          "type": "breath.release",
+          "cue_id": "cue_0001",
+          "candidate_id": "c_0007",
+          "reason": "deferred"
+        }
+      },
+      {
+        "name": "breath.prepare",
+        "value": {
+          "type": "breath.prepare",
+          "candidate_id": "c_0007"
         }
       },
       {

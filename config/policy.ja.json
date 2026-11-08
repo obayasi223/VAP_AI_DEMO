@@ -3,7 +3,7 @@
   "policy_id": "ja",
   "immutable": false,
   "status": "template",
-  "note": "Template. turn.constants start as a copy of the HRI 2025 values and are uncalibrated for Japanese. null means uncalibrated: do not silently replace it. Owners: turn/gaze E, similarity/completion D, initiative G. vap direction is provisional until R2 measures it. turn.constants.TURNGPT_PREPARE_THRESHOLD and SIMILARITY_PREPARE_THRESHOLD are not read for ja: the source of truth is completion.thresholds and similarity.threshold (docs/known_gaps.md). initiative.trigger values are unverified provisional.",
+  "note": "Template. turn.constants start as a copy of the HRI 2025 values and are uncalibrated for Japanese. null means uncalibrated: do not silently replace it. Owners: turn/gaze E, similarity/completion D, initiative G. vap direction is provisional until R2 measures it. turn.constants.TURNGPT_PREPARE_THRESHOLD and SIMILARITY_PREPARE_THRESHOLD are not read for ja: the source of truth is completion.thresholds and similarity.threshold (docs/known_gaps.md). initiative.trigger values are unverified provisional. turn.start_guard and turn.after_ai_speech are not in HRI 2025: provisional, based only on one real session (s20261108T045055-ca6e12, docs/known_gaps.md section 10).",
   "vap": {
     "channel_layout": "2ch",
     "p_ai_index": 1,
@@ -39,7 +39,21 @@
     "fallback_silence_max_ms": 1500,
     "fallback_interrupt_min_words": 3,
     "fallback_energy_silence_dbfs": -45,
-    "user_speaking_min_ms": null
+    "user_speaking_min_ms": null,
+    "start_guard": {
+      "min_gap_ms": 900,
+      "completion_timeout_min_p_ai": 0.5,
+      "completion_timeout_low_p_min_ms": 1500
+    },
+    "after_ai_speech": {
+      "rebase_user_end_times": true,
+      "fragment_max_chars": 4,
+      "backchannel_phrases": [
+        "うん", "ううん", "はい", "ええ", "えー", "ああ", "あー", "あ", "おお", "おー", "へえ", "へー", "ほう", "ほー", "ふーん", "ふうん",
+        "なるほど", "そう", "そうか", "そっか", "そうです", "そうですね", "そうですか", "そうなんだ", "そうなんですね", "そうなんですか",
+        "たしかに", "確かに", "ですね", "ですよね", "ね", "ねえ", "まあ"
+      ]
+    }
   },
   "gaze": {
     "pause_min_ms": 200,
@@ -65,14 +79,20 @@
     "min_stability": 0.8,
     "stable_prefix_revisions": 3,
     "stable_prefix_min_age_ms": 300,
-    "candidate_expiry_ms": null,
+    "candidate_expiry_ms": 15000,
     "candidate_expires_on_segment_change": null,
-    "signal_cooldown_ms": null,
+    "signal_cooldown_ms": 4000,
     "max_active_candidates": 1,
     "max_requests_per_session": 200,
     "trigger": {
       "min_new_stable_chars": 24,
       "min_new_chars_at_boundary": 12
+    },
+    "negotiation": {
+      "inhale_ms": 700,
+      "hold_max_ms": 800,
+      "max_new_stable_chars_since_judgement": null,
+      "cue_max_judgement_age_ms": null
     }
   },
   "speech": {

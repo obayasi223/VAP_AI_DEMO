@@ -30,6 +30,18 @@ export interface UtteranceBuffer {
   closed_text: string;
   asr_segment_id: number;
   current_text: string;
+  /** この segment の最初の結果を AI の発話中に受けたか（after_ai_speech の断片の判定）。省略は false。 */
+  started_during_ai?: boolean;
+}
+
+/** 応答の対象にしなかった AI の発話中の断片（after_ai_speech、原著にない）。履歴には残る。 */
+export interface IgnoredFragment {
+  segment_id: number;
+  /** 断片と判定したときの文（積み上げた全体）。これから伸びたら新しい発話として扱う。 */
+  text: string;
+  transcript_revision: number | null;
+  reason: string;
+  at: number;
 }
 
 /** L47 の最後の判定。prepare の決定には閾値の状態を書く項目がないので、ここに残す。 */
@@ -88,6 +100,8 @@ export interface TurnState extends TurnStateCore {
   gaze_pause_logged: boolean;
   /** gaze_target が最後に変わった時刻。保持時間（hold_away_min_ms、re_avert_min_ms）に使う。null は未変化。 */
   gaze_changed_at: number | null;
+  /** after_ai_speech: 応答の対象にしない断片。文が変われば null に戻す。 */
+  ignored_fragment: IgnoredFragment | null;
 }
 
 export function createInitialState(): TurnState {
@@ -125,5 +139,6 @@ export function createInitialState(): TurnState {
     last_turn_allowed_key: null,
     gaze_pause_logged: false,
     gaze_changed_at: null,
+    ignored_fragment: null,
   };
 }

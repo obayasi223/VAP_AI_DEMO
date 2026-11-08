@@ -14,6 +14,16 @@ export const ja = (patch: (policy: PolicyJa) => void = () => undefined): PolicyJ
   patch(policy);
   return PolicyJa.parse(policy);
 };
+/**
+ * Appendix A の分岐を見る試験用の ja。原著にない開始の慎重化（turn.start_guard）と AI の発話の終わりの扱い
+ * （turn.after_ai_speech）を外す。その2つは start_guard.test.ts と after_ai_speech.test.ts で config の値のまま見る。
+ */
+export const jaAppendixA = (patch: (policy: PolicyJa) => void = () => undefined): PolicyJa =>
+  ja((p) => {
+    delete p.turn.start_guard;
+    delete p.turn.after_ai_speech;
+    patch(p);
+  });
 /** 試験用の視線の設定。config の値は null のまま。 */
 export const jaWithGaze = (signal: 'p_now' | 'p_future' = 'p_now'): PolicyJa =>
   ja((p) => {

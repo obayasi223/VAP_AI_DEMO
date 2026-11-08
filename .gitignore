@@ -14,3 +14,5 @@ __pycache__/
 next-env.d.ts
 *:Zone.Identifier
 tools/provider_probe/out/
+# 調整画面（/tune）で保存した方策の上書き。共有しない（docs/runbook.md の 7）
+config/policy.ja.local.json

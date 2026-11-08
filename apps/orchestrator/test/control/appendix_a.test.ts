@@ -3,11 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { prepareThresholds } from '@llm-vap/contracts';
 import type { Policy } from '@llm-vap/contracts';
 import { turnGptTimeout } from '../../src/control';
-import { Driver, T0, hri2025, ja, kinds, pick, playing, preparing, ready, turnAllowed } from './helpers';
+import { Driver, T0, hri2025, ja, jaAppendixA, kinds, pick, playing, preparing, ready, turnAllowed } from './helpers';
 
 const both: [string, () => Policy][] = [
   ['hri2025', hri2025],
-  ['ja', ja],
+  ['ja', jaAppendixA],
 ];
 const YIELD: [number, number, boolean] = [0.6, 0.6, false];
 const FAVOR_USER: [number, number, boolean] = [0.3, 0.3, false];
@@ -235,7 +235,7 @@ describe('L86-92: TurnGPT_Timeout の表（§1.2）', () => {
 
   it('L15-20: 方策の表を降順で読む', () => {
     expect(new Driver(hri2025()).manager.settings.yield_timeouts).toEqual(table);
-    expect(new Driver(ja()).manager.settings.yield_timeouts).toEqual(table);
+    expect(new Driver(jaAppendixA()).manager.settings.yield_timeouts).toEqual(table);
   });
 });
 
@@ -263,7 +263,7 @@ describe('解釈の差（計画 §4.1）: 方策ごとの期待', () => {
   });
 
   it('T9 I-4 ja: 最後の発話 tick から 500ms 経つまで許可しない', () => {
-    const d = afterLongSpeech(ja());
+    const d = afterLongSpeech(jaAppendixA());
     const end = d.state.user_speak_end_time as number;
     d.tick(end + 20, { p: YIELD });
     expect(d.state.permitted_to_speak).toBe(false);
@@ -279,7 +279,7 @@ describe('解釈の差（計画 §4.1）: 方策ごとの期待', () => {
       seed = (seed * 1664525 + 1013904223) % 2 ** 32;
       return seed / 2 ** 32;
     };
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     let lastSpeech = T0;
     for (let i = 0; i < 20000; i++) {
       const now = T0 + i * 20;
@@ -297,7 +297,7 @@ describe('解釈の差（計画 §4.1）: 方策ごとの期待', () => {
   });
 
   it('I-2 ja: stop_point は word_boundary、上限 200ms（暫定）', () => {
-    const [stop] = pick(new Driver(ja()).tick(T0, { p: [0.1, 0.1, true], playback: playing() }), 'interrupt_speech');
+    const [stop] = pick(new Driver(jaAppendixA()).tick(T0, { p: [0.1, 0.1, true], playback: playing() }), 'interrupt_speech');
     expect(stop).toMatchObject({ stop_point: 'word_boundary', max_wait_ms: 200 });
   });
 });
@@ -310,7 +310,7 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
   };
 
   it('U-1 ja: AI 発話中は別の応答が ready でも開始しない', () => {
-    const decisions = yielded(ja()).tick(T0 + 500, { p: YIELD, prefetch: ready(), playback: playing() });
+    const decisions = yielded(jaAppendixA()).tick(T0 + 500, { p: YIELD, prefetch: ready(), playback: playing() });
     expect(kinds(decisions)).not.toContain('start_speech');
   });
   it('U-1 hri2025: L78 のとおり is_speaking を見ない', () => {
@@ -318,13 +318,13 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
     expect(kinds(decisions)).toContain('start_speech');
   });
   it('U-1 ja: start_speech の直後は再生の報告が来る前でも話し中として扱う', () => {
-    const d = yielded(ja());
+    const d = yielded(jaAppendixA());
     d.tick(T0 + 500, { p: YIELD, prefetch: ready(7) });
     expect(d.state.speaking).toMatchObject({ phase: 'starting', audio_playback_id: 7 });
     expect(kinds(d.tick(T0 + 520, { p: YIELD, prefetch: ready(8, 1) }))).not.toContain('start_speech');
   });
   it('U-1 ja: 再生の報告が来なければ上限の後に話し中を解く（暫定 1000ms）', () => {
-    const d = yielded(ja());
+    const d = yielded(jaAppendixA());
     d.tick(T0 + 500, { p: YIELD, prefetch: ready(7) });
     d.tick(T0 + 1499, { p: YIELD });
     expect(d.state.speaking.phase).toBe('starting');
@@ -334,7 +334,7 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
   });
 
   it('U-2 ja: AI 発話中の準備は抑止する', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     expect(kinds(d.tick(T0, { text: 'うん', p_completion: 0.9, sim: 0.1, playback: playing() }))).not.toContain('prepare');
   });
   it('U-2 hri2025: L45-54 は AI 発話中も走る', () => {
@@ -342,7 +342,7 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
     expect(kinds(d.tick(T0, { text: 'うん', p_completion: 0.9, sim: 0.1, playback: playing() }))).toContain('prepare');
   });
   it('U-2 ja: 割り込みを出した後は準備を再開する', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { text: '待って', p_completion: 0.9, sim: 0.1, playback: playing(), p: [0.45, 0.45, true] });
     const decisions = d.tick(T0 + 20, { p_completion: 0.9, sim: 0.1, playback: playing(), p: [0.1, 0.1, true] });
     expect(kinds(decisions)).toEqual(expect.arrayContaining(['interrupt_speech']));
@@ -350,7 +350,7 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
     expect(kinds(d.tick(T0 + 40, { p_completion: 0.9, sim: 0.1, playback: playing(), p: [0.1, 0.1, true] }))).toContain('prepare');
   });
   it('U-2 ja: 前の segment の準備は取り消すが、再生中の音声は対象にしない', () => {
-    const d = yielded(ja());
+    const d = yielded(jaAppendixA());
     d.tick(T0 + 500, { p: YIELD, prefetch: ready(7) }); // segment 1 へ
     const onAir = d.tick(T0 + 520, { prefetch: ready(7, 0), playback: playing(7) });
     expect(kinds(onAir)).not.toContain('cancel_prepare');
@@ -370,13 +370,13 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
     return d.tick(T0 + 1160);
   }
   it('U-4 ja: 「はい」→「はい」でも次のターンで準備する', () => {
-    expect(kinds(sameTextAfterTurn(ja()))).toContain('prepare');
+    expect(kinds(sameTextAfterTurn(jaAppendixA()))).toContain('prepare');
   });
   it('U-4 hri2025: 「はい」→「はい」は L45 が偽で準備しない（原文の不具合を再現）', () => {
     expect(kinds(sameTextAfterTurn(hri2025()))).not.toContain('prepare');
   });
   it('U-4 ja: segment が変わると turngpt_output を 0 に戻し、前の segment の p を読まない', () => {
-    const d = yielded(ja());
+    const d = yielded(jaAppendixA());
     d.tick(T0 + 20, { text: '明日は', p: FAVOR_USER, p_completion: 0.9 });
     d.tick(T0 + 520, { p: YIELD, p_completion: 0.9, prefetch: ready(7) });
     expect(d.state.segment_id).toBe(1);
@@ -395,7 +395,7 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
     expect(d.state.turngpt_output).toBe(0.9);
   });
   it('U-4 ja: 前の segment の準備が ready でも話さない', () => {
-    const d = yielded(ja());
+    const d = yielded(jaAppendixA());
     d.tick(T0 + 500, { p: YIELD, prefetch: ready(7) });
     d.tick(T0 + 520, { playback: playing(7) });
     d.tick(T0 + 540);
@@ -404,7 +404,7 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
   });
 
   it('U-5: 比較対象がないとき（null と理由）は 0 として初回は起動し、理由を残す', () => {
-    for (const policy of [hri2025(), ja()]) {
+    for (const policy of [hri2025(), jaAppendixA()]) {
       const d = new Driver(policy);
       d.tick(T0, { text: '初回' });
       const [prepare] = pick(d.tick(T0 + 200), 'prepare');
@@ -413,13 +413,13 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
   });
 
   it('U-7 null（既定）: 1フレームの欠けで発話終了になる', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { p: [0.45, 0.45, true] });
     d.tick(T0 + 20, { p: [0.45, 0.45, false] });
     expect(d.state.user_speaking).toBe(false);
   });
   it('U-7 設定あり: 最短継続より短い欠けと短い雑音を無視し、発話終了は最後の発話時刻のまま', () => {
-    const d = new Driver(ja((p) => { p.turn.user_speaking_min_ms = 100; }));
+    const d = new Driver(jaAppendixA((p) => { p.turn.user_speaking_min_ms = 100; }));
     d.tick(T0, { p: [0.45, 0.45, false] });
     d.tick(T0 + 20, { p: [0.45, 0.45, true] });
     expect(d.state.user_speaking).toBe(false); // 短い雑音
@@ -433,7 +433,7 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
   });
 
   it('U-8 ja: 語境界待ちの間に重複の停止命令を出さない', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     const speak = { p: [0.1, 0.1, true] as [number, number, boolean], playback: playing(9) };
     expect(pick(d.tick(T0, speak), 'interrupt_speech').length).toBe(1);
     expect(d.state.speaking.phase).toBe('stopping');
@@ -447,14 +447,14 @@ describe('U 項目: 補正あり（ja）と擬似コードどおり（hri2025）
   });
 
   it('U-9: turn.allowed に p の revision を残す', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { text: '明日', p: FAVOR_USER, p_completion: 0.1 });
     const payload = turnAllowed(d.tick(T0 + 500, { p: YIELD, p_completion: 0.1 }));
     expect(payload?.completion_revision).toEqual({ value: 1 });
   });
 
   it('U-3: 旧 segment の結果は今のターンの入力にしない', () => {
-    const d = yielded(ja());
+    const d = yielded(jaAppendixA());
     d.tick(T0 + 500, { p: YIELD, prefetch: ready(7) });
     const late = { value: { ...lateTranscript, segment_id: 0, transcript_revision: 5, text: '語尾' } };
     d.tick(T0 + 520, { transcript: late, playback: playing(7) });

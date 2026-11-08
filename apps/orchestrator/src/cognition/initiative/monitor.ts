@@ -124,6 +124,9 @@ export interface HeldPromotion {
 /** 監視が判定の名義で出す provider.status の名前（応答用の LLM の行と混ぜない）。 */
 export const INITIATIVE_MONITOR_STATUS = 'initiative_monitor';
 
+/** stableCharsSinceInput のために覚える要求の数。未解決の候補は1つなので、これだけあれば足りる。 */
+const INPUT_MARKS_KEPT = 64;
+
 function required(value: number | null, name: string): number {
   if (value === null) throw new Error(`policy.initiative.${name} is uncalibrated (null)`);
   return value;
@@ -163,6 +166,8 @@ export class InitiativeMonitor {
   private consecutiveFailures = 0;
   private retryAfter: number | null = null;
   private stopped = false;
+  /** 要求ごとの入力の安定文字数（stableCharsSinceInput）。最近の INPUT_MARKS_KEPT 件だけ。 */
+  private readonly inputMarks = new Map<string, { stable_chars: number; segment_id: number }>();
 
   constructor(private readonly deps: InitiativeMonitorDeps) {
     const { limits } = deps;
@@ -193,6 +198,18 @@ export class InitiativeMonitor {
   /** E2a の stable に渡す（根拠の照合と sweep が同じ安定テキストを見る）。 */
   stableSnapshot(): AsrSegmentSnapshot[] {
     return this.view.snapshot();
+  }
+
+  /**
+   * 判定の要求の入力より後の新規の安定文字数（E2／E3 の「判定が古くない」の判定に使う。計画 §4.6）。
+   * 入力の後に segment が変わったら新しい segment の全部を新規と数える（newStableChars と同じ規則）。
+   * 覚えていない要求（古すぎる、別のモニタの要求）は null。
+   */
+  stableCharsSinceInput(request_id: string): number | null {
+    const mark = this.inputMarks.get(request_id);
+    if (!mark) return null;
+    const base = this.view.segmentId() === mark.segment_id ? mark.stable_chars : 0;
+    return Math.max(0, this.view.totalStableChars() - base);
   }
 
   /** 失敗の後の待ちの終わり。待っていなければ null。 */
@@ -359,8 +376,11 @@ export class InitiativeMonitor {
       segments = segments.filter((_, i) => i !== drop);
     }
     this.requestSeq += 1;
+    const request_id = `ini_${String(this.requestSeq).padStart(4, '0')}`;
+    this.inputMarks.set(request_id, { stable_chars: this.view.totalStableChars(), segment_id: this.view.segmentId() });
+    if (this.inputMarks.size > INPUT_MARKS_KEPT) this.inputMarks.delete(this.inputMarks.keys().next().value as string);
     return {
-      request_id: `ini_${String(this.requestSeq).padStart(4, '0')}`,
+      request_id,
       previous,
       segments,
       candidates: [...this.deps.ledger.list()],

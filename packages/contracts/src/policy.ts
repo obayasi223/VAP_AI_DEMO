@@ -109,6 +109,64 @@ export const InitiativeTrigger = z.strictObject({
 });
 export type InitiativeTrigger = z.infer<typeof InitiativeTrigger>;
 
+/**
+ * 発話希望を振る舞いにつなぐ交渉（E2 の合図、E3 の選択。計画 §4.6）。値はどれも【暫定、未校正】。
+ * 省略したら交渉は動かず、どの条件でも候補を記録するだけ（波2の振る舞い）。
+ */
+export const InitiativeNegotiation = z.strictObject({
+  /**
+   * 吸気の長さ（ms）。orchestrator が決めて合図に入れ、吸気の完了は orchestrator の時計で判定する
+   * （ブラウザの完了の報告を待たない）。
+   */
+  inhale_ms: z.number().int().min(1),
+  /**
+   * 吸気の後の準備姿勢（BREATH_HOLD_OR_READY）の長さ（ms）。これを過ぎた時点、またはそれ以降に人が話していたら
+   * DEFERRED（脱力）へ移る。人が黙っている間は発話の許可を待つ。
+   */
+  hold_max_ms: z.number().int().min(0),
+  /**
+   * 合図と発話の直前の「判定が古くない」の上限。候補の最後の判定（NEW／KEEP／REVISE）の入力より後の新規の安定文字数。
+   * null は max_new_stable_chars_since_input と同じ値。
+   */
+  max_new_stable_chars_since_judgement: z.number().int().min(0).nullable(),
+  /**
+   * 合図の直前の鮮度。候補の最後の判定を受けてからの経過（ms）がこれを超えたら合図しない（発話は妨げない）。
+   * null は max_result_age_ms と同じ値。
+   */
+  cue_max_judgement_age_ms: NonNegativeMs.nullable(),
+});
+export type InitiativeNegotiation = z.infer<typeof InitiativeNegotiation>;
+
+/**
+ * 開始の慎重化（原著にない、ja のみ。docs/known_gaps.md §10）。省略は原著どおりの開始の条件。
+ * 値は【暫定、根拠は実機の1セッション（s20261108T045055-ca6e12）のみ】。
+ */
+export const StartGuard = z.strictObject({
+  /** L67、L74、招待のどの経路でも、利用者の発話の終わりからこれ未満では許可しない（MIN_GAP_TIME_MS と大きい方）。 */
+  min_gap_ms: NonNegativeMs,
+  /** L74 で開始するとき、p_now_ai がこれ未満なら completion_timeout_low_p_min_ms 以上を待つ。 */
+  completion_timeout_min_p_ai: Probability,
+  completion_timeout_low_p_min_ms: NonNegativeMs,
+});
+export type StartGuard = z.infer<typeof StartGuard>;
+
+/**
+ * AI の発話が終わったときの扱い（原著にない、ja のみ。docs/known_gaps.md §10）。省略は原著どおり。
+ * 値は【暫定、根拠は実機の1セッションのみ】。
+ */
+export const AfterAiSpeech = z.strictObject({
+  /** AI の発話の終わりに user_speak_end_time と user_turn_end_time を終わりの時刻へ数え直す（L74 と L67 の待ちを数え直す）。 */
+  rebase_user_end_times: z.boolean(),
+  /**
+   * AI の発話中に始まり、AI が話し終えた時点で止んでいた利用者の断片を、新しい発話として応答の対象にしない上限
+   * （正規化後の文字数。この値以下）。0 は文字数で判定しない。断片は履歴には残す。
+   */
+  fragment_max_chars: z.number().int().min(0),
+  /** 同じ扱いにする相槌の語句。正規化後の全体がこの語句の繰り返しだけなら断片とみなす。 */
+  backchannel_phrases: z.array(NonEmptyString),
+});
+export type AfterAiSpeech = z.infer<typeof AfterAiSpeech>;
+
 export const PolicyJa = z.strictObject({
   $schema: z.string().optional(),
   policy_id: z.literal('ja'),
@@ -134,6 +192,10 @@ export const PolicyJa = z.strictObject({
      * 省略と null は未校正で、fallback_energy による開始と割り込みをしない。
      */
     fallback_energy_silence_dbfs: Uncalibrated(z.number().max(0)).optional(),
+    /** 開始の慎重化。省略は原著どおり。 */
+    start_guard: StartGuard.optional(),
+    /** AI の発話の終わりの扱い。省略は原著どおり。 */
+    after_ai_speech: AfterAiSpeech.optional(),
   }),
   gaze: z.strictObject({
     /** 原著に数値の閾値はない（計画 §4.2）。 */
@@ -180,6 +242,8 @@ export const PolicyJa = z.strictObject({
     max_active_candidates: z.number().int().min(1),
     max_requests_per_session: Uncalibrated(z.number().int().min(1)),
     trigger: InitiativeTrigger.optional(),
+    /** 合図と発話の交渉（E2、E3）。省略は候補を記録するだけ。 */
+    negotiation: InitiativeNegotiation.optional(),
   }),
   speech: z.strictObject({
     /** is_ready の定義。最初の PCM がこの長さバッファされた状態（計画 §4.3）。 */

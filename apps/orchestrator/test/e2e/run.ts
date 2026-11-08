@@ -35,7 +35,7 @@ interface ParticipantHandle {
       trackSettings: { echoCancellation: { value: boolean | null }; noiseSuppression: { value: boolean | null }; autoGainControl: { value: boolean | null } } | null;
       [key: string]: unknown;
     };
-    record: { mouthOpenWhilePlaying: number; mouthSamplesWhilePlaying: number; maxMouthOpen: number; gazeReports: { target: string; visible: boolean; client_t_ms: { value: number | null } }[]; gazeCommands: { target: string; client_t_ms: number }[]; messages: string[] };
+    record: { mouthOpenWhilePlaying: number; mouthSamplesWhilePlaying: number; maxMouthOpen: number; gazeReports: { target: string; visible: boolean; client_t_ms: { value: number | null } }[]; gazeCommands: { target: string; client_t_ms: number }[]; messages: string[]; breathCommands: { type: string; breath: boolean }[]; signalReports: { phase: string }[] };
   };
   avatar(): unknown;
   avatarError(): string | null;
@@ -139,12 +139,12 @@ async function startNext(): Promise<ChildProcess> {
   return next;
 }
 
-async function openParticipant(browser: Browser): Promise<Page> {
+async function openParticipant(browser: Browser, query = ''): Promise<Page> {
   const page = await browser.newPage({ viewport: { width: 480, height: 360 } });
   page.on('pageerror', (e) => console.log(`  pageerror: ${String(e)}`));
   await page.addInitScript('window.__name = (f) => f');
   // 初回は Next のコンパイルで時間がかかる。
-  await page.goto(`http://127.0.0.1:${WEB_PORT}/?ws=${encodeURIComponent(`ws://127.0.0.1:${ORCH_PORT}/ws`)}`, {
+  await page.goto(`http://127.0.0.1:${WEB_PORT}/?ws=${encodeURIComponent(`ws://127.0.0.1:${ORCH_PORT}/ws`)}${query}`, {
     waitUntil: 'load',
     timeout: 120_000,
   });
@@ -177,7 +177,10 @@ async function main(): Promise<void> {
     ORCHESTRATOR_HOST: '127.0.0.1',
     ALLOWED_ORIGINS: `http://127.0.0.1:${WEB_PORT}`,
     SESSION_RESUME_GRACE_MS: '20000',
-    ...(REAL ? {} : { STT_PROVIDER_CLASS: 'test_double', TTS_PROVIDER_CLASS: 'test_double', LLM_PROVIDER_CLASS: 'test_double' }),
+    // 台本では、2つ目のセッション（initiative_inhale）だけ STT が安定テキストを出し、判定の LLM が NEW を返す（app/scripted.ts）。
+    ...(REAL
+      ? {}
+      : { STT_PROVIDER_CLASS: 'test_double', TTS_PROVIDER_CLASS: 'test_double', LLM_PROVIDER_CLASS: 'test_double', SCRIPTED_INITIATIVE: 'new_on_input' }),
   };
   const config = readConfig(env);
   results.providers = { stt: config.stt, tts: config.tts, llm: config.llm, maai: 'real (.venv)' };
@@ -284,17 +287,32 @@ async function main(): Promise<void> {
     await tab2.close();
     await sleep(6000);
 
-    // ---- 3. ページの再読み込み → 新しいセッション ------------------------------------------
+    // ---- 3. ページの再読み込み → 新しいセッション（条件は吸気あり。開始画面の選択の初期値を ?condition= で） ----------
     await page.close();
-    page = await openParticipant(browser);
+    page = await openParticipant(browser, '&condition=initiative_inhale');
+    const picked = await page.evaluate(() => (document.querySelector('input[name="condition"]:checked') as HTMLInputElement | null)?.value ?? null);
     await page.click('#start');
     const session2 = await waitFor('second session', () => {
       const s = server.current();
       return s !== null && s !== session1 ? s : null;
     }, 30_000);
     check('再読み込みで新しいセッションになり、前のセッションは閉じた', session2 !== null && server.pastSessions.includes(session1), { second: session2?.session_id });
-    await sleep(15_000);
-    results.session2 = session2 ? { vap_reconfigured: maai.current().state, counters: session2.counters } : null;
+    check('開始画面の条件の選択が ?condition= の値（initiative_inhale）で、セッションもその条件', picked === 'initiative_inhale' && session2?.condition === 'initiative_inhale', {
+      picked,
+      session: session2?.condition,
+    });
+    // 台本の候補を、吸気の合図のあと話し終えるまで待つ（候補の発話の履歴が入るまで）。
+    const candidateSpoken = session2
+      ? await waitFor('candidate speech in history', () => session2.history.snapshot().some((h) => h.role === 'assistant' && h.origin.kind === 'candidate') || null, 45_000, 100)
+      : null;
+    await sleep(3000);
+    const breath2 = await page.evaluate(() => {
+      const r = window.__participant!.controller.record;
+      return { commands: r.breathCommands, reports: r.signalReports };
+    });
+    results.session2 = session2
+      ? { vap_reconfigured: maai.current().state, counters: session2.counters, candidate_spoken: candidateSpoken !== null, breath: breath2 }
+      : null;
     await page.close();
     await server.endSession('e2e_done');
 
@@ -322,6 +340,7 @@ async function main(): Promise<void> {
       const e2 = readEvents(path.join(config.sessions_dir, session2.session_id, 'events.jsonl'));
       const vap2 = ofType(e2, 'vap.state');
       check('新しいセッションでも VAP_STATE が届く（CONFIGURE をやり直した）', vap2.length > 10 && vap2[0]!.audio_frame < 16000 * 5, { n: vap2.length, first_frame: vap2[0]?.audio_frame });
+      analyseInhale(e2, results.session2 as { breath: { commands: { type: string; breath: boolean }[]; reports: { phase: string }[] } } | null);
     }
   } finally {
     await browser?.close().catch(() => undefined);
@@ -341,6 +360,48 @@ async function main(): Promise<void> {
     console.log(failures.length === 0 ? 'ALL OK' : `FAILED: ${failures.join(', ')}`);
     process.exitCode = failures.length === 0 ? 0 : 1;
   }
+}
+
+/** 吸気あり（initiative_inhale）のセッション: 合図 → 吸気 → 保留 → 候補の発話 → 話し終わり、が JSONL とブラウザの記録に残る。 */
+function analyseInhale(events: ResearchEvent[], session2: { breath: { commands: { type: string; breath: boolean }[]; reports: { phase: string }[] } } | null): void {
+  const conditions = new Set(events.map((e) => e.condition));
+  const states = ofType(events, 'candidate.state_changed');
+  const spoken = states.find((e) => e.to === 'SPOKEN');
+  const id = spoken?.candidate_id;
+  const path = id ? states.filter((e) => e.candidate_id === id).map((e) => e.to) : [];
+  const sent = ofType(events, 'signal.sent').filter((e) => e.candidate_id === id);
+  const started = ofType(events, 'signal.started').filter((e) => e.candidate_id === id);
+  const speech = ofType(events, 'speech.started').filter((e) => e.origin === 'candidate' && e.candidate_id === id);
+  const decisions = ofType(events, 'negotiation.decision');
+  results.inhale = {
+    conditions: [...conditions],
+    candidate_id: id ?? null,
+    path,
+    signal_sent: sent.map((e) => ({ phase: e.phase, sent_at: e.sent_at })),
+    signal_started: started.map((e) => ({ phase: e.phase, visible: e.visible })),
+    speech_started: speech.length,
+    negotiation_decisions: decisions.map((e) => `${e.stage}:${e.outcome}`),
+    browser: session2?.breath ?? null,
+  };
+  check('吸気あり: JSONL の condition がすべて initiative_inhale', conditions.size === 1 && conditions.has('initiative_inhale'), [...conditions]);
+  const inhaleAt = path.indexOf('BREATH_INHALE');
+  check(
+    '吸気あり: 候補が BREATH_INHALE → BREATH_HOLD_OR_READY（または DEFERRED）→ SPEAKING → SPOKEN と進んだ',
+    inhaleAt >= 0 && path.indexOf('SPEAKING') > inhaleAt && path.slice(inhaleAt + 1, path.indexOf('SPEAKING')).some((s) => s === 'BREATH_HOLD_OR_READY' || s === 'DEFERRED') && path.at(-1) === 'SPOKEN',
+    path,
+  );
+  check('吸気あり: 吸気の signal.sent と、ブラウザの描画の signal.started（inhale）が残る', sent.some((e) => e.phase === 'inhale') && started.some((e) => e.phase === 'inhale'), {
+    sent: sent.map((e) => e.phase),
+    started: started.map((e) => e.phase),
+  });
+  check('吸気あり: 候補の発話の speech.started（origin=candidate）', speech.length === 1, speech.length);
+  const cmds = session2?.breath.commands ?? [];
+  check(
+    '吸気あり: ブラウザが breath.cue を受け、アバターの BreathController へ渡した（breath.release も届いた）',
+    cmds.some((c) => c.type === 'breath.cue' && c.breath) && cmds.some((c) => c.type === 'breath.release'),
+    cmds,
+  );
+  check('吸気あり: 発話の選択の理由が negotiation.decision に残る', decisions.some((e) => e.stage === 'speech_selection' && e.candidate_id.value === id), decisions.map((e) => `${e.stage}:${e.outcome}`));
 }
 
 /** 保持時間を待たずに user へ戻してよい理由（apps/orchestrator/src/control/gaze.ts の returnsImmediately）。 */

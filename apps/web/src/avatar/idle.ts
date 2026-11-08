@@ -59,8 +59,10 @@ export const IDLE_BONES = ['head', 'spine'] as const;
 
 export class IdleLayer implements AvatarLayer {
   readonly name = 'idle';
-  /** 0〜1。H2 で吸気の前後に下げる。 */
+  /** 0〜1。利用者の設定（setIdleIntensity）。 */
   intensity = 1;
+  /** 0〜1。吸気の層が吸気の前後に下げる（breath.ts）。intensity とは別に掛ける。 */
+  suppression = 1;
   private readonly smoothedIntensity = new SmoothDamp(1);
   private readonly slow: SmoothNoise[];
   private readonly fast: SmoothNoise[];
@@ -79,7 +81,7 @@ export class IdleLayer implements AvatarLayer {
 
   update(context: LayerContext, frame: PoseFrame): void {
     const { dtMs } = context;
-    const scale = this.smoothedIntensity.update(this.intensity, 400, dtMs);
+    const scale = this.smoothedIntensity.update(this.intensity, 400, dtMs) * this.suppression;
     const head = (i: number) => (this.slow[i]?.update(dtMs) ?? 0) * 0.72 + (this.fast[i]?.update(dtMs) ?? 0) * 0.28;
     const a = this.amplitudes;
     const postureYaw = this.posture[0]?.update(dtMs) ?? 0;

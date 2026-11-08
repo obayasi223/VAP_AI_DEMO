@@ -4,11 +4,35 @@
  * 参加者画面（レーン J）。「はじめる」を1回押すと、あとはハンズフリーで話せる。
  * クエリ: ?ws=ws://localhost:8787/ws（既定は NEXT_PUBLIC_ORCHESTRATOR_WS_URL、なければ同じホストの 8787）
  *         ?model=/models/xxx.vrm
+ *         ?condition=reactive|initiative_inhale|initiative_no_cue（開始画面の選択の初期値。既定は
+ *           NEXT_PUBLIC_DEFAULT_CONDITION、なければ reactive）
+ * 研究条件の選択は開始画面に出す。本番の実験で参加者に条件名を見せないときは NEXT_PUBLIC_HIDE_CONDITION_PICKER=1 で
+ * 選択を隠す（条件を送らず、orchestrator の CONDITION に任せる。orchestrator 側も CONDITION_FROM_CLIENT=0 で固定する）。
  * 試験（apps/orchestrator/test/e2e）は window.__participant を読む。
  */
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Avatar } from '../../src/avatar';
-import { INITIAL_VIEW, ParticipantController, type ParticipantView } from '../../src/session/participant';
+import {
+  CONDITION_LABELS,
+  INITIAL_VIEW,
+  ParticipantController,
+  type ParticipantView,
+} from '../../src/session/participant';
+import type { Condition } from '@llm-vap/contracts/common';
+
+const CONDITIONS: Condition[] = ['reactive', 'initiative_inhale', 'initiative_no_cue'];
+const isCondition = (value: string | null | undefined): value is Condition => CONDITIONS.includes(value as Condition);
+/** 選択を隠す（本番の実験）。隠すときは条件を送らない。 */
+const HIDE_CONDITION_PICKER = process.env.NEXT_PUBLIC_HIDE_CONDITION_PICKER === '1';
+
+function initialCondition(): Condition {
+  if (typeof window !== 'undefined') {
+    const query = new URLSearchParams(window.location.search).get('condition');
+    if (isCondition(query)) return query;
+  }
+  const env = process.env.NEXT_PUBLIC_DEFAULT_CONDITION;
+  return isCondition(env) ? env : 'reactive';
+}
 
 const DEFAULT_MODEL = '/models/Sendagaya_Shino.vrm';
 
@@ -59,6 +83,8 @@ export default function ParticipantPage() {
   const controllerRef = useRef<ParticipantController | null>(null);
   const [view, setView] = useState<ParticipantView>(INITIAL_VIEW);
   const [avatarStatus, setAvatarStatus] = useState('アバターを読み込み中…');
+  const [condition, setCondition] = useState<Condition>('reactive');
+  useEffect(() => setCondition(initialCondition()), []);
 
   if (controllerRef.current === null && typeof window !== 'undefined') {
     controllerRef.current = new ParticipantController({
@@ -133,10 +159,27 @@ export default function ParticipantPage() {
               id="start"
               type="button"
               style={styles.button}
-              onClick={() => void controllerRef.current?.start()}
+              onClick={() => void controllerRef.current?.start({ condition: HIDE_CONDITION_PICKER ? null : condition })}
             >
               はじめる
             </button>
+            {!HIDE_CONDITION_PICKER && (
+              <fieldset style={styles.conditions} data-testid="condition-picker">
+                <legend style={styles.small}>応答のしかた（体験用）</legend>
+                {CONDITIONS.map((c) => (
+                  <label key={c} style={styles.conditionLabel}>
+                    <input
+                      type="radio"
+                      name="condition"
+                      value={c}
+                      checked={condition === c}
+                      onChange={() => setCondition(c)}
+                    />{' '}
+                    {CONDITION_LABELS[c]}
+                  </label>
+                ))}
+              </fieldset>
+            )}
             <p style={styles.small}>押すとマイクの許可を求められます。「許可」を選んでください。</p>
           </>
         ) : (
@@ -190,7 +233,12 @@ export default function ParticipantPage() {
             </p>
           </details>
         )}
-        {view.sessionId && <p style={styles.tiny}>session: {view.sessionId}</p>}
+        {view.sessionId && (
+          <p style={styles.tiny}>
+            session: {view.sessionId}
+            {!HIDE_CONDITION_PICKER && view.condition && ` ／ ${CONDITION_LABELS[view.condition]}`}
+          </p>
+        )}
       </aside>
     </main>
   );
@@ -212,4 +260,6 @@ const styles: Record<string, CSSProperties> = {
   error: { fontSize: 14, background: '#fde2e1', border: '1px solid #e07a7a', padding: 8, borderRadius: 4 },
   details: { marginTop: 16, fontSize: 13 },
   list: { paddingLeft: 18 },
+  conditions: { marginTop: 16, border: '1px solid #ddd', borderRadius: 4, padding: '6px 10px' },
+  conditionLabel: { display: 'block', fontSize: 14, margin: '4px 0' },
 };

@@ -1,0 +1,294 @@
+.page {
+  --bg: #f6f6f4;
+  --card: #ffffff;
+  --text: #1f2328;
+  --muted: #646a73;
+  --line: #dcdedf;
+  --warn: #9a5b00;
+  --warn-bg: #fff4dc;
+  --bad: #b3261e;
+  --good: #1a7f4b;
+  --changed-bg: #e8f0fc;
+  /* 図の系列色（研究者画面と同じ分類色に、記録・再計算・start_guard を足す）。AI と利用者は線種でも区別する。 */
+  --series-ai: #2a78d6;
+  --series-user: #eb6834;
+  --series-allowed: #1baf7a;
+  --series-initiative: #eda100;
+  --series-gaze: #6250d6;
+  --series-interrupt: #e34948;
+  --series-recorded: #4a4f57;
+  --series-replayed: #2a78d6;
+  --series-guard: #b04fb0;
+  color-scheme: light dark;
+  min-height: 100vh;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 system-ui, 'Noto Sans JP', sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .page {
+    --bg: #17191c;
+    --card: #212428;
+    --text: #e7e9ec;
+    --muted: #a0a6ae;
+    --line: #363a40;
+    --warn: #f0b95a;
+    --warn-bg: #3a2c12;
+    --bad: #ff8a80;
+    --good: #5fd39b;
+    --changed-bg: #1d2a3d;
+    --series-ai: #3987e5;
+    --series-user: #d95926;
+    --series-allowed: #199e70;
+    --series-initiative: #c98500;
+    --series-gaze: #9085e9;
+    --series-interrupt: #e66767;
+    --series-recorded: #b9bec6;
+    --series-replayed: #3987e5;
+    --series-guard: #c77bc7;
+  }
+}
+
+.title {
+  margin: 4px 0 8px;
+  font-size: 20px;
+}
+
+.heading {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.sub {
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tab,
+.tabOn {
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.tabOn {
+  border-color: var(--series-ai);
+  font-weight: 700;
+}
+
+.card {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.card p {
+  margin: 2px 0;
+}
+
+.banner {
+  margin-bottom: 12px;
+  padding: 10px 16px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--text);
+}
+
+.banner ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
+.error {
+  color: var(--bad);
+}
+
+.good {
+  color: var(--good);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.editor {
+  position: sticky;
+  top: 8px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+}
+
+.section {
+  margin: 8px 0 2px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.leaf,
+.leafChanged {
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.leafChanged {
+  background: var(--changed-bg);
+}
+
+.leafHead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.path {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.tag {
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.leafInput {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.leafInput input[type='range'] {
+  flex: 1;
+  min-width: 80px;
+}
+
+.leafInput input[type='number'] {
+  width: 90px;
+}
+
+.table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.holds {
+  color: var(--good);
+  font-weight: 700;
+}
+
+.notHolds {
+  color: var(--muted);
+}
+
+.llm {
+  padding: 0 4px;
+  border: 1px dashed var(--series-initiative);
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.chartWrap {
+  width: 100%;
+}
+
+.chart {
+  display: block;
+  width: 100%;
+}
+
+.readout {
+  min-height: 1.6em;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.input {
+  min-width: 320px;
+  padding: 2px 6px;
+  font: inherit;
+}
+
+.button {
+  padding: 3px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.editor select,
+.editor input:not([type='checkbox']):not([type='range']) {
+  max-width: 100%;
+}

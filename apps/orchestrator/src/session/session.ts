@@ -13,9 +13,16 @@
  *   STT 結果 → 発話希望（initiative_wiring.ts: InitiativeMonitor → CandidateLedger）。tick → 期限と人の発話の有無、
  *   advance_segment → 候補の期限、通常応答の開始 → 残っている候補の撤回、候補の発話の終わり → finishSpeech
  *
- * want_to_speak（準備済みの応答）、permitted_to_speak（TurnManager の許可）、speaking（再生の報告）は
- * 別々に持つ。ここでは混ぜない。波2の範囲では発話希望の候補を作って記録と研究者画面に出すだけで、
- * TurnManager にも D にも渡さない（候補を話さず、吸気もしない。吸気と合図のゲートは波3）。
+ *   波3の交渉（negotiation_wiring.ts、判断は control/negotiator.ts）。研究条件はセッションごと（options.condition）:
+ *     tick の始め → 候補の先行音声の準備、合図のゲート（initiative_inhale のときだけ吸気の合図 breath.cue）、
+ *       吸気の完了（orchestrator の時計）、DEFERRED、合図の解除。吸気中は通常の応答も含めて開始を保留する
+ *       （TurnInputs.start_blocked_reason）。
+ *     step の後 → 許可が出ていれば候補と通常の応答のどちらを話すか（E3）。候補なら、同じ tick を前の状態から
+ *       候補の音声を準備済みの応答の位置に入れて計算し直し（TurnManager は純粋関数）、E2a の startSpeech で始める。
+ *     reactive では候補を記録するだけで、合図も発話もしない（従来と同じ振る舞い）。
+ *
+ * want_to_speak（準備済みの応答と、E2a の候補）、permitted_to_speak（TurnManager の許可）、speaking（再生の報告）は
+ * 別々に持つ。ここでは混ぜない。NEW は発話の許可ではない（許可は TurnManager のまま）。
  */
 import {
   SAMPLE_RATE_HZ,
@@ -59,6 +66,8 @@ import { isReadyBufferMs } from '../app/maai_setup';
 import { FALLBACK_ENERGY_FLOOR_DBFS, PlaybackTracker, rmsDbfs } from './audio_state';
 import { SessionHistory, UserUtterances } from './history';
 import { InitiativeWiring } from './initiative_wiring';
+import { NegotiationWiring, negotiatorSettings } from './negotiation_wiring';
+import type { CandidateChoice } from './negotiation_wiring';
 
 export interface BrowserLink {
   sendJson(message: NodeToBrowser): void;
@@ -112,6 +121,8 @@ function stripType<T extends { type: unknown }>(message: T): Omit<T, 'type'> {
 
 export class Session {
   readonly session_id: string;
+  /** このセッションの研究条件（セッションごと。JSONL の condition と同じ値）。 */
+  readonly condition: Condition;
   readonly history = new SessionHistory();
   readonly counters: SessionCounters = {
     uplink_frames: 0,
@@ -143,6 +154,8 @@ export class Session {
   /** 発話希望の判定と候補。無効（条件、方策）か作れなければ null。 */
   private initiative: InitiativeWiring | null = null;
   private initiativeReason: string | null = null;
+  /** 発話希望の交渉（波3）。判定が動いていない、または方策に negotiation がなければ null。 */
+  private negotiation: NegotiationWiring | null = null;
   private readonly unsubscribe: Unsubscribe[] = [];
   private tickTimer: NodeJS.Timeout | null = null;
   private closed = false;
@@ -166,6 +179,7 @@ export class Session {
 
   constructor(private readonly options: SessionOptions) {
     this.session_id = options.session_id;
+    this.condition = options.condition;
     this.time = options.time;
     this.emitter = options.emitter;
     // fallback_energy は mic の RMS（dBFS）。尺度を決めているのは session なので閾値もここから渡す（settings.ts）。
@@ -310,8 +324,11 @@ export class Session {
         model: this.initiative !== null ? (initiative?.llm?.model_version ?? null) : null,
         persona_id: initiative?.persona?.persona_id ?? null,
         persona_version: initiative?.persona?.version ?? null,
-        // 波2: 候補は作るだけで、発声（D）にも吸気（H2）にも渡さない。
-        candidates_used_for: 'log_and_research_view_only',
+        // 波3: reactive は記録だけ。initiative_no_cue は合図なしで発話、initiative_inhale は吸気の合図の後に発話。
+        candidates_used_for:
+          this.negotiation === null || this.options.condition === 'reactive'
+            ? 'log_and_research_view_only'
+            : `negotiation:${this.options.condition}`,
       },
     });
   }
@@ -391,6 +408,7 @@ export class Session {
     });
     this.speech = speech;
     this.prefetch = new ResponsePrefetch({ speech, time: this.time, emitter: this.emitter });
+    this.unsubscribe.push(speech.onStateChange((change) => this.negotiation?.onSpeechState(change)));
     this.unsubscribe.push(
       speech.onFinished((finished) => {
         this.initiative?.onSpeechFinished(finished, this.time.monotonicMs());
@@ -431,6 +449,16 @@ export class Session {
         speech: () => this.speech,
         prompt_version: setup.prompt_version,
       });
+      const settings = negotiatorSettings(policy, this.options.condition);
+      if (settings !== null) {
+        this.negotiation = new NegotiationWiring({
+          settings,
+          initiative: this.initiative,
+          emitter: this.emitter,
+          speech: () => this.speech,
+          send: (message) => this.send(message),
+        });
+      }
     } catch (error) {
       // policy の未校正（null）など。音声の経路は止めない。
       this.initiativeReason = `initiative_unavailable:${String(error instanceof Error ? error.message : error).slice(0, 200)}`;
@@ -440,6 +468,11 @@ export class Session {
   /** 候補の状態の正本（E2a）。読み出し専用に使う（試験と研究者向け）。判定が動いていなければ null。 */
   get candidates(): InitiativeWiring['ledger'] | null {
     return this.initiative?.ledger ?? null;
+  }
+
+  /** 発話希望の交渉（波3）。試験と研究者向けの読み出し。 */
+  get negotiationWiring(): NegotiationWiring | null {
+    return this.negotiation;
   }
 
   /** 発話希望の判定が動いているか（研究者画面と試験向け）。止めた・作れなかったときは理由。 */
@@ -574,8 +607,8 @@ export class Session {
         return;
       }
       case 'signal.report':
-        // 吸気は波3。波1では合図を出さないので、届いても記録しない（数だけ残す）。
-        this.counters.signal_reports_ignored += 1;
+        // 合図の描画の報告（記録だけ。吸気の完了は orchestrator の時計で判定する）。合図と対応しないものは数だけ残す。
+        if (!this.negotiation?.onSignalReport(message, this.browserClock.mapping())) this.counters.signal_reports_ignored += 1;
         return;
     }
   }
@@ -636,12 +669,12 @@ export class Session {
 
   // ---- tick --------------------------------------------------------------------
 
-  private inputs(): TurnInputs {
+  private inputs(holdStart: string | null = null): TurnInputs {
     const t = this.transcript;
     return {
       vap: this.vap === null ? absent('no_vap_state_since_ready') : present(this.vap),
       vap_received_at: this.vapReceivedAt === null ? absent('no_vap_state_since_ready') : present(this.vapReceivedAt),
-      start_blocked_reason: this.startBlockedReason(),
+      start_blocked_reason: this.startBlockedReason() ?? holdStart,
       received_audio_frame: this.receivedAudioFrame,
       vap_worker_started_at:
         this.workerReadyAt === null ? absent(this.options.maai === null ? 'maai_disabled' : 'worker_not_ready') : present(this.workerReadyAt),
@@ -684,15 +717,34 @@ export class Session {
         }
       }
       const previous = this.turnState;
-      const inputs = this.inputs();
+      // 交渉（合図、吸気の完了、DEFERRED）。吸気中は通常の応答も含めて開始を保留する。
+      const holdStart =
+        this.negotiation?.beforeStep({
+          now,
+          ai_speaking: previous.speaking.phase !== 'silent' || (this.speech?.activePlayback() ?? null) !== null,
+          avatar_available: this.link !== null,
+          user_speaking: previous.user_speaking,
+        }) ?? null;
+      const inputs = this.inputs(holdStart);
       let { state, decisions } = this.turnManager.step(previous, inputs, now);
       this.turnState = state;
+      // E3: 許可が出ていれば候補と通常の応答のどちらを話すか。候補なら、候補の音声を準備済みの応答の位置に入れて
+      // 同じ tick を前の状態から計算し直す（TurnManager の許可の判定は prefetch を読まないので、許可は変わらない）。
+      const candidate = this.chooseCandidate(previous, inputs, state, decisions, now);
+      if (candidate !== null) {
+        ({ state, decisions } = candidate.step);
+        this.turnState = state;
+      }
       // 再生の開始は、他の決定を実行する前に試す。入力で止められなかった拒否なら、その理由を start_blocked_reason に
       // 入れて同じ tick を前の状態から計算し直す（TurnManager は純粋関数）。segment も STT も進めず（応答を失わない）、
       // 同じ tick の他の決定（準備、turn.allowed、視線、鮮度）は開始しなかった前提の1組だけを実行する。
       const start = decisions.find((d) => d.kind === 'start_speech');
+      this.startedCandidate = false;
       if (start !== undefined) {
-        const refused = this.startSpeech(start.audio_playback_id);
+        const refused =
+          candidate !== null
+            ? this.startCandidateSpeech(candidate.choice, start.audio_playback_id, now)
+            : this.startSpeech(start.audio_playback_id);
         if (refused !== null) {
           this.counters.start_rolled_back += 1;
           ({ state, decisions } = this.turnManager.step(previous, { ...inputs, start_blocked_reason: `start_refused:${refused}` }, now));
@@ -716,8 +768,8 @@ export class Session {
         this.prefetch?.execute(decision);
         return;
       case 'start_speech':
-        // 波2では TurnManager が始めるのは通常の応答だけ。残っている候補は撤回する（計画 §4.6）。
-        this.initiative?.onNormalResponseStarted(now);
+        // 通常の応答を話し始めたら、残っている候補は撤回する（計画 §4.6）。候補を話し始めたときは撤回しない。
+        if (!this.startedCandidate) this.initiative?.onNormalResponseStarted(now);
         return; // 再生の開始は tick の中で startSpeech が扱う
       case 'interrupt_speech':
         this.speech?.stop(decision.audio_playback_id, decision.reason, {
@@ -743,6 +795,79 @@ export class Session {
         this.pushStatus(false);
         return;
     }
+  }
+
+  /** この tick で始めたのが候補の発話か（dispatch の start_speech で通常応答の撤回をしないため）。 */
+  private startedCandidate = false;
+
+  /**
+   * E3 の選択。候補を話すなら、候補の音声を準備済みの応答の位置に入れて計算し直した step を返す。それ以外は null
+   * （1回目の step のまま。通常の応答が準備済みならそれが始まる）。
+   */
+  private chooseCandidate(
+    previous: TurnState,
+    inputs: TurnInputs,
+    first: TurnState,
+    decisions: TurnDecision[],
+    now: number,
+  ): { choice: CandidateChoice; step: { state: TurnState; decisions: TurnDecision[] } } | null {
+    const negotiation = this.negotiation;
+    if (negotiation === null || !negotiation.hasCandidate()) return null;
+    // 1回目の step で通常の応答が始まっていると、状態の招待と発話文は開始で消えている（U-4）。選択には開始する前の
+    // 値が要るので、開始だけを止めた step で見る（許可の判定は start_blocked_reason を読まないので同じ）。
+    const view = decisions.some((d) => d.kind === 'start_speech')
+      ? this.turnManager.step(previous, { ...inputs, start_blocked_reason: 'negotiation_selection_probe' }, now).state
+      : first;
+    const choice = negotiation.select(now, view);
+    if (choice.choice !== 'candidate') return null;
+    if (choice.audio_playback_id === null || choice.transcript_revision === null) {
+      negotiation.noteSelectionNotStarted(choice, 'no_candidate_audio');
+      return null;
+    }
+    // この tick で新しい準備を起動したなら TurnManager は話し始めない（L48）。候補の音声をそこへ入れると取り消されるので、
+    // 次の tick で選び直す。
+    if (decisions.some((d) => d.kind === 'prepare')) {
+      negotiation.noteSelectionNotStarted(choice, 'new_prepare_this_tick');
+      return null;
+    }
+    if (inputs.start_blocked_reason) {
+      negotiation.noteSelectionNotStarted(choice, `start_blocked:${inputs.start_blocked_reason}`);
+      return null;
+    }
+    const step = this.turnManager.step(
+      previous,
+      {
+        ...inputs,
+        prefetch: {
+          state: 'ready',
+          audio_playback_id: choice.audio_playback_id,
+          segment_id: previous.segment_id,
+          transcript_revision: choice.transcript_revision,
+          started_at: now,
+        },
+      },
+      now,
+    );
+    const start = step.decisions.find((d) => d.kind === 'start_speech');
+    if (start === undefined || start.audio_playback_id !== choice.audio_playback_id) {
+      negotiation.noteSelectionNotStarted(choice, 'turn_manager_did_not_start');
+      return null;
+    }
+    return { choice, step };
+  }
+
+  /** 候補の発話の開始。E2a が D の版と PCM の一致を確かめる。拒否なら理由、始めたら null。 */
+  private startCandidateSpeech(choice: CandidateChoice, audio_playback_id: number, now: number): string | null {
+    if (this.speech === null || this.negotiation === null) return 'speech_unavailable';
+    if (this.link === null) return 'browser_detached';
+    const refused = this.negotiation.startCandidate(choice, audio_playback_id, now);
+    if (refused !== null) {
+      this.counters.start_refused[refused] = (this.counters.start_refused[refused] ?? 0) + 1;
+      return refused;
+    }
+    this.startedCandidate = true;
+    this.startedInSegment.set(audio_playback_id, this.turnState.segment_id);
+    return null;
   }
 
   /** start_speech の実行。拒否されたら理由（数える）、始めたら null。 */

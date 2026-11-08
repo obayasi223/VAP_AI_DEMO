@@ -8,6 +8,10 @@
  *  - WavScriptedTts: 音声合成はしない。録音済みの WAV（既定は models/ja.wav）を切り出して返す。
  *    句読点の後に無音を入れるので、AI 発話中のポーズができる。文字の時刻は比例配分（provider_char ではない）。
  *  - ScriptedReplyLlm: 決まった返答を返す。
+ *
+ * 発話希望の経路の E2E（SCRIPTED_INITIATIVE=new_on_input、既定は none）: STT の interim も安定テキストとして出し
+ * （stable_interim）、判定の LLM は入力の最後の区間から根拠を抜き出した NEW（候補があれば KEEP）を返す。
+ * 合図から発話までの配線を通すためのもので、発話希望の判断ではない。
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -66,6 +70,8 @@ export interface EnergyScriptedSttOptions {
   script?: readonly string[];
   /** この dBFS 以上の枠を発話とみなす。 */
   voiced_dbfs?: number;
+  /** true なら interim の文を全部安定テキストとして出す（発話希望の E2E 用。実物の stability ではない）。 */
+  stable_interim?: boolean;
   /** 発話がこれだけ途切れたら final。 */
   final_after_silence_ms?: number;
   /** 1文字あたりの発話の長さ。interim の伸び方に使う。 */
@@ -154,8 +160,8 @@ class EnergyScriptedSttSession implements SttSession {
     const result: SttResult = {
       kind,
       text,
-      stable_text: kind === 'final' ? text : '',
-      unstable_text: kind === 'final' ? '' : text,
+      stable_text: kind === 'final' || this.options.stable_interim ? text : '',
+      unstable_text: kind === 'final' || this.options.stable_interim ? '' : text,
       parts: [{ text, stability }],
       segment_id: this.segmentId,
       asr_segment_id: this.asrSegmentId,
@@ -193,6 +199,7 @@ export class EnergyScriptedSttProvider implements SttProvider {
       voiced_dbfs: -40,
       final_after_silence_ms: 600,
       ms_per_char: 120,
+      stable_interim: false,
       ...options,
     };
   }
@@ -499,6 +506,38 @@ export const SCRIPTED_INITIATIVE_REPLY = JSON.stringify({
   withdraw_evidence_segment_ids: [],
 });
 
+/** 発話希望の E2E の台本の発話文と、STT の台本（直接の質問で終わらない文。E3 は直接の質問なら通常応答を選ぶ）。 */
+export const SCRIPTED_CANDIDATE_UTTERANCE = 'すみません、少し確認してもいいですか。';
+export const INITIATIVE_STT_SCRIPT = [
+  'こんにちは、今日はちょっと相談したいことがあります。',
+  '最近、朝起きるのがつらくて困っています。',
+  '目覚ましを三つかけても起きられないんです。',
+];
+
+/**
+ * 判定の入力（prompt.ts の形: 「#<区間>（確定|認識中）: <文>」と「- ID: c_xxxx ／…」）から台本の返答を作る。
+ * 候補が入力にあれば KEEP、なければ最後の区間の先頭 8 文字を根拠にした NEW。区間がなければ NONE。判断ではない。
+ */
+export function scriptedInitiativeReply(request: LlmRequest): string {
+  const text = request.messages.map((m) => m.text).join('\n');
+  const base = JSON.parse(SCRIPTED_INITIATIVE_REPLY) as Record<string, unknown>;
+  const candidate = /- ID: (c_\d+)/.exec(text);
+  if (candidate) return JSON.stringify({ ...base, decision: 'KEEP', target_candidate_id: candidate[1] });
+  const lines = [...text.matchAll(/^#(\d+)（[^）]*）: (.+)$/gmu)];
+  const last = lines.at(-1);
+  if (!last || [...(last[2] as string)].length < 8) return SCRIPTED_INITIATIVE_REPLY;
+  return JSON.stringify({
+    ...base,
+    decision: 'NEW',
+    intent_type: 'CLARIFICATION',
+    evidence_span: [...(last[2] as string)].slice(0, 8).join(''),
+    evidence_segment_ids: [Number(last[1])],
+    proposed_utterance: SCRIPTED_CANDIDATE_UTTERANCE,
+    expiry_policy: 'RECHECK_ON_NEW_INFORMATION',
+    urgency: 'NORMAL',
+  });
+}
+
 export interface ScriptedReplyLlmOptions {
   time: TimeSource;
   emitter?: EventEmitter;
@@ -506,6 +545,8 @@ export interface ScriptedReplyLlmOptions {
   chars_per_delta?: number;
   delta_delay_ms?: number;
   first_delta_delay_ms?: number;
+  /** none（既定）は判定に常に NONE、new_on_input は scriptedInitiativeReply。 */
+  initiative?: 'none' | 'new_on_input';
 }
 
 function abortError(): Error {
@@ -526,6 +567,7 @@ export class ScriptedReplyLlm implements LlmProvider {
       chars_per_delta: 6,
       delta_delay_ms: 30,
       first_delta_delay_ms: 300,
+      initiative: 'none',
       ...options,
     };
   }
@@ -540,7 +582,12 @@ export class ScriptedReplyLlm implements LlmProvider {
 
   stream(request: LlmRequest): LlmStream {
     const { time, emitter, chars_per_delta, delta_delay_ms, first_delta_delay_ms } = this.options;
-    const reply = request.purpose === 'initiative' ? SCRIPTED_INITIATIVE_REPLY : this.options.reply;
+    const reply =
+      request.purpose !== 'initiative'
+        ? this.options.reply
+        : this.options.initiative === 'new_on_input'
+          ? scriptedInitiativeReply(request)
+          : SCRIPTED_INITIATIVE_REPLY;
     const sent_at = time.monotonicMs();
     emitter?.emit({
       event: 'llm.request',

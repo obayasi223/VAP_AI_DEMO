@@ -1,9 +1,9 @@
 /** 再生を始められない間（TurnInputs.start_blocked_reason）は、許可が出ても segment を進めない（応答を失わない）。 */
 import { describe, expect, it } from 'vitest';
-import { Driver, T0, hri2025, ja, kinds, ready } from './helpers';
+import { Driver, T0, hri2025, ja, jaAppendixA, kinds, ready } from './helpers';
 
 describe.each([
-  ['ja', ja],
+  ['ja', jaAppendixA],
   ['hri2025', hri2025],
 ] as const)('start_blocked_reason（%s）', (_name, policy) => {
   it('拒否される間は start_speech も advance_segment も出さず、入力文を保つ。解けたら始める', () => {

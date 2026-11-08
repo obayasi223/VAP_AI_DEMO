@@ -3,7 +3,8 @@
  * 準備の閾値は prepareThresholds() だけから読む（docs/known_gaps.md §1）。
  */
 import { prepareThresholds, turnConstants, turnInterpretation } from '@llm-vap/contracts';
-import type { Policy, PrepareThresholds, TurnConstants, TurnInterpretation } from '@llm-vap/contracts';
+import type { AfterAiSpeech, Policy, PrepareThresholds, StartGuard, TurnConstants, TurnInterpretation } from '@llm-vap/contracts';
+import { normalizeForSimilarity } from '../cognition/similarity';
 import { vapDirectionSettings } from './vap_direction';
 import type { VapDirectionSettings } from './vap_direction';
 
@@ -64,6 +65,29 @@ export interface ControlSettings {
   gaze: GazeSettings;
   /** 招待で発話を許可するか。招待は原著にないので hri2025 では検出して記録するだけ。 */
   invitation_grants_turn: boolean;
+  /** 開始の慎重化（原著にない）。null は原著どおり。hri2025 は常に null。 */
+  start_guard: StartGuard | null;
+  /** AI の発話の終わりの扱い（原著にない）。null は原著どおり。hri2025 は常に null。 */
+  after_ai_speech: AfterAiSpeechSettings | null;
+}
+
+export interface AfterAiSpeechSettings {
+  rebase_user_end_times: boolean;
+  fragment_max_chars: number;
+  /** 正規化後の語句（normalizeForSimilarity）。 */
+  backchannel_phrases: string[];
+}
+
+function afterAiSpeechSettings(value: AfterAiSpeech | undefined): AfterAiSpeechSettings | null {
+  if (value === undefined) return null;
+  const phrases = value.backchannel_phrases.map(normalizeForSimilarity).filter((p) => p !== '');
+  // 長い語句から試す（「そうですね」を「そう」＋「ですね」より先に）。
+  phrases.sort((a, b) => b.length - a.length);
+  return {
+    rebase_user_end_times: value.rebase_user_end_times,
+    fragment_max_chars: value.fragment_max_chars,
+    backchannel_phrases: [...new Set(phrases)],
+  };
 }
 
 function sortedYieldTimeouts(constants: TurnConstants): YieldTimeout[] {
@@ -97,6 +121,9 @@ export function controlSettings(policy: Policy, options: ControlOptions = {}): C
       // 保持時間も原著にないので入れない。
       gaze: { pause_min_ms: null, signal: null, p_threshold: null, hold_away_min_ms: null, re_avert_min_ms: null },
       invitation_grants_turn: false,
+      // 原著どおり（試験で固定）。
+      start_guard: null,
+      after_ai_speech: null,
     };
   }
   return {
@@ -116,5 +143,7 @@ export function controlSettings(policy: Policy, options: ControlOptions = {}): C
       re_avert_min_ms: policy.gaze.re_avert_min_ms ?? null,
     },
     invitation_grants_turn: true,
+    start_guard: policy.turn.start_guard ?? null,
+    after_ai_speech: afterAiSpeechSettings(policy.turn.after_ai_speech),
   };
 }

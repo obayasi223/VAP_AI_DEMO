@@ -4,6 +4,8 @@
  * 純粋な部品はここから読める。
  */
 export * from './blink';
+export * from './breath';
+export * from './breath_morph';
 export * from './face';
 export * from './gaze';
 export * from './idle';
@@ -13,4 +15,4 @@ export * from './pose';
 export * from './render_settings';
 export * from './saccade';
 export { seededRng, type Rng } from './util';
-export type { Avatar, AvatarModelInfo, AvatarOptions, AvatarTelemetry, Framing } from './runtime';
+export type { Avatar, AvatarModelInfo, AvatarOptions, AvatarTelemetry, BreathMorphInfo, Framing } from './runtime';

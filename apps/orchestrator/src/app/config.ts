@@ -6,7 +6,8 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { Condition, Policy } from '@llm-vap/contracts';
+import { Condition, Policy, type PolicyOverrideInfo } from '@llm-vap/contracts';
+import { loadOverrideFile } from '../dev/policy_override';
 import { REPO_ROOT } from '../maai';
 
 export type ProviderMode = 'production' | 'test_double';
@@ -16,7 +17,18 @@ export interface OrchestratorConfig {
   port: number;
   policy: Policy;
   policy_file: string;
+  /**
+   * POLICY_OVERRIDE_FILE（/tune が書く config/policy.ja.local.json など）を正本に重ねたときの記録。なしは null。
+   * 指定したときだけ読む（暗黙には読まない）。上書きの項目は起動ログと manifest に残す。
+   */
+  policy_override: PolicyOverrideInfo | null;
+  /** 研究条件の既定（CONDITION）。参加者画面が求めなければこれを使う。 */
   condition: Condition;
+  /**
+   * 参加者画面が WS の URL（?condition=）で求めた条件をセッションごとに使うか（CONDITION_FROM_CLIENT、既定 true）。
+   * false なら画面の求めを無視して CONDITION に固定する（本番の実験で参加者に条件を選ばせない運用）。
+   */
+  condition_from_client: boolean;
   sessions_dir: string;
   stt: ProviderMode;
   tts: ProviderMode;
@@ -40,7 +52,10 @@ export interface OrchestratorConfig {
    * 同じ経路」）。INITIATIVE_CONDITIONS=none で止める。波2では候補を作るだけで、発声と吸気には使わない。
    */
   initiative_conditions: Condition[];
-  /** AI の役割・関心（config/persona.ja.json）。 */
+  /**
+   * AI の役割・関心（PERSONA_FILE）。既定は自由な会話向けの暫定の persona（config/persona.ja.conversation.json）。
+   * 展示会の同僚（config/persona.ja.json）は反例の予備実験用に残している。
+   */
   persona_file: string;
   /** 判定に使う Gemini のモデル。S の推奨（docs/initiative_spike.md）の flash-lite（minimal）が既定。 */
   initiative_model: string;
@@ -72,7 +87,10 @@ function flag(value: string | undefined, fallback: boolean): boolean {
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorConfig {
   const policyFile = path.resolve(REPO_ROOT, env.POLICY_FILE || 'config/policy.ja.json');
-  const policy = Policy.parse(JSON.parse(readFileSync(policyFile, 'utf-8')));
+  const basePolicy = Policy.parse(JSON.parse(readFileSync(policyFile, 'utf-8')));
+  const overrideFile = env.POLICY_OVERRIDE_FILE ? path.resolve(REPO_ROOT, env.POLICY_OVERRIDE_FILE) : null;
+  const overridden = overrideFile === null ? null : loadOverrideFile(basePolicy, overrideFile);
+  const policy = overridden?.policy ?? basePolicy;
   return {
     // WSL2 の localhost 転送は 127.0.0.1 の待ち受けにも届く（Windows の curl.exe で確認、2026-11-08）。
     // LAN へ公開しないため既定は 127.0.0.1。
@@ -80,7 +98,9 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
     port: Number(env.ORCHESTRATOR_PORT || 8787),
     policy,
     policy_file: policyFile,
+    policy_override: overridden?.info ?? null,
     condition: Condition.parse(env.CONDITION || 'reactive'),
+    condition_from_client: flag(env.CONDITION_FROM_CLIENT, true),
     sessions_dir: path.resolve(REPO_ROOT, env.SESSIONS_DIR || 'sessions'),
     stt: mode('STT_PROVIDER_CLASS', env),
     tts: mode('TTS_PROVIDER_CLASS', env),
@@ -95,7 +115,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
     scripted_tts_wav: path.resolve(REPO_ROOT, env.SCRIPTED_TTS_WAV || 'models/ja.wav'),
     elevenlabs_language_normalization: flag(env.ELEVENLABS_LANGUAGE_NORMALIZATION, false),
     initiative_conditions: conditions(env.INITIATIVE_CONDITIONS),
-    persona_file: path.resolve(REPO_ROOT, env.PERSONA_FILE || 'config/persona.ja.json'),
+    persona_file: path.resolve(REPO_ROOT, env.PERSONA_FILE || 'config/persona.ja.conversation.json'),
     initiative_model: env.INITIATIVE_GEMINI_MODEL || 'gemini-3.5-flash-lite',
   };
 }

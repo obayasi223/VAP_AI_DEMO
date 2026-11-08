@@ -17,7 +17,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
-import { BrowserToNode, SystemTimeSource } from '@llm-vap/contracts';
+import { BrowserToNode, Condition, SystemTimeSource } from '@llm-vap/contracts';
 import type { ClientHello, EmitOptions, EventDraft, EventEmitter, ResearchEvent, TimeSource } from '@llm-vap/contracts';
 import { openSessionLogging } from '../logging';
 import type { MaaiWorkerClient } from '../maai';
@@ -25,6 +25,7 @@ import type { OrchestratorConfig } from '../app/config';
 import { createSessionProviders } from '../app/providers';
 import { Session, type BrowserLink } from '../session/session';
 import { handleResearchMessage, researchConfigMessage, type NoteTarget } from './research_channel';
+import { TuneChannel } from './tune_channel';
 
 /** MaAI クライアントはプロセスに1つなので、時刻源をセッションの時計へ切り替える。 */
 export class SwitchableTimeSource implements TimeSource {
@@ -73,11 +74,18 @@ export class OrchestratorServer {
   /** 研究者のメモの書き先（I2）。this.session と session_id が一致するときだけ使う。 */
   private noteTarget: NoteTarget | null = null;
   private readonly log: (message: string) => void;
+  /** 開発用の調整画面（/research?tune=1）。今のセッションの時計（state の時刻の基準）。 */
+  private readonly tune: TuneChannel;
+  private sessionTime: TimeSource | null = null;
   /** 試験が閉じたセッションも調べられるように残す。 */
   readonly pastSessions: Session[] = [];
 
   constructor(private readonly options: ServerOptions) {
     this.log = options.log ?? ((message) => console.log(`[orchestrator] ${message}`));
+    this.tune = new TuneChannel(options.config, () => {
+      const session = this.session;
+      return session === null || this.sessionTime === null ? null : { session, time: this.sessionTime };
+    });
     this.http = createServer((req, res) => this.onHttp(req, res));
     this.http.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url ?? '/', 'http://localhost');
@@ -87,9 +95,9 @@ export class OrchestratorServer {
         return;
       }
       if (url.pathname === '/ws') {
-        this.browserWss.handleUpgrade(req, socket, head, (ws) => this.onBrowser(ws));
+        this.browserWss.handleUpgrade(req, socket, head, (ws) => this.onBrowser(ws, url.searchParams.get('condition')));
       } else if (url.pathname === '/research') {
-        this.researchWss.handleUpgrade(req, socket, head, (ws) => this.onResearch(ws));
+        this.researchWss.handleUpgrade(req, socket, head, (ws) => this.onResearch(ws, url.searchParams.get('tune') === '1'));
       } else {
         socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
         socket.destroy();
@@ -167,8 +175,9 @@ export class OrchestratorServer {
 
   // ---- 研究者画面 ----------------------------------------------------------------
 
-  private onResearch(ws: WebSocket): void {
+  private onResearch(ws: WebSocket, tune = false): void {
     ws.send(JSON.stringify(researchConfigMessage(this.options.config.policy, this.options.config.condition)));
+    if (tune) this.tune.attach(ws);
     for (const line of this.backlog) ws.send(line);
     ws.on('message', (data: RawData, isBinary: boolean) => {
       if (isBinary) return;
@@ -179,6 +188,7 @@ export class OrchestratorServer {
 
   private broadcast(event: ResearchEvent): void {
     const line = JSON.stringify(event);
+    this.tune.observe(event);
     this.backlog.push(line);
     if (this.backlog.length > RESEARCH_BACKLOG) this.backlog.shift();
     for (const client of this.researchWss.clients) {
@@ -188,7 +198,8 @@ export class OrchestratorServer {
 
   // ---- 参加者 --------------------------------------------------------------------
 
-  private onBrowser(ws: WebSocket): void {
+  /** requestedCondition は WS の URL の ?condition=（参加者画面の選択）。新しいセッションを作るときだけ使う。 */
+  private onBrowser(ws: WebSocket, requestedCondition: string | null = null): void {
     let session: Session | null = null;
     const link: BrowserLink = {
       sendJson: (message) => {
@@ -218,7 +229,7 @@ export class OrchestratorServer {
       if (message.type === 'client.hello') {
         // 届いた時点で列につなぐ。await の間に別の hello が割り込まない。
         this.helloQueue = this.helloQueue
-          .then(() => this.onHello(ws, link, message))
+          .then(() => this.onHello(ws, link, message, requestedCondition))
           .then((s) => {
             session = s;
           })
@@ -247,7 +258,12 @@ export class OrchestratorServer {
     }, this.options.config.resume_grace_ms);
   }
 
-  private async onHello(ws: WebSocket, link: BrowserLink, hello: ClientHello): Promise<Session | null> {
+  private async onHello(
+    ws: WebSocket,
+    link: BrowserLink,
+    hello: ClientHello,
+    requestedCondition: string | null = null,
+  ): Promise<Session | null> {
     // 列で待つ間に閉じた接続は扱わない。
     if (ws.readyState !== WebSocket.OPEN) return null;
     const wanted = hello.session_id.value;
@@ -278,11 +294,11 @@ export class OrchestratorServer {
     if (current !== null) await this.endSession('new_client_session');
     let session: Session | null = null;
     try {
-      session = await this.createSession();
+      session = await this.createSession(requestedCondition);
       this.session = session;
       this.sessionSocket = ws;
       await session.start(link, hello);
-      this.log(`session ${session.session_id} started (stt=${this.options.config.stt} tts=${this.options.config.tts} llm=${this.options.config.llm})`);
+      this.log(`session ${session.session_id} started (condition=${session.condition} stt=${this.options.config.stt} tts=${this.options.config.tts} llm=${this.options.config.llm})`);
       if (ws.readyState !== WebSocket.OPEN && this.session === session && session.attached) {
         // 開始の途中で閉じた。close のハンドラは sessionSocket が決まる前だと何もしないので、ここで猶予を立てる。
         if (this.sessionSocket === ws) this.sessionSocket = null;
@@ -299,15 +315,35 @@ export class OrchestratorServer {
     }
   }
 
-  private async createSession(): Promise<Session> {
+  /**
+   * セッションの研究条件。画面の求め（?condition=）が正しい値で、CONDITION_FROM_CLIENT が有効ならそれ、なければ CONDITION。
+   * 不正な値と無効にした求めは使わず、起動ログに残す。
+   */
+  private sessionCondition(requested: string | null): Condition {
     const { config } = this.options;
+    if (requested === null || requested === '') return config.condition;
+    const parsed = Condition.safeParse(requested);
+    if (!parsed.success) {
+      this.log(`ignored an invalid condition request (${requested.slice(0, 40)}); using ${config.condition}`);
+      return config.condition;
+    }
+    if (!config.condition_from_client) {
+      if (parsed.data !== config.condition) this.log(`ignored the participant's condition request (CONDITION_FROM_CLIENT=0); using ${config.condition}`);
+      return config.condition;
+    }
+    return parsed.data;
+  }
+
+  private async createSession(requestedCondition: string | null = null): Promise<Session> {
+    const { config } = this.options;
+    const condition = this.sessionCondition(requestedCondition);
     const session_id = newSessionId();
     const time = new SystemTimeSource();
     const logging = await openSessionLogging({
       dir: config.sessions_dir,
       session_id,
       time,
-      condition: () => config.condition,
+      condition: () => condition,
       // 台本のプロバイダが1つでもあれば、このセッションのログは test_double（受け入れの証拠に数えない）。
       provider_class: [config.stt, config.tts, config.llm].includes('test_double') ? 'test_double' : 'production',
     });
@@ -320,12 +356,18 @@ export class OrchestratorServer {
       },
     };
     this.backlog.length = 0;
+    this.tune.resetSession();
+    this.sessionTime = time;
     this.noteTarget = { session_id, emitter };
+    // 方策の上書き（POLICY_OVERRIDE_FILE）を manifest に残す。manifest は session が describe で書くので、その口に足す。
+    const describe = logging.log.describe.bind(logging.log);
+    logging.log.describe = (details) =>
+      describe({ ...details, policy_file: config.policy_file, policy_override: config.policy_override } as typeof details);
     this.options.maaiTime?.use(time);
-    const providers = await createSessionProviders({ config, time, emitter, ...(this.options.env ? { env: this.options.env } : {}) });
+    const providers = await createSessionProviders({ config, condition, time, emitter, ...(this.options.env ? { env: this.options.env } : {}) });
     return new Session({
       session_id,
-      condition: config.condition,
+      condition,
       policy: config.policy,
       time,
       emitter,
@@ -351,6 +393,7 @@ export class OrchestratorServer {
     await this.endSession('server_shutdown');
     for (const client of this.browserWss.clients) client.terminate();
     for (const client of this.researchWss.clients) client.terminate();
+    this.tune.close();
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
   }
 }

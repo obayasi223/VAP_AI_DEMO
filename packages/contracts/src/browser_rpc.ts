@@ -291,6 +291,38 @@ export const SignalCommand = z.strictObject({
 });
 export type SignalCommand = z.infer<typeof SignalCommand>;
 
+/**
+ * 準備吸気の合図（計画 §4.6、§4.7。条件 initiative_inhale のときだけ送る）。アバターの BreathController.startInhale へ渡す。
+ * 吸気の長さは orchestrator が決める。吸気の完了は orchestrator の時計で判定し、ブラウザの完了の報告を待たない。
+ * 描画の開始はブラウザが signal.report（phase=inhale、state=started）で返す（記録のため。制御には使わない）。
+ */
+export const BreathCue = z.strictObject({
+  type: z.literal('breath.cue'),
+  cue_id: NonEmptyString,
+  candidate_id: CandidateId,
+  duration_ms: z.number().int().min(1),
+});
+export type BreathCue = z.infer<typeof BreathCue>;
+
+/** 吸気の解除。BreathController.release(reason) へ渡す。speech_started は保持から発話へ、それ以外は脱力。 */
+export const BreathReleaseReason = z.enum(['speech_started', 'deferred', 'withdrawn']);
+export type BreathReleaseReason = z.infer<typeof BreathReleaseReason>;
+
+export const BreathRelease = z.strictObject({
+  type: z.literal('breath.release'),
+  cue_id: NonEmptyString,
+  candidate_id: CandidateId,
+  reason: BreathReleaseReason,
+});
+export type BreathRelease = z.infer<typeof BreathRelease>;
+
+/** DEFERRED の候補を話し始めるときの短い準備動作（再吸気しない、計画 §4.6）。解除の合図は続かない。 */
+export const BreathPrepare = z.strictObject({
+  type: z.literal('breath.prepare'),
+  candidate_id: CandidateId,
+});
+export type BreathPrepare = z.infer<typeof BreathPrepare>;
+
 export const GazeCommand = z.strictObject({
   type: z.literal('gaze.command'),
   target: GazeTarget,
@@ -353,5 +385,8 @@ export const NodeToBrowser = z.discriminatedUnion('type', [
   SignalCommand,
   GazeCommand,
   SessionStatus,
+  BreathCue,
+  BreathRelease,
+  BreathPrepare,
 ]);
 export type NodeToBrowser = z.infer<typeof NodeToBrowser>;

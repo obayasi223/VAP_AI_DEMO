@@ -22,7 +22,14 @@ import { createGeminiProviderFromEnv } from '../providers/llm';
 import { createGoogleSttProviderFromEnv } from '../providers/stt';
 import { chooseTtsProvider, createElevenLabsTtsProviderFromEnv, createGeminiTtsProviderFromEnv } from '../providers/tts';
 import type { OrchestratorConfig } from './config';
-import { EnergyScriptedSttProvider, ScriptedReplyLlm, WavScriptedTtsProvider } from './scripted';
+import { EnergyScriptedSttProvider, INITIATIVE_STT_SCRIPT, ScriptedReplyLlm, WavScriptedTtsProvider } from './scripted';
+
+/** 台本の発話希望（SCRIPTED_INITIATIVE。E2E 用、app/scripted.ts）。台本の STT と LLM のとき、STT の台本は reactive 以外のセッションだけ変える。 */
+function scriptedInitiative(env: NodeJS.ProcessEnv): 'none' | 'new_on_input' {
+  const value = env.SCRIPTED_INITIATIVE || 'none';
+  if (value !== 'none' && value !== 'new_on_input') throw new Error(`SCRIPTED_INITIATIVE must be none or new_on_input, got ${value}`);
+  return value;
+}
 
 export type Built<T> = { ok: true; value: T } | { ok: false; reason: string };
 
@@ -67,13 +74,21 @@ export async function createSessionProviders(input: {
   time: TimeSource;
   emitter: EventEmitter;
   env?: NodeJS.ProcessEnv;
+  /** このセッションの研究条件。省略は config.condition（起動時の既定）。 */
+  condition?: Condition;
 }): Promise<SessionProviders> {
   const { config, time, emitter } = input;
+  const condition = input.condition ?? config.condition;
   const env = input.env ?? process.env;
 
   let stt: Built<SttProvider>;
   if (config.stt === 'test_double') {
-    stt = { ok: true, value: new EnergyScriptedSttProvider({ time, emitter }) };
+    // 台本の発話希望は候補を話しうる条件のセッションだけ（reactive のセッションの台本は変えない）。
+    const scripted = scriptedInitiative(env) === 'new_on_input' && condition !== 'reactive';
+    stt = {
+      ok: true,
+      value: new EnergyScriptedSttProvider({ time, emitter, ...(scripted ? { stable_interim: true, script: INITIATIVE_STT_SCRIPT } : {}) }),
+    };
   } else {
     try {
       stt = { ok: true, value: await createGoogleSttProviderFromEnv({ time, emitter, env }) };
@@ -117,7 +132,7 @@ export async function createSessionProviders(input: {
   }
 
   const completion = completionFor(config.policy, llm.ok ? llm.value : null);
-  const initiative = initiativeFor({ config, time, emitter, env });
+  const initiative = initiativeFor({ config, condition, time, emitter, env });
   if (completion.error !== null) console.error(`[orchestrator] completion estimator unavailable: ${completion.error}`);
   const cls = (b: Built<{ provider_class: ProviderClass }>) => (b.ok ? b.value.provider_class : 'unavailable');
   const name = (b: Built<{ provider: string }>) => (b.ok ? b.value.provider : 'unavailable');
@@ -145,11 +160,12 @@ export const INITIATIVE_GEMINI_STATUS = 'gemini:initiative';
 
 function initiativeFor(input: {
   config: OrchestratorConfig;
+  condition: Condition;
   time: TimeSource;
   emitter: EventEmitter;
   env: NodeJS.ProcessEnv;
 }): InitiativeSetup {
-  const { config, time, emitter, env } = input;
+  const { config, condition, time, emitter, env } = input;
   const off = (reason: string): InitiativeSetup => ({
     enabled: false,
     reason,
@@ -159,8 +175,8 @@ function initiativeFor(input: {
     model: config.llm === 'test_double' ? 'test_double' : config.initiative_model,
   });
   if (config.policy.policy_id !== 'ja') return off('policy_has_no_initiative_section');
-  if (!config.initiative_conditions.includes(config.condition as Condition)) {
-    return off(`disabled_for_condition:${config.condition}`);
+  if (!config.initiative_conditions.includes(condition)) {
+    return off(`disabled_for_condition:${condition}`);
   }
   const unavailable = (reason: string): InitiativeSetup => ({ ...off(reason), enabled: true });
   let persona: InitiativePersona;
@@ -171,7 +187,7 @@ function initiativeFor(input: {
   }
   let llm: LlmProvider;
   if (config.llm === 'test_double') {
-    llm = new ScriptedReplyLlm({ time, emitter });
+    llm = new ScriptedReplyLlm({ time, emitter, initiative: scriptedInitiative(env) });
   } else if (!env.GEMINI_API_KEY) {
     return unavailable('gemini: GEMINI_API_KEY is not set');
   } else {

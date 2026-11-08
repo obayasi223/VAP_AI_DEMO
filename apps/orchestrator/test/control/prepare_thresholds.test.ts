@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { present } from '@llm-vap/contracts';
 import type { PolicyJa } from '@llm-vap/contracts';
 import { createTurnManager, similarityGate, userTextFor } from '../../src/control';
-import { Driver, T0, hri2025, ja, kinds, pick, preparing, transcript } from './helpers';
+import { Driver, T0, hri2025, ja, jaAppendixA, kinds, pick, preparing, transcript } from './helpers';
 
 function fireWith(policy: Parameters<typeof createTurnManager>[0], sim: number | undefined) {
   const d = new Driver(policy);
@@ -12,7 +12,7 @@ function fireWith(policy: Parameters<typeof createTurnManager>[0], sim: number |
   return { d, fired: pick(decisions, 'prepare').length === 1 };
 }
 
-const jaUncalibrated = () => ja((p) => { p.similarity.threshold = null; });
+const jaUncalibrated = () => jaAppendixA((p) => { p.similarity.threshold = null; });
 
 describe('L47: similarity.threshold が null', () => {
   it.each([
@@ -52,12 +52,12 @@ describe('L47: 閾値がある方策', () => {
     expect(kinds(d.tick(T0 + 220, { sim: 0.79 }))).toContain('prepare');
   });
   it('ja に校正値が入れば、その値を使う', () => {
-    const calibrated = ja((p) => { p.similarity.threshold = 0.6; });
+    const calibrated = jaAppendixA((p) => { p.similarity.threshold = 0.6; });
     expect(fireWith(calibrated, 0.6).fired).toBe(false);
     expect(fireWith(calibrated, 0.59).fired).toBe(true);
   });
   it('turn.constants の同名の項目を読まない', () => {
-    const p = ja((x) => {
+    const p = jaAppendixA((x) => {
       x.turn.constants.SIMILARITY_PREPARE_THRESHOLD = 0.01;
       x.turn.constants.TURNGPT_PREPARE_THRESHOLD = 0.99;
       x.similarity.threshold = null;
@@ -76,7 +76,7 @@ describe('L47: 閾値がある方策', () => {
 
 describe('L46: completion の閾値（prepareThresholds）', () => {
   const fired = (p: number, patch: (x: PolicyJa) => void = () => undefined) =>
-    kinds(new Driver(ja(patch)).tick(T0, { text: '明日', p_completion: p })).includes('prepare');
+    kinds(new Driver(jaAppendixA(patch)).tick(T0, { text: '明日', p_completion: p })).includes('prepare');
 
   it('ja_rules_v1 は 0.3 を読む（原著の 0.2 ではない）', () => {
     expect(fired(0.25)).toBe(false);
@@ -87,7 +87,7 @@ describe('L46: completion の閾値（prepareThresholds）', () => {
     for (const estimator of ['llm_completion_v1', null]) {
       const patch = (x: PolicyJa) => { x.completion.estimator = estimator; };
       expect(fired(0.99, patch)).toBe(false);
-      const d = new Driver(ja(patch));
+      const d = new Driver(jaAppendixA(patch));
       d.tick(T0, { text: '明日', p_completion: 0.99 });
       expect(pick(d.tick(T0 + 200, { p_completion: 0.99 }), 'prepare')[0]?.trigger).toBe('asr_timeout');
     }
@@ -96,26 +96,26 @@ describe('L46: completion の閾値（prepareThresholds）', () => {
 
 describe('STT の text は ASR 区間ごとなので segment の中で連結する', () => {
   it('final の後の interim で前の文を失わない', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { transcript: present(transcript('明日の会議は三時です。', 1, { is_final: true })) });
     d.tick(T0 + 20, { transcript: present(transcript('場所は', 2, { asr_segment_id: 1 })) });
     expect(d.state.asr_result).toBe('明日の会議は三時です。場所は');
     expect(pick(d.tick(T0 + 220), 'prepare')[0]?.text).toBe('明日の会議は三時です。場所は');
   });
   it('final を tick の間に取り逃しても、最後に見た interim を閉じる', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { transcript: present(transcript('明日の会議', 1)) });
     d.tick(T0 + 20, { transcript: present(transcript('場所', 3, { asr_segment_id: 1 })) });
     expect(d.state.asr_result).toBe('明日の会議場所');
   });
   it('同じ ASR 区間の書き換えは置き換える', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { transcript: present(transcript('国。', 1)) });
     d.tick(T0 + 20, { transcript: present(transcript('国が？', 2)) });
     expect(d.state.asr_result).toBe('国が？');
   });
   it('userTextFor は step が見る文と同じ（J が類似度に使う）', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { transcript: present(transcript('明日は。', 1, { is_final: true })) });
     const next = transcript('晴れ', 2, { asr_segment_id: 1 });
     const text = userTextFor(d.state, next);
@@ -124,7 +124,7 @@ describe('STT の text は ASR 区間ごとなので segment の中で連結す�
     expect(d.state.asr_result).toBe(text);
   });
   it('句読点だけの文では準備しない', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { transcript: present(transcript('。', 1)) });
     expect(d.state.asr_result).toBeNull();
     expect(kinds(d.tick(T0 + 500))).not.toContain('prepare');
@@ -140,7 +140,7 @@ describe('準備の喪失（U の追加案。補正ありの方策のみ）', ()
     return d;
   }
   it('ja: 準備が失敗して消えたら同じ文で1回だけ再試行する', () => {
-    const d = lostOnce(ja());
+    const d = lostOnce(jaAppendixA());
     expect(kinds(d.tick(T0 + 240))).toContain('prepare');
     d.tick(T0 + 260, { prefetch: preparing(8) });
     expect(kinds(d.tick(T0 + 280))).not.toContain('prepare');
@@ -151,7 +151,7 @@ describe('準備の喪失（U の追加案。補正ありの方策のみ）', ()
     expect(kinds(d.tick(T0 + 240))).not.toContain('prepare');
   });
   it('ja: 再生に入って消えた準備は再試行しない', () => {
-    const d = new Driver(ja());
+    const d = new Driver(jaAppendixA());
     d.tick(T0, { text: '明日は', p: [0.3, 0.3, false] });
     d.tick(T0 + 200, { p: [0.3, 0.3, false] });
     d.tick(T0 + 220, { prefetch: preparing(7), p: [0.3, 0.3, false] });

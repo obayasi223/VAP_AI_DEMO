@@ -1,0 +1,666 @@
+/**
+ * 呼吸（レーン H2、計画 §4.7）。通常呼吸と発話希望の準備吸気を別のパラメータで持つ。
+ *
+ * 準備吸気は「1回の吸気 → 短い保持（息を止めた準備姿勢）→ 発話 または 引き下がり」で完結し、ループしない（§4.6）。
+ * 吸気の後の終わり方は3通りで、時系列を分ける（文献の対応は docs ではなく報告に載せた。根拠の無い値は暫定）:
+ *  - speech_started（成功）: 吸気の直後に声を出し、胸は話しながらゆっくり戻る。口の準備はすぐ口形へ譲る。
+ *      根拠: 成功した turn は吸気の直後に始まり、呼気の始めで声が出る（Rochet-Capellan & Fuchs 2014）。
+ *  - deferred（人が話し続けて引き下がる。後で許可が出れば話すことがある）: 息を止めた後、声を出さずに静かに吐く。
+ *      唇はわずかに開いたまま、胸と頭は少しだけ準備を残し、ゆっくり消える。
+ *      根拠: 発声しない吸気の後に約 500ms 息を止め、声を出さずに吐く（Włodarczak & Heldner 2020）。
+ *            話す準備の口の形を、話す機会まで保つ（Krause & Kawamoto）。残す量と長さは暫定。
+ *  - withdrawn（申し出をやめる）: 準備を残さず、口を閉じ、少し速めに戻る。
+ *      根拠: 失敗した試みは1呼吸の中で終わり、聞き手の呼吸へ早く戻る（Rochet-Capellan & Fuchs 2014）。速さの値は暫定。
+ * deferred の後に許可が出たら prepareShort() で再吸気せずに短い準備動作だけを行う（計画 §4.6）。
+ *
+ * 胸郭は読み込み時に作る専用モーフを中心に、上胸の小さな反り、肩・鎖骨の小さな挙上（上腕で逆補正）、首・頭の微小な姿勢、
+ * 口のわずかな開き、眉を時系列でずらして重ねる。視線は既定では触らない（吸気の効果と分離）。吸気音は持たない。
+ *
+ * three と VRM に依存しない。書く名前は output で差し替える。時刻は update の dt を積んだ内部時刻で、
+ * startInhale／release／prepareShort は次のフレームから効く。
+ */
+import type { AvatarLayer, LayerContext, PoseFrame } from './pose';
+import { clamp, clamp01, DEG2RAD, smoothAsymmetric, smoothstep, type Rng } from './util';
+
+// ---- 固定のインターフェース（participant 画面が呼ぶ。既存の4つの形は変えない） ----
+
+export interface InhaleCue {
+  cue_id: string;
+  /** 吸気そのものの長さ（ms）。保持と脱力は含まない。 */
+  duration_ms: number;
+}
+export type BreathPhase = 'idle' | 'inhale' | 'hold' | 'release';
+export type ReleaseReason = 'speech_started' | 'deferred' | 'withdrawn';
+export interface BreathController {
+  /** 1回の準備吸気 → 保持（準備姿勢）。idle 以外では無視する（同じ cue_id でも別でも）。 */
+  startInhale(cue: InhaleCue): void;
+  /** speech_started: 保持から発話へ（息を使い始める）／deferred: 声を出さずに吐いて引き下がる（準備を少し残す）／withdrawn: 準備を残さず戻る。 */
+  release(reason: ReleaseReason): void;
+  phase(): BreathPhase;
+  /**
+   * 追加（H2 第2版）: deferred の後に許可が出て話すときの短い準備動作（再吸気しない、計画 §4.6）。
+   * 口を開き、胸を少しだけ足して保持へ入る。続けて release('speech_started') を呼ぶ。
+   * 受け付けるのは idle と、deferred（保持の上限による自動の引き下がりを含む）の脱力の途中だけ。他では無視する。
+   * 省略可能なメソッドにしてある（既存の実装を壊さないため）。
+   */
+  prepareShort?(durationMs?: number): void;
+}
+
+/** 吸気の長さの既定。Torreira et al. (2015) の答えの前の吸気の中央値 0.72s（平均 0.887s）に寄せた。 */
+export const DEFAULT_INHALE_MS = 700;
+/**
+ * 保持の安全上限（暫定）。引き下がりの判断は orchestrator の hold_max_ms（人が話し続けたら deferred）が行う。
+ * 人が黙っていて許可を待つ間（start_guard の待ちは最長 1500ms）は脱力させないよう、それより長くしてある。
+ * orchestrator から解除が来ないときだけ、過ぎたら deferred と同じ形で引き下がる。
+ */
+export const HOLD_MAX_MS = 1800;
+/** cue.duration_ms の受け付ける範囲。外れたら丸める。下限は Torreira et al. (2015) の最短 210ms に合わせた。 */
+export const INHALE_MS_RANGE: readonly [number, number] = [200, 1400];
+
+/** 胸郭モーフを表情として登録する名前（runtime.ts が登録する）。 */
+export const BREATH_CHEST_EXPRESSION = 'breathChest';
+
+// ---- パラメータ ----
+
+/** 通常呼吸（待機中の微弱な呼吸）。準備吸気とは別。 */
+export interface NormalBreathParams {
+  /** 胸郭モーフの重み（0〜1）。 */
+  depth: number;
+  periodMs: number;
+  /** 周期の揺らぎ（割合）。 */
+  periodJitter: number;
+  /** 1周期のうち吸う割合。 */
+  inhaleFraction: number;
+  /** 頭の上下（度、負が上）。 */
+  headPitchDeg: number;
+  /** 肩の挙上（度）。待機の肩の挙上は吸気と紛らわしいので既定 0。 */
+  shoulderDeg: number;
+}
+
+/** 準備吸気。深さ、速度（cue の長さ）、保持、頭部姿勢、終わり方ごとの時系列を連続値で持つ。 */
+export interface PrepBreathParams {
+  /** 胸郭モーフの重み（0〜1）。 */
+  depth: number;
+  /** 上胸の反り（度、負が後ろ＝胸が上がる）。首で一部を戻す。 */
+  chestPitchDeg: number;
+  neckCompensation: number;
+  /** 上胸の反りを上腕で戻す割合（1 で腕は垂れたまま、手が前後に振れない）。 */
+  armPitchCompensation: number;
+  /** 肩・鎖骨の挙上（度）。上腕で armCompensation の割合だけ戻し、腕の向きを保つ。 */
+  shoulderDeg: number;
+  armCompensation: number;
+  /** 頭の上下（度、負が上＝顎がわずかに上がる）。 */
+  headPitchDeg: number;
+  /** 口のわずかな開き（aa の重み）。 */
+  mouthOpen: number;
+  /** 眉のわずかな上げ（browUp の重み）。 */
+  brow: number;
+  /** 保持の上限（ms）。 */
+  holdMaxMs: number;
+  /** 保持中の胸（頂点に対する割合）。息を止めているので頂点の近くに保つ。 */
+  holdChestLevel: number;
+  holdMouthLevel: number;
+  holdBrowLevel: number;
+
+  /** 成功: 発話開始後に胸が戻る長さ（話しながら息を使う、ms）。 */
+  speechExhaleMs: number;
+  /** 成功: 口の準備を口形へ譲る速さ（ms）。 */
+  speechMouthYieldMs: number;
+
+  /** deferred: 声を出さずに吐く長さ（胸、ms）。他の部位はこれに比例。 */
+  deferredExhaleMs: number;
+  /** deferred: 吐いた後に残す準備（頂点に対する割合）。胸、唇、頭。 */
+  deferredChestResidual: number;
+  deferredMouthResidual: number;
+  deferredHeadResidual: number;
+  /** deferred: 残した準備が消えるまでの長さ（ms）。この間に prepareShort を受ける。 */
+  deferredLingerMs: number;
+
+  /** withdrawn: 戻る長さ（胸、ms）。他の部位はこれに比例。 */
+  withdrawnExhaleMs: number;
+  /** withdrawn: 口を閉じる速さ（ms）。 */
+  withdrawnMouthCloseMs: number;
+
+  /** 短い準備動作（prepareShort）の長さ（ms）。顎の発話前の静止位置は音の約 250ms 前（実験室の課題）。 */
+  shortPrepMs: number;
+  /** 短い準備動作の目標（頂点に対する割合）。今の値より小さければ今の値を保つ。 */
+  shortChest: number;
+  shortMouth: number;
+  shortHead: number;
+  shortShoulder: number;
+  shortBrow: number;
+
+  /** 脱力の後、待機の揺れと通常呼吸を戻すまでの間（ms）。 */
+  postSuppressMs: number;
+  /** 吸気の間の待機の揺れの倍率（0〜1）。 */
+  idleDuringPrep: number;
+  /** 視線を吸気に合わせて相手へ向けるか（既定 false: 視線は吸気の効果と分離）。 */
+  gazeToUser: boolean;
+}
+
+export interface BreathParams {
+  normal: NormalBreathParams;
+  prep: PrepBreathParams;
+}
+
+export const DEFAULT_NORMAL_BREATH: NormalBreathParams = {
+  depth: 0.22,
+  periodMs: 4200,
+  periodJitter: 0.15,
+  inhaleFraction: 0.4,
+  headPitchDeg: -0.15,
+  shoulderDeg: 0,
+};
+
+export const DEFAULT_PREP_BREATH: PrepBreathParams = {
+  depth: 0.9,
+  chestPitchDeg: -1.6,
+  neckCompensation: 0.5,
+  armPitchCompensation: 1,
+  shoulderDeg: 3.2,
+  armCompensation: 1,
+  headPitchDeg: -1.4,
+  mouthOpen: 0.12,
+  brow: 0.18,
+  holdMaxMs: HOLD_MAX_MS,
+  holdChestLevel: 0.96,
+  holdMouthLevel: 0.85,
+  holdBrowLevel: 0.5,
+  speechExhaleMs: 2200,
+  speechMouthYieldMs: 70,
+  deferredExhaleMs: 1300,
+  deferredChestResidual: 0.2,
+  deferredMouthResidual: 0.4,
+  deferredHeadResidual: 0.3,
+  deferredLingerMs: 2500,
+  withdrawnExhaleMs: 750,
+  withdrawnMouthCloseMs: 150,
+  shortPrepMs: 250,
+  shortChest: 0.4,
+  shortMouth: 1,
+  shortHead: 0.6,
+  shortShoulder: 0.2,
+  shortBrow: 0.3,
+  postSuppressMs: 700,
+  idleDuringPrep: 0.25,
+  gazeToUser: false,
+};
+
+export const DEFAULT_BREATH: BreathParams = { normal: DEFAULT_NORMAL_BREATH, prep: DEFAULT_PREP_BREATH };
+
+// ---- 時系列の包絡（純粋関数） ----
+
+export type BreathChannel = 'chest' | 'shoulder' | 'head' | 'mouth' | 'brow';
+export const BREATH_CHANNELS: readonly BreathChannel[] = ['chest', 'shoulder', 'head', 'mouth', 'brow'];
+export type ChannelValues = Record<BreathChannel, number>;
+
+export const ZERO_CHANNELS: Readonly<ChannelValues> = { chest: 0, shoulder: 0, head: 0, mouth: 0, brow: 0 };
+export const FULL_CHANNELS: Readonly<ChannelValues> = { chest: 1, shoulder: 1, head: 1, mouth: 1, brow: 1 };
+
+/**
+ * 部位ごとの吸気の時間配分（吸気の長さに対する割合）。口が先に少し開き、胸と頭が続き、肩はわずかに遅れて頂点に着く。
+ * 順序の根拠は未確認（暫定）。
+ */
+export const INHALE_TIMING: Record<BreathChannel, { delay: number; span: number }> = {
+  mouth: { delay: 0, span: 0.55 },
+  chest: { delay: 0.05, span: 0.95 },
+  head: { delay: 0.05, span: 1.05 },
+  shoulder: { delay: 0.15, span: 1.0 },
+  brow: { delay: 0.1, span: 0.8 },
+};
+
+/** 引き下がり（deferred）と取りやめ（withdrawn）の部位ごとの長さ（胸の長さに対する割合）。暫定。 */
+export const RELAX_TIMING: Record<BreathChannel, number> = { chest: 1, shoulder: 0.55, head: 0.65, mouth: 0.3, brow: 0.4 };
+
+/** 発話開始後の長さ（ms）。口は speechMouthYieldMs、胸は speechExhaleMs。暫定。 */
+export const SPEECH_TIMING_MS: Record<Exclude<BreathChannel, 'chest' | 'mouth'>, number> = { shoulder: 350, head: 450, brow: 300 };
+
+/**
+ * 吸気の速度曲線（0〜1 → 0〜1）。速く吸い始め、頂点へ減速して着く（速さの山が前寄り）。
+ * 始まりは 0 の速さから立ち上げ、切り替えに見えないようにする。
+ */
+export function inhaleCurve(u: number): number {
+  const x = clamp01(u);
+  const easeOut = 1 - Math.pow(1 - x, 3);
+  return easeOut * smoothstep(x / 0.25);
+}
+
+/** 静かな呼気（1 → 0）。両端の速さが 0。 */
+export function relaxCurve(u: number): number {
+  return 1 - smoothstep(u);
+}
+
+/** 発話中の呼気（1 → 0）。話し始めから息を使い、中ほどで最も速く、終わりは滑らかに着く。 */
+export function speechExhaleCurve(u: number): number {
+  const x = clamp01(u);
+  return 1 - (x - Math.sin(2 * Math.PI * x) / (2 * Math.PI));
+}
+
+/**
+ * 吸気開始から t ms の部位の値（0〜1、頂点が 1）。from から target へ吸い、保持中は息を止めた姿勢で少しだけ沈む。
+ * 準備吸気は from=0、target=1。短い準備動作（prepareShort）は from=今の値。
+ */
+export function prepValues(
+  tMs: number,
+  inhaleMs: number,
+  prep: PrepBreathParams,
+  from: Readonly<ChannelValues> = ZERO_CHANNELS,
+  target: Readonly<ChannelValues> = FULL_CHANNELS,
+): ChannelValues {
+  const out = { ...ZERO_CHANNELS };
+  for (const channel of BREATH_CHANNELS) {
+    const timing = INHALE_TIMING[channel];
+    const u = (tMs - timing.delay * inhaleMs) / (timing.span * inhaleMs);
+    out[channel] = from[channel] + (target[channel] - from[channel]) * inhaleCurve(u);
+  }
+  const sinceHold = Math.max(0, tMs - inhaleMs);
+  if (sinceHold > 0) {
+    const settle = 1 - Math.exp(-sinceHold / 400);
+    out.chest *= 1 - (1 - prep.holdChestLevel) * settle;
+    out.mouth *= 1 - (1 - prep.holdMouthLevel) * settle;
+    out.brow *= 1 - (1 - prep.holdBrowLevel) * settle;
+  }
+  return out;
+}
+
+export type ReleaseKind = 'speech' | 'deferred' | 'withdrawn';
+
+export interface ReleaseSpec {
+  /** 部位ごとの主な戻りの長さ（ms）。 */
+  durations: ChannelValues;
+  /** 主な戻りの後に残す割合（開始値に対する）。 */
+  residual: ChannelValues;
+  /** 残した分が消えるまでの長さ（ms）。 */
+  lingerMs: number;
+}
+
+/** 終わり方ごとの時系列。 */
+export function releaseSpec(kind: ReleaseKind, prep: PrepBreathParams): ReleaseSpec {
+  if (kind === 'speech') {
+    return {
+      durations: {
+        chest: prep.speechExhaleMs,
+        mouth: prep.speechMouthYieldMs,
+        shoulder: SPEECH_TIMING_MS.shoulder,
+        head: SPEECH_TIMING_MS.head,
+        brow: SPEECH_TIMING_MS.brow,
+      },
+      residual: { ...ZERO_CHANNELS },
+      lingerMs: 0,
+    };
+  }
+  const base = kind === 'deferred' ? prep.deferredExhaleMs : prep.withdrawnExhaleMs;
+  const durations = { ...ZERO_CHANNELS };
+  for (const channel of BREATH_CHANNELS) durations[channel] = base * RELAX_TIMING[channel];
+  if (kind === 'withdrawn') {
+    durations.mouth = prep.withdrawnMouthCloseMs;
+    return { durations, residual: { ...ZERO_CHANNELS }, lingerMs: 0 };
+  }
+  return {
+    durations,
+    residual: { chest: prep.deferredChestResidual, mouth: prep.deferredMouthResidual, head: prep.deferredHeadResidual, shoulder: 0, brow: 0 },
+    lingerMs: prep.deferredLingerMs,
+  };
+}
+
+/** 終わり方の全体の長さ（ms）。 */
+export function releaseTotalMs(spec: ReleaseSpec): number {
+  return Math.max(...BREATH_CHANNELS.map((c) => spec.durations[c] + (spec.residual[c] > 0 ? spec.lingerMs : 0)));
+}
+
+/** 戻りの開始値 from から t ms の値。 */
+export function releaseValues(tMs: number, from: Readonly<ChannelValues>, spec: ReleaseSpec, kind: ReleaseKind): ChannelValues {
+  const out = { ...ZERO_CHANNELS };
+  for (const channel of BREATH_CHANNELS) {
+    const duration = spec.durations[channel];
+    const r = clamp01(spec.residual[channel]);
+    if (tMs < duration) {
+      const u = duration <= 0 ? 1 : tMs / duration;
+      const curve = kind === 'speech' && channel === 'chest' ? speechExhaleCurve(u) : relaxCurve(u);
+      out[channel] = from[channel] * (r + (1 - r) * curve);
+    } else if (r > 0 && spec.lingerMs > 0) {
+      out[channel] = from[channel] * r * relaxCurve((tMs - duration) / spec.lingerMs);
+    }
+  }
+  return out;
+}
+
+/** 通常呼吸の波（0〜1）。周期内の位置 phase01 で、吸気は inhaleFraction の間。 */
+export function normalBreathWave(phase01: number, inhaleFraction: number): number {
+  const p = phase01 - Math.floor(phase01);
+  const f = clamp(inhaleFraction, 0.1, 0.9);
+  if (p < f) return 0.5 - 0.5 * Math.cos((Math.PI * p) / f);
+  return 0.5 + 0.5 * Math.cos((Math.PI * (p - f)) / (1 - f));
+}
+
+// ---- 層と制御 ----
+
+export type ReleaseCause = ReleaseReason | 'hold_timeout';
+/** 吸気の種類。prep は準備吸気（startInhale）、short は短い準備動作（prepareShort）。 */
+export type InhaleKind = 'prep' | 'short';
+
+export interface BreathPhaseEvent {
+  phase: BreathPhase;
+  /** 遷移の起きたフレームの rAF 時刻（ms）。startInhale の場合は吸気が最初に描かれるフレーム。 */
+  nowMs: number;
+  cueId: string | null;
+  cause: ReleaseCause | null;
+  /** inhale／hold の種類。release／idle では直前の種類。 */
+  kind: InhaleKind | null;
+}
+
+export interface BreathTelemetry {
+  phase: BreathPhase;
+  cueId: string | null;
+  inhaleMs: number;
+  kind: InhaleKind | null;
+  /** 直近の脱力の理由。保持の上限による自動の引き下がりは 'hold_timeout'。 */
+  lastReleaseCause: ReleaseCause | null;
+  releaseKind: ReleaseKind | null;
+  /** 準備吸気の部位の値（0〜1）。 */
+  prep: ChannelValues;
+  /** 胸郭モーフへ書いた重みの合計。 */
+  chestWeight: number;
+  normalGain: number;
+  /** 待機の揺れへ掛けている倍率。 */
+  idleScale: number;
+  ignoredStarts: number;
+}
+
+/**
+ * 層が書く名前。層は VRM を知らない: 表情の名前と骨の名前はここで差し替えられる。
+ * 既定は VRM の表情名（aa、browUp）とヒューマノイドの骨名。ARKit の blendshape なら mouthOpen を 'jawOpen'、brow を 'browInnerUp' などにする（未試験）。
+ * 骨の回転は pose.ts の規約（VRM 1.0 の向き）で書く。モデルの軸への変換は適用側（runtime.ts）。
+ */
+export interface BreathOutputNames {
+  /** 胸郭モーフを表す表情（重み 0〜1）。 */
+  chestMorph: string;
+  mouthOpen: string;
+  brow: string;
+  /** 胸を反らせる骨（上胸、無ければ胸）。 */
+  chest: string;
+  neck: string;
+  head: string;
+  leftShoulder: string;
+  rightShoulder: string;
+  leftUpperArm: string;
+  rightUpperArm: string;
+}
+
+export const DEFAULT_BREATH_OUTPUT: BreathOutputNames = {
+  chestMorph: BREATH_CHEST_EXPRESSION,
+  mouthOpen: 'aa',
+  brow: 'browUp',
+  chest: 'upperChest',
+  neck: 'neck',
+  head: 'head',
+  leftShoulder: 'leftShoulder',
+  rightShoulder: 'rightShoulder',
+  leftUpperArm: 'leftUpperArm',
+  rightUpperArm: 'rightUpperArm',
+};
+
+export interface BreathLayerOptions {
+  params?: BreathParams;
+  /** 書く名前の上書き（既定は DEFAULT_BREATH_OUTPUT）。 */
+  output?: Partial<BreathOutputNames>;
+  /** 前のフレームの発話の口の開き（0〜1）。開いていれば口の準備を譲る。 */
+  speechOpen?: () => number;
+  /** 待機の揺れの抑制を受け取る（IdleLayer.suppression を書く）。 */
+  setIdleScale?: (scale: number) => void;
+  onPhase?: (event: BreathPhaseEvent) => void;
+}
+
+interface PendingStart {
+  kind: InhaleKind;
+  cueId: string | null;
+  durationMs: number;
+}
+
+export class BreathLayer implements AvatarLayer, BreathController {
+  readonly name = 'breath';
+  params: BreathParams;
+  readonly output: BreathOutputNames;
+  onPhase: ((event: BreathPhaseEvent) => void) | undefined;
+  private readonly speechOpen: () => number;
+  private readonly setIdleScale: (scale: number) => void;
+
+  private current: BreathPhase = 'idle';
+  private timeMs = 0;
+  private lastNowMs = 0;
+  private phaseStartMs = 0;
+  private cueId: string | null = null;
+  private kind: InhaleKind | null = null;
+  private inhaleMs = DEFAULT_INHALE_MS;
+  private inhaleFrom: ChannelValues = { ...ZERO_CHANNELS };
+  private inhaleTarget: ChannelValues = { ...FULL_CHANNELS };
+  /** 次のフレームで始める（startInhale／prepareShort は描画の外から呼ばれる）。 */
+  private pendingStart: PendingStart | null = null;
+  private pendingRelease: ReleaseCause | null = null;
+  private releaseKind: ReleaseKind | null = null;
+  private releaseFrom: ChannelValues = { ...ZERO_CHANNELS };
+  private spec: ReleaseSpec = releaseSpec('withdrawn', DEFAULT_PREP_BREATH);
+  private lastCause: ReleaseCause | null = null;
+  private idleSinceMs = Number.NEGATIVE_INFINITY;
+  private values: ChannelValues = { ...ZERO_CHANNELS };
+  private normalGain = 1;
+  private idleScale = 1;
+  private normalPhase = 0;
+  private normalPeriodMs: number;
+  private chestWeight = 0;
+  private ignored = 0;
+
+  constructor(
+    private readonly rng: Rng,
+    options: BreathLayerOptions = {},
+  ) {
+    this.params = options.params ?? DEFAULT_BREATH;
+    this.output = { ...DEFAULT_BREATH_OUTPUT, ...options.output };
+    this.speechOpen = options.speechOpen ?? (() => 0);
+    this.setIdleScale = options.setIdleScale ?? (() => {});
+    this.onPhase = options.onPhase;
+    this.normalPhase = rng();
+    this.normalPeriodMs = this.nextPeriod();
+  }
+
+  phase(): BreathPhase {
+    if (this.pendingStart) return 'inhale';
+    return this.current;
+  }
+
+  startInhale(cue: InhaleCue): void {
+    // 1回で完結: idle 以外（吸気、保持、脱力の途中、開始待ち）では無視する。
+    if (this.current !== 'idle' || this.pendingStart) {
+      this.ignored += 1;
+      return;
+    }
+    this.pendingStart = { kind: 'prep', cueId: cue.cue_id, durationMs: cue.duration_ms };
+    this.pendingRelease = null;
+  }
+
+  prepareShort(durationMs?: number): void {
+    const deferredRelease = this.current === 'release' && this.releaseKind === 'deferred';
+    if (this.pendingStart || !(this.current === 'idle' || deferredRelease)) {
+      this.ignored += 1;
+      return;
+    }
+    this.pendingStart = { kind: 'short', cueId: this.cueId, durationMs: durationMs ?? this.params.prep.shortPrepMs };
+    this.pendingRelease = null;
+  }
+
+  release(reason: ReleaseReason): void {
+    if (this.pendingStart) {
+      // まだ描いていない動作は取り消す（何も見せていない）。
+      this.pendingStart = null;
+      this.lastCause = reason;
+      return;
+    }
+    if (this.current === 'idle') return;
+    if (this.current === 'release') {
+      // 引き下がりの途中で発話が始まったら、発話の戻り方へ切り替える（口を口形へ譲る）。
+      // deferred の途中の withdrawn は、残した準備を捨てて戻る。
+      if (reason === 'speech_started' && this.releaseKind !== 'speech') this.pendingRelease = reason;
+      else if (reason === 'withdrawn' && this.releaseKind === 'deferred') this.pendingRelease = reason;
+      return;
+    }
+    this.pendingRelease = reason;
+  }
+
+  telemetry(): BreathTelemetry {
+    return {
+      phase: this.phase(),
+      cueId: this.cueId ?? this.pendingStart?.cueId ?? null,
+      inhaleMs: this.inhaleMs,
+      kind: this.kind,
+      lastReleaseCause: this.lastCause,
+      releaseKind: this.releaseKind,
+      prep: { ...this.values },
+      chestWeight: this.chestWeight,
+      normalGain: this.normalGain,
+      idleScale: this.idleScale,
+      ignoredStarts: this.ignored,
+    };
+  }
+
+  private nextPeriod(): number {
+    const n = this.params.normal;
+    return n.periodMs * (1 + (this.rng() * 2 - 1) * n.periodJitter);
+  }
+
+  private enter(phase: BreathPhase, cause: ReleaseCause | null = null): void {
+    this.current = phase;
+    this.phaseStartMs = this.timeMs;
+    this.onPhase?.({ phase, nowMs: this.lastNowMs, cueId: this.cueId, cause, kind: this.kind });
+  }
+
+  private beginRelease(cause: ReleaseCause): void {
+    const kind: ReleaseKind = cause === 'speech_started' ? 'speech' : cause === 'withdrawn' ? 'withdrawn' : 'deferred';
+    this.releaseKind = kind;
+    this.releaseFrom = { ...this.values };
+    this.spec = releaseSpec(kind, this.params.prep);
+    this.lastCause = cause;
+    this.enter('release', cause);
+  }
+
+  update(context: LayerContext, frame: PoseFrame): void {
+    const { dtMs } = context;
+    const dt = Math.max(dtMs, 0);
+    this.timeMs += dt;
+    this.lastNowMs = context.nowMs;
+    const prep = this.params.prep;
+
+    if (this.pendingStart) {
+      const start = this.pendingStart;
+      this.pendingStart = null;
+      this.kind = start.kind;
+      this.cueId = start.cueId;
+      const requested = Number.isFinite(start.durationMs) ? start.durationMs : DEFAULT_INHALE_MS;
+      if (start.kind === 'prep') {
+        this.inhaleMs = clamp(requested, INHALE_MS_RANGE[0], INHALE_MS_RANGE[1]);
+        this.inhaleFrom = { ...ZERO_CHANNELS };
+        this.inhaleTarget = { ...FULL_CHANNELS };
+      } else {
+        this.inhaleMs = clamp(requested, 80, 800);
+        // 再吸気しない: 今の値（引き下がりで残した準備）から、短い準備の目標まで。今の値の方が大きければ保つ。
+        this.inhaleFrom = { ...this.values };
+        const goal: ChannelValues = { chest: prep.shortChest, mouth: prep.shortMouth, head: prep.shortHead, shoulder: prep.shortShoulder, brow: prep.shortBrow };
+        this.inhaleTarget = { ...ZERO_CHANNELS };
+        for (const c of BREATH_CHANNELS) this.inhaleTarget[c] = Math.max(goal[c], this.values[c]);
+      }
+      this.releaseKind = null;
+      this.lastCause = null;
+      this.enter('inhale');
+      // このフレームの dt を吸気の最初の一歩にする（このフレームの rAF 時刻が signal.started_at の元）。
+      this.phaseStartMs = this.timeMs - dt;
+    }
+    if (this.pendingRelease && this.current !== 'idle') {
+      const cause = this.pendingRelease;
+      this.pendingRelease = null;
+      this.beginRelease(cause);
+    }
+
+    const t = this.timeMs - this.phaseStartMs;
+    switch (this.current) {
+      case 'inhale':
+      case 'hold': {
+        // 吸気と保持は吸気開始からの1本の時間で描く（phaseStartMs は吸気の開始）。
+        this.values = prepValues(t, this.inhaleMs, prep, this.inhaleFrom, this.inhaleTarget);
+        if (this.current === 'inhale' && t >= this.inhaleMs) {
+          const start = this.phaseStartMs;
+          this.enter('hold');
+          this.phaseStartMs = start;
+        }
+        if (this.current === 'hold' && t - this.inhaleMs >= prep.holdMaxMs) this.beginRelease('hold_timeout');
+        break;
+      }
+      case 'release': {
+        this.values = releaseValues(t, this.releaseFrom, this.spec, this.releaseKind ?? 'withdrawn');
+        if (t >= releaseTotalMs(this.spec)) {
+          this.values = { ...ZERO_CHANNELS };
+          this.enter('idle', this.lastCause);
+          this.cueId = null;
+          this.idleSinceMs = this.timeMs;
+        }
+        break;
+      }
+      case 'idle':
+        this.values = { ...ZERO_CHANNELS };
+        break;
+    }
+
+    // 発話の口形が開いていれば、口の準備は譲る（ぶつけない）。
+    if (this.speechOpen() > 0.04) this.values.mouth = 0;
+
+    // 待機の揺れと通常呼吸: 準備の間と戻った直後は抑え、ゆっくり戻す。
+    const active = this.current !== 'idle';
+    const recovering = !active && this.timeMs - this.idleSinceMs < prep.postSuppressMs;
+    const suppressed = active || recovering;
+    this.normalGain = smoothAsymmetric(this.normalGain, suppressed ? 0 : 1, dtMs, 1200, 80);
+    this.idleScale = smoothAsymmetric(this.idleScale, suppressed ? prep.idleDuringPrep : 1, dtMs, 900, 80);
+    this.setIdleScale(this.idleScale);
+
+    // 通常呼吸。
+    const normal = this.params.normal;
+    this.normalPhase += dtMs / this.normalPeriodMs;
+    if (this.normalPhase >= 1) {
+      this.normalPhase -= Math.floor(this.normalPhase);
+      this.normalPeriodMs = this.nextPeriod();
+    }
+    const wave = normalBreathWave(this.normalPhase, normal.inhaleFraction) * this.normalGain;
+
+    const v = this.values;
+    const o = this.output;
+    this.chestWeight = clamp01(wave * normal.depth + v.chest * prep.depth);
+    frame.addExpression(o.chestMorph, this.chestWeight);
+    const chestPitch = v.chest * prep.chestPitchDeg * DEG2RAD;
+    if (chestPitch !== 0) {
+      frame.addBone(o.chest, chestPitch, 0, 0);
+      frame.addBone(o.neck, -chestPitch * prep.neckCompensation, 0, 0);
+      frame.addBone(o.leftUpperArm, -chestPitch * prep.armPitchCompensation, 0, 0);
+      frame.addBone(o.rightUpperArm, -chestPitch * prep.armPitchCompensation, 0, 0);
+    }
+    const headPitch = (v.head * prep.headPitchDeg + wave * normal.headPitchDeg) * DEG2RAD;
+    if (headPitch !== 0) frame.addBone(o.head, headPitch, 0, 0);
+    // 肩の挙上: 左肩は +z、右肩は -z で上がる（VRM 1.0 の規約、pose.ts）。上腕で戻して腕の向きを保つ。
+    const shoulder = (v.shoulder * prep.shoulderDeg + wave * normal.shoulderDeg) * DEG2RAD;
+    if (shoulder !== 0) {
+      frame.addBone(o.leftShoulder, 0, 0, shoulder);
+      frame.addBone(o.rightShoulder, 0, 0, -shoulder);
+      frame.addBone(o.leftUpperArm, 0, 0, -shoulder * prep.armCompensation);
+      frame.addBone(o.rightUpperArm, 0, 0, shoulder * prep.armCompensation);
+    }
+    if (v.mouth > 0) frame.addExpression(o.mouthOpen, v.mouth * prep.mouthOpen);
+    if (v.brow > 0) frame.addExpression(o.brow, v.brow * prep.brow);
+    if (prep.gazeToUser) {
+      const g = Math.max(v.head, v.chest);
+      frame.eye.yawDeg *= 1 - g;
+      frame.eye.pitchDeg *= 1 - g;
+      frame.eye.userWeight += (1 - frame.eye.userWeight) * g;
+    }
+  }
+}
+
+/** 部分的な上書きを既定へ重ねる（確認ページのスライダ用）。 */
+export function mergeBreathParams(base: BreathParams, patch: { normal?: Partial<NormalBreathParams>; prep?: Partial<PrepBreathParams> }): BreathParams {
+  return { normal: { ...base.normal, ...patch.normal }, prep: { ...base.prep, ...patch.prep } };
+}

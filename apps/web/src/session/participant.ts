@@ -5,11 +5,49 @@
  *    語時刻（Node の playback.alignment）と再生の報告（Worker の playback.started／position／ended）を
  *    Avatar.onPlaybackAlignment／onPlaybackReport へ。
  *  - 視線: Node の gaze.command → Avatar.setGaze。描画の報告（onGazeReport）を gaze.report で返す。
+ *  - 吸気: Node の breath.cue → アバターの BreathController.startInhale、breath.release → release（波3、条件
+ *    initiative_inhale のときだけ届く）。吸気の長さは Node が決め、吸気の完了も Node の時計で判定する
+ *    （ここから完了を知らせない）。描画を始めた時刻だけを signal.report で返す（記録のため）。
+ *  - 研究条件: 開始の前に選んだ条件を WS の URL（?condition=）で Node へ伝える（セッション単位）。
  *  - 状態: server.hello、session.status、playback.begin／stop、リンクの状態。
  */
-import type { GazeReport, GazeTarget, NodeToBrowser, TrackSettings } from '@llm-vap/contracts/browser_rpc';
+import type { Condition } from '@llm-vap/contracts/common';
+import type {
+  BreathCue,
+  BreathRelease,
+  GazeReport,
+  GazeTarget,
+  NodeToBrowser,
+  SignalReport,
+  TrackSettings,
+} from '@llm-vap/contracts/browser_rpc';
 import { startBrowserAudio, type BrowserAudioSession, type LinkState } from '../audio';
 import type { Avatar } from '../avatar';
+import type { BreathController } from '../avatar/breath';
+
+/** 研究条件の表示名（開始画面の選択）。本番の実験では選択を隠す（NEXT_PUBLIC_HIDE_CONDITION_PICKER）。 */
+export const CONDITION_LABELS: Record<Condition, string> = {
+  reactive: '通常応答（ベースライン）',
+  initiative_inhale: '吸気あり（提案）',
+  initiative_no_cue: '吸気なし',
+};
+
+/** WS の URL に研究条件を足す。null なら URL のまま（Node の既定 CONDITION）。 */
+export function withCondition(wsUrl: string, condition: Condition | null): string {
+  if (condition === null) return wsUrl;
+  const url = new URL(wsUrl);
+  url.searchParams.set('condition', condition);
+  return url.toString();
+}
+
+/** DEFERRED から話し始めるときの短い準備動作の長さ（暫定）。音声の開始を遅らせないので、発話の出だしと少し重なる。 */
+export const DEFERRED_SPEECH_PREP_MS = 150;
+
+/** アバターの呼吸の制御。ランタイムが breath を持たない（古い版、読み込み前）なら null。 */
+export function breathOf(avatar: Avatar | null): BreathController | null {
+  if (avatar === null) return null;
+  return (avatar as Avatar & { breath?: BreathController }).breath ?? null;
+}
 
 /** 別のタブが会話中で、このタブの接続を断られた（Worker は張り直さない）。 */
 export const SESSION_OPEN_ELSEWHERE_TEXT =
@@ -20,6 +58,8 @@ export interface ParticipantView {
   /** elsewhere は別のタブで接続中のため断られた状態。 */
   link: LinkState | 'none' | 'elsewhere';
   sessionId: string | null;
+  /** Node が返したこのセッションの研究条件（server.hello）。参加者には見せない。 */
+  condition: Condition | null;
   isFake: boolean;
   degraded: boolean;
   reasons: string[];
@@ -36,6 +76,7 @@ export const INITIAL_VIEW: ParticipantView = {
   phase: 'idle',
   link: 'none',
   sessionId: null,
+  condition: null,
   isFake: false,
   degraded: false,
   reasons: [],
@@ -107,6 +148,9 @@ export class ParticipantController {
   readonly record = {
     gazeCommands: [] as { target: GazeTarget; client_t_ms: number }[],
     gazeReports: [] as GazeReport[],
+    /** 届いた吸気の合図と解除（E2E 向け）。breath は BreathController を呼べたか。 */
+    breathCommands: [] as { type: 'breath.cue' | 'breath.release' | 'breath.prepare'; cue_id: string | null; reason?: string; client_t_ms: number; breath: boolean }[],
+    signalReports: [] as SignalReport[],
     mouthOpenWhilePlaying: 0,
     mouthSamplesWhilePlaying: 0,
     maxMouthOpen: 0,
@@ -134,13 +178,16 @@ export class ParticipantController {
     this.audio?.send(report);
   }
 
-  /** クリックのハンドラの中で呼ぶこと（自動再生の制限）。 */
-  async start(): Promise<void> {
+  /**
+   * クリックのハンドラの中で呼ぶこと（自動再生の制限）。condition は開始画面で選んだ研究条件（null は Node の既定）。
+   * 再接続も同じ URL を使うので、同じセッションの間は条件が変わらない。
+   */
+  async start(options: { condition?: Condition | null } = {}): Promise<void> {
     if (this.view.phase === 'starting' || this.view.phase === 'running') return;
     this.update({ phase: 'starting', error: null });
     try {
       this.audio = await startBrowserAudio({
-        wsUrl: this.options.wsUrl,
+        wsUrl: withCondition(this.options.wsUrl, options.condition ?? null),
         onMessage: (message) => this.onMessage(message),
         // 再生の始まりと終わりは Worker が Node へ送る報告で知る（主スレッドには別に届かない）。
         onSent: (message) => {
@@ -217,8 +264,19 @@ export class ParticipantController {
         this.options.avatar()?.onPlaybackAlignment(message);
         break;
       case 'server.hello':
-        this.update({ sessionId: message.session_id, isFake: message.is_fake });
+        this.update({ sessionId: message.session_id, condition: message.condition, isFake: message.is_fake });
         break;
+      case 'breath.cue':
+      case 'breath.release':
+        this.onBreath(message);
+        break;
+      case 'breath.prepare': {
+        const breath = breathOf(this.options.avatar());
+        this.record.breathCommands.push({ type: message.type, cue_id: null, client_t_ms: performance.now(), breath: breath !== null });
+        breath?.prepareShort?.(DEFERRED_SPEECH_PREP_MS);
+        setTimeout(() => breath?.release('speech_started'), DEFERRED_SPEECH_PREP_MS);
+        break;
+      }
       case 'session.status':
         this.update({ degraded: message.degraded, reasons: message.reasons });
         break;
@@ -230,6 +288,39 @@ export class ParticipantController {
       default:
         break;
     }
+  }
+
+  /** 吸気の合図と解除をアバターへ。描画を始めた時刻（次の rAF）を signal.report で返す（記録だけ）。 */
+  private onBreath(message: BreathCue | BreathRelease): void {
+    const breath = breathOf(this.options.avatar());
+    this.record.breathCommands.push({
+      type: message.type,
+      cue_id: message.cue_id,
+      ...(message.type === 'breath.release' ? { reason: message.reason } : {}),
+      client_t_ms: performance.now(),
+      breath: breath !== null,
+    });
+    if (message.type === 'breath.cue') breath?.startInhale({ cue_id: message.cue_id, duration_ms: message.duration_ms });
+    else breath?.release(message.reason);
+    // アバターがなければ描いていないので報告しない（Node は合図を出した記録だけを持つ）。
+    if (breath === null) return;
+    const phase: SignalReport['phase'] =
+      message.type === 'breath.cue' ? 'inhale' : message.reason === 'speech_started' ? 'pre_speech' : 'relax';
+    const report = (visible: boolean, t: number | null) => {
+      const signal: SignalReport = {
+        type: 'signal.report',
+        candidate_id: message.candidate_id,
+        phase,
+        state: 'started',
+        visible,
+        client_t_ms: t === null ? { value: null, null_reason: 'not_visible' } : { value: t },
+      };
+      this.record.signalReports.push(signal);
+      this.audio?.send(signal);
+    };
+    // 背景タブでは rAF が来ないので、見えていなければその場で visible=false を返す。
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') report(false, null);
+    else requestAnimationFrame((t) => report(true, t));
   }
 
   async stop(): Promise<void> {

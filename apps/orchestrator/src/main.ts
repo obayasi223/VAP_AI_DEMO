@@ -9,6 +9,7 @@
  */
 import { SystemTimeSource } from '@llm-vap/contracts';
 import { loadDotEnv, readConfig } from './app/config';
+import { describeOverride } from './dev/policy_override';
 import type { MaaiWorkerClient } from './maai';
 import { createMaaiClient } from './app/maai_setup';
 import { OrchestratorServer, SwitchableTimeSource } from './ws/server';
@@ -19,6 +20,7 @@ export async function main(): Promise<OrchestratorServer> {
   const config = readConfig();
   const say = (message: string) => console.log(`[orchestrator] ${message}`);
   say(`.env ${loaded ? 'loaded' : 'not found (using the environment only)'}; policy ${config.policy.policy_id} (${config.policy_file})`);
+  if (config.policy_override !== null) say(describeOverride(config.policy_override, config.policy));
   say(`providers: STT=${config.stt} TTS=${config.tts} LLM=${config.llm}${config.stt !== 'production' || config.tts !== 'production' || config.llm !== 'production' ? '  ※ test_double は受け入れの証拠に数えない' : ''}`);
 
   // 応答の前に辞書を読み込む（1回だけ、0.7 秒前後）。失敗しても起動は続け、口形は従来どおりになる。

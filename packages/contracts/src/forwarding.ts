@@ -49,6 +49,7 @@ export const EVENT_ROUTES = {
   'gaze.rendered': { origin: 'browser', via: ['gaze.report'] },
   // 中身は研究者画面の research.note だが、時刻は Node の受信時刻（研究者のブラウザの時計は補正しない）。
   'research.note': { origin: 'node' },
+  'negotiation.decision': { origin: 'node' },
 } as const satisfies Record<ResearchEventName, EventRoute>;
 
 /** ローカル時刻を orchestrator の基準へ写す関数と、その由来。J が clock.sync の推定から作る。 */

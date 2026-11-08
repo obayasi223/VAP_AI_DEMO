@@ -1,11 +1,11 @@
 /**
- * VRM の読み込み、描画、1つの更新ループ。three に触るのはこのファイルだけ。
+ * VRM の読み込み、描画、1つの更新ループ。three に触るのはこのファイルと chest_morph_three.ts（VRM に依存しない胸郭モーフ）だけ。
  * 判断はしない: 視線は setGaze で外から受け、音量は setMouthLevel／pushPcm で、語時刻と再生位置は
  * onPlaybackAlignment／onPlaybackReport で受ける（配線は J）。
  *
- * 層の順: rest → idle → gaze → saccade → expression → blink → mouth。
+ * 層の順: rest → idle → gaze → saccade → expression → breath → blink → mouth。
  * 1フレームの順序: 層の合成 → ボーンへ適用 → 視線 → 表情 → vrm.update → 描画 → 報告。
- * 吸気や準備姿勢（H2）は addLayer で足す。ループは増やさない。
+ * 吸気と準備姿勢（H2）は breath の層（expression と blink の間）。胸郭のモーフは読み込み時に作る。ループは増やさない。
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -19,6 +19,18 @@ import {
 } from '@pixiv/three-vrm';
 import type { GazeReport, GazeTarget } from '@llm-vap/contracts';
 import { BlinkLayer, BlinkScheduler } from './blink';
+import {
+  BREATH_CHEST_EXPRESSION,
+  BreathLayer,
+  mergeBreathParams,
+  type BreathController,
+  type BreathParams,
+  type BreathPhaseEvent,
+  type BreathTelemetry,
+  type NormalBreathParams,
+  type PrepBreathParams,
+} from './breath';
+import { addChestMorph, findBustBones } from './chest_morph_three';
 import { ExpressionLayer, type SpeechFeatures } from './face';
 import { DEFAULT_GAZE, GazeController, GazeLayer, GazeReporter } from './gaze';
 import { IdleLayer, RestPoseLayer } from './idle';
@@ -41,6 +53,8 @@ export interface AvatarOptions {
   onGazeReport?: (report: GazeReport) => void;
   /** 描画の設定の上書き。'h1' は比較用の旧設定。 */
   render?: Partial<RenderSettings> | 'h1';
+  /** 吸気の phase の遷移（rAF 時刻つき）。inhale の nowMs が吸気が最初に描かれたフレーム。記録は呼び出し側。 */
+  onBreathPhase?: (event: BreathPhaseEvent) => void;
 }
 
 /** 読める形で公開する値。avatar.* イベントは契約に無いので、今は取りに来てもらう。 */
@@ -69,7 +83,16 @@ export interface AvatarTelemetry {
   /** シーングラフから読んだ頭部の向き（待機の揺れと視線の合計、度）。 */
   head: { yawDeg: number; pitchDeg: number; rollDeg: number };
   idleIntensity: number;
+  breath: BreathTelemetry;
   layers: string[];
+}
+
+/** 読み込み時に作った胸郭モーフの情報。 */
+export interface BreathMorphInfo {
+  meshes: string[];
+  movedVertices: number;
+  maxDisplacementMm: number;
+  chestBone: string;
 }
 
 export interface AvatarModelInfo {
@@ -87,6 +110,7 @@ export interface AvatarModelInfo {
   };
   meshes: { name: string; primitives: number; morphTargets: string[]; vertices: number }[];
   springBoneJoints: number;
+  breathMorph: BreathMorphInfo;
 }
 
 export interface Avatar {
@@ -111,6 +135,20 @@ export interface Avatar {
   /** 表情の層（待機の表情、眉、話している間の頭の動き）の強さ 0〜1。 */
   setExpressionIntensity(intensity: number): void;
   setFraming(framing: Framing): void;
+  /** 確認用: カメラを目の周りに水平に回す（度、0 が正面）。参加者画面では使わない。 */
+  setViewYaw(deg: number): void;
+  /**
+   * 確認用: 層の時間の倍率（1 が実時間、0 で止める）。描画は続く。参加者画面では使わない。
+   * 遅い描画（SwiftShader）で時刻つきの連続画像を撮るため。
+   */
+  setTimeScale(scale: number): void;
+  /** 確認用: 次のフレームで層の時間を ms だけ進める（16ms ずつ）。 */
+  advanceTime(ms: number): void;
+  /** 発話希望の準備吸気（H2）。フレームの更新はランタイムが行う。 */
+  readonly breath: BreathController;
+  /** 呼吸のパラメータの部分的な上書き（確認ページ用）。 */
+  setBreathParams(patch: { normal?: Partial<NormalBreathParams>; prep?: Partial<PrepBreathParams> }): void;
+  getBreathParams(): BreathParams;
   addLayer(layer: AvatarLayer, position?: { before: string }): void;
   removeLayer(name: string): void;
   getTelemetry(): AvatarTelemetry;
@@ -178,6 +216,8 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   resizeObserver.observe(container);
 
   registerMorphExpressions(vrm);
+  // 姿勢を当てる前（ボーンがバインド時の位置）に作る。
+  const breathMorph = registerChestMorph(vrm);
 
   const stack = new LayerStack();
   const mouth = new VolumeMouthSource();
@@ -191,11 +231,20 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   const blinkLayer = new BlinkLayer(blinkScheduler);
   const mouthLayer = new MouthLayer(lipSync);
   const expression = new ExpressionLayer(rng, () => mouthOpenAmount(mouthLayer.shape));
+  const breath = new BreathLayer(rng, {
+    output: { chest: breathMorph.chestBone },
+    speechOpen: () => mouthOpenAmount(mouthLayer.shape),
+    setIdleScale: (scale) => {
+      idle.suppression = scale;
+    },
+    onPhase: (event) => options.onBreathPhase?.(event),
+  });
   stack.add(new RestPoseLayer());
   stack.add(idle);
   stack.add(gazeLayer);
   stack.add(saccadeLayer);
   stack.add(expression);
+  stack.add(breath);
   stack.add(blinkLayer);
   stack.add(mouthLayer);
   /** そらす／戻すの視線移動の大きさ（lookAt の入力の度）。瞬きの確率に使う。 */
@@ -235,13 +284,16 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   vrm.springBoneManager?.reset();
 
   const eyePosition = new THREE.Vector3();
+  let currentFraming: Framing = options.framing ?? 'bust';
+  let viewYawRad = 0;
   const placeCamera = (framing: Framing) => {
+    currentFraming = framing;
     lookAt.getLookAtWorldPosition(eyePosition);
     // bust は参加者画面の既定。ビデオ通話くらいの距離（頭から胸まで）で、カメラは目の高さ（目線が合う）。
     // 縦の画角 20 度、距離 1.6m で約 0.56m が写る。目が上から約 36% の高さに来るよう少し下を向ける。
     const distance = framing === 'face' ? 1.1 : 1.6;
     const lookDownBy = framing === 'face' ? 0.02 : 0.08;
-    camera.position.set(eyePosition.x, eyePosition.y, eyePosition.z + distance);
+    camera.position.set(eyePosition.x + Math.sin(viewYawRad) * distance, eyePosition.y, eyePosition.z + Math.cos(viewYawRad) * distance);
     camera.lookAt(eyePosition.x, eyePosition.y - lookDownBy, eyePosition.z);
     camera.updateMatrixWorld();
   };
@@ -283,6 +335,9 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   let lastRafMs = 0;
   let fps = 0;
 
+  let timeScale = 1;
+  let pendingAdvanceMs = 0;
+  let layerClockMs = 0;
   const tick = (nowMs: number) => {
     if (disposed) return;
     rafId = requestAnimationFrame(tick);
@@ -292,7 +347,21 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
       fps = fps === 0 ? instant : fps * 0.95 + instant * 0.05;
     }
     lastMs = nowMs;
-    applyPose(dtMs, nowMs);
+    if (timeScale === 1 && pendingAdvanceMs === 0) {
+      applyPose(dtMs, nowMs);
+    } else {
+      // 確認用の時間制御。層の時刻は実時間と切り離す。
+      let pending = pendingAdvanceMs;
+      pendingAdvanceMs = 0;
+      while (pending > 0) {
+        const step = Math.min(16, pending);
+        layerClockMs += step;
+        applyPose(step, layerClockMs);
+        pending -= step;
+      }
+      layerClockMs += dtMs * timeScale;
+      applyPose(dtMs * timeScale, layerClockMs);
+    }
     renderer.render(scene, camera);
     gazeReporter.rendered(nowMs);
     frameCount += 1;
@@ -333,6 +402,22 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
       expression.intensity = intensity;
     },
     setFraming: placeCamera,
+    setTimeScale: (scale) => {
+      if (timeScale === 1 && scale !== 1) layerClockMs = performance.now();
+      timeScale = Math.max(0, scale);
+    },
+    advanceTime: (ms) => {
+      pendingAdvanceMs += Math.max(0, ms);
+    },
+    setViewYaw: (deg) => {
+      viewYawRad = deg * (Math.PI / 180);
+      placeCamera(currentFraming);
+    },
+    breath,
+    setBreathParams: (patch) => {
+      breath.params = mergeBreathParams(breath.params, patch);
+    },
+    getBreathParams: () => breath.params,
     addLayer: (layer, position) => stack.add(layer, position ?? null),
     removeLayer: (name) => stack.remove(name),
     getTelemetry: () => {
@@ -366,10 +451,11 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
         },
         head: readHead(),
         idleIntensity: idle.intensity,
+        breath: breath.telemetry(),
         layers: stack.names(),
       };
     },
-    getModelInfo: () => describeModel(vrm),
+    getModelInfo: () => ({ ...describeModel(vrm), breathMorph }),
     getBoneWorldPosition: (name) => {
       const node = humanoid.getRawBoneNode(name as VRMHumanBoneName);
       if (!node) return null;
@@ -477,7 +563,48 @@ async function loadGltf(options: AvatarOptions) {
   });
 }
 
-function describeModel(vrm: VRM): AvatarModelInfo {
+/**
+ * VRM の適合層: ヒューマノイドの骨を ChestRig に渡して胸郭モーフを作り（chest_morph_three.ts、VRM に依存しない）、
+ * VRM の表情 BREATH_CHEST_EXPRESSION として登録する。姿勢を当てる前に呼ぶ。
+ */
+function registerChestMorph(vrm: VRM): BreathMorphInfo {
+  const { humanoid } = vrm;
+  const upperChest = humanoid.getRawBoneNode('upperChest');
+  const chestBone = upperChest ? 'upperChest' : 'chest';
+  const info: BreathMorphInfo = { meshes: [], movedVertices: 0, maxDisplacementMm: 0, chestBone };
+  const manager = vrm.expressionManager;
+  const top = upperChest ?? humanoid.getRawBoneNode('chest');
+  const neck = humanoid.getRawBoneNode('neck');
+  if (!manager || !top || !neck || manager.getExpression(BREATH_CHEST_EXPRESSION)) return info;
+  const built = addChestMorph(
+    vrm.scene,
+    {
+      upperChest: top,
+      chest: humanoid.getRawBoneNode('chest'),
+      neck,
+      spine: humanoid.getRawBoneNode('spine'),
+      leftShoulder: humanoid.getRawBoneNode('leftShoulder'),
+      rightShoulder: humanoid.getRawBoneNode('rightShoulder'),
+      bust: findBustBones(top),
+      // glTF の VRM 0.x は -Z、VRM 1.0 は +Z が前。
+      fallbackFront: { x: 0, y: 0, z: vrm.meta.metaVersion === '0' ? -1 : 1 },
+    },
+    BREATH_CHEST_EXPRESSION,
+  );
+  info.movedVertices = built.movedVertices;
+  info.maxDisplacementMm = built.maxDisplacementMm;
+  info.meshes = built.targets.map((t) => t.mesh.name);
+  if (built.targets.length === 0) return info;
+  const binds = new Map<number, THREE.Mesh[]>();
+  for (const { mesh, index } of built.targets) binds.set(index, [...(binds.get(index) ?? []), mesh]);
+  const expression = new VRMExpression(BREATH_CHEST_EXPRESSION);
+  for (const [index, primitives] of binds) expression.addBind(new VRMExpressionMorphTargetBind({ primitives, index, weight: 1 }));
+  vrm.scene.add(expression);
+  manager.registerExpression(expression);
+  return info;
+}
+
+function describeModel(vrm: VRM): Omit<AvatarModelInfo, 'breathMorph'> {
   const humanBones = Object.values(VRMHumanBoneName).filter((name) => vrm.humanoid.getRawBoneNode(name) !== null);
   const meshes = new Map<string, AvatarModelInfo['meshes'][number]>();
   vrm.scene.traverse((object) => {

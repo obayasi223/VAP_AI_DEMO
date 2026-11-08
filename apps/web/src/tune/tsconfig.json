@@ -1,0 +1,6 @@
+{
+  "//": "vitest 専用。apps/web/tsconfig.json の jsx: preserve では vite が TSX を読めないので、このディレクトリだけ変換する。next と tsc -p apps/web は親を使う。",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "jsx": "react-jsx", "plugins": [] },
+  "include": ["./**/*"]
+}

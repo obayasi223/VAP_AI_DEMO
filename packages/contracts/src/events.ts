@@ -400,6 +400,21 @@ export const SignalEndedEvent = eventSchema('signal.ended', {
   ended_at: Maybe(MonotonicMs),
 });
 
+/**
+ * 発話希望の交渉の判断（計画 §4.6。E2 の合図のゲートと、E3 の発話の選択）。判断か理由が変わったときだけ出す。
+ *  - signal_gate: 合図（吸気）を出したか、出さなかった理由。条件 reactive と initiative_no_cue では合図しない理由を残す。
+ *  - speech_selection: 発話の許可（turn_allowed）が出ている間に、候補と通常の応答のどちらを話すか（または待つか）。
+ * outcome と reasons はコードの値で、モデルの説明文は入れない。urgency は使わない（計画 §4.5）。
+ */
+export const NegotiationDecisionEvent = eventSchema('negotiation.decision', {
+  stage: z.enum(['signal_gate', 'speech_selection']),
+  candidate_id: Maybe(CandidateId),
+  candidate_version: Maybe(CandidateVersion),
+  candidate_state: CandidateState.nullable(),
+  outcome: NonEmptyString,
+  reasons: z.array(NonEmptyString),
+});
+
 // ---- 発話開始の判定、視線 ---------------------------------------------------
 
 export const TurnAllowedEvent = eventSchema('turn.allowed', TurnAllowedPayload.shape);
@@ -583,6 +598,7 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   SignalSentEvent,
   SignalStartedEvent,
   SignalEndedEvent,
+  NegotiationDecisionEvent,
   TurnAllowedEvent,
   SpeechStartedEvent,
   SpeechEndedEvent,
@@ -632,6 +648,7 @@ export const EVENT_NAMES = [
   'gaze.rendered',
   'research.note',
   'candidate.rejected',
+  'negotiation.decision',
 ] as const satisfies readonly ResearchEventName[];
 
 export type EventOf<N extends ResearchEventName> = Extract<ResearchEvent, { event: N }>;
