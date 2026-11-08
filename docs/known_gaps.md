@@ -221,9 +221,9 @@
 **暫定の値（`config/policy.ja.json`）**
 
 - `initiative.candidate_expiry_ms`: null → 15000。`max_result_age_ms`（8 秒）の約2倍で、話の途中で出た候補をターンの終わりまで持たせる程度。測っていない。
-- `initiative.signal_cooldown_ms`: null → 4000。吸気の連続を防ぐ。吸気 0.45 秒＋保持 1 秒に約 2 秒の間を足した程度。測っていない。
-- `initiative.negotiation.inhale_ms`: 450。アバターの既定（`apps/web/src/avatar/breath.ts` の `DEFAULT_INHALE_MS`）に合わせただけ。文献や計測から選んだ値ではない。
-- `initiative.negotiation.hold_max_ms`: 1000。アバターの自動の脱力（1500）より短くした。
+- `initiative.signal_cooldown_ms`: null → 4000。吸気の連続を防ぐ。決めた時点の吸気 0.45 秒＋保持 1 秒に約 2 秒の間を足した程度（現在は吸気 0.7 秒＋保持 0.8 秒）。測っていない。
+- `initiative.negotiation.inhale_ms`: 700。Torreira et al. 2015 の答えの前の吸気の中央値 0.72s（日本語ではない、`docs/breath_evidence.md`）に寄せた。このシステムでの計測はない。
+- `initiative.negotiation.hold_max_ms`: 800。人が話し続けているときに引き下がるまでの時間で、根拠のない暫定値。アバターの `HOLD_MAX_MS`（1800）は解除が来ないときだけの安全上限で、人が黙って許可を待つ間は脱力させない。
 - `initiative.negotiation.max_new_stable_chars_since_judgement` と `cue_max_judgement_age_ms`: null（G の鮮度の値をそのまま使う）。
 
 **条件の選び方と、参加者に見せない運用**
