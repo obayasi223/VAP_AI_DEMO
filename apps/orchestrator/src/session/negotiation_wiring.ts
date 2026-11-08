@@ -426,7 +426,8 @@ export class NegotiationWiring {
   /** AI の発話の後の照合。保留中の候補と、この発話で話した部分を比べる。話していない発話（1 音も出ない）は見ない。 */
   private reconcilePending(finished: SpeechFinished, now: number): void {
     const threshold = this.options.repeat_guard?.already_said_min_similarity;
-    if (threshold === undefined || finished.no_audio || finished.spoken_text === '') return;
+    // 吸気の後の短い声は already_said の照合の対象にしない（session からは呼ばないが、型の上でも除く）。
+    if (threshold === undefined || finished.no_audio || finished.spoken_text === '' || finished.origin.kind === 'vocal_cue') return;
     const ledger = this.options.initiative.ledger;
     for (const record of ledger.list()) {
       if (record.state === 'SPEAKING') continue;
@@ -575,6 +576,11 @@ export class NegotiationWiring {
     if (state === 'preparing') return 'preparing';
     if (state === 'ready') return 'ready';
     return 'failed';
+  }
+
+  /** 未解決の候補の今の値（吸気の後の短い声の判定が読む）。 */
+  candidateViews(): CandidateView[] {
+    return this.views();
   }
 
   private views(): CandidateView[] {

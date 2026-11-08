@@ -163,6 +163,10 @@ describe('研究条件', () => {
     expect(withInitiativeChoice('ws://h:1/ws?token=x', { conversation_kind: null, timing_strategy: 'llm' })).toBe('ws://h:1/ws?token=x&timing_strategy=llm');
     expect(withInitiativeChoice('ws://h:1/ws', { conversation_kind: null, timing_strategy: null })).toBe('ws://h:1/ws');
   });
+  it('WS の URL に吸気の後の声のモードを足す。指定がなければ足さない', () => {
+    expect(withInitiativeChoice('ws://h:1/ws', { conversation_kind: null, timing_strategy: null, vocal_cue: 'pre_beginning' })).toBe('ws://h:1/ws?vocal_cue=pre_beginning');
+    expect(withInitiativeChoice('ws://h:1/ws', { conversation_kind: null, timing_strategy: null, vocal_cue: null })).toBe('ws://h:1/ws');
+  });
   it('表示名', () => {
     expect(CONDITION_LABELS).toEqual({ reactive: '通常応答（ベースライン）', initiative_inhale: '吸気あり（提案）', initiative_no_cue: '吸気なし' });
   });

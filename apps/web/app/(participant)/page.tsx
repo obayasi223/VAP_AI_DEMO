@@ -220,7 +220,7 @@ export default function ParticipantPage() {
                 void controllerRef.current?.start(
                   HIDE_CONDITION_PICKER
                     ? { condition: null, conversation_kind: null, timing_strategy: null }
-                    : { condition, conversation_kind: conversationKind, timing_strategy: timingStrategy },
+                    : { condition, conversation_kind: conversationKind, timing_strategy: timingStrategy, vocal_cue: new URLSearchParams(window.location.search).get('vocal_cue') },
                 )
               }
             >

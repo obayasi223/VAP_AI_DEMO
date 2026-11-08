@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterItems, filterOptions, itemMatches, loadSession, sessionMatches } from '../lib/session';
+import { filterItems, filterOptions, itemMatches, loadSession, sessionMatches, vocalCueOptions } from '../lib/session';
 import { collect, parseJsonl, wrap } from '../lib/readers';
 import { stagedEvents, syntheticEvents, tempRoot, writeSession } from './synthetic';
 import type { Field, ReviewItem, ReviewSession } from '../lib/model';
@@ -380,5 +380,63 @@ describe('吸気の後の結末（延期と内容の撤回の区別）', () => {
     const noCue = all.filter((e) => !(isState(e) && (e.to === 'BREATH_INHALE' || e.to === 'WITHDRAWN')));
     expect(candidate(load({ events: noCue })).after_cue).toBeNull();
     expect(load().items.filter((i) => i.candidate_id === null).every((i) => i.after_cue === null)).toBe(true);
+  });
+
+  describe('吸気の後の短い声（別モード）', () => {
+    const cid = cue.candidate_id;
+    const vocalEvent = (over: Ev = {}): Ev => {
+      const { from: _f, to: _t, cause: _c, cause_source: _s, ...envelope } = cue;
+      return {
+        ...envelope,
+        event: 'initiative.vocal_cue',
+        t_monotonic_ms: 6050,
+        vocal_cue_kind: 'pre_beginning',
+        phrase: 'あ、',
+        candidate_id: cid,
+        candidate_version: 1,
+        audio_playback_id: 77,
+        decided_at: 6050,
+        gap: { user_silence_ms: 420, asr_quiet_ms: 300 },
+        audio_started_at: { value: 6060 },
+        audio_ended_at: { value: 6300 },
+        audio_outcome: 'played',
+        observation: { ended_by: 'window', candidate_speech_started: false, user_speaking_at_audio_end: false, time_to_user_resume_ms: { value: 180 } },
+        ...over,
+      };
+    };
+    const head = all.filter((e) => !(isState(e) && e.to === 'WITHDRAWN'));
+    const { cause: _cause, ...envelope } = cue;
+    const deferred: Ev = { ...envelope, t_monotonic_ms: 6000, from: 'BREATH_HOLD_OR_READY', to: 'DEFERRED', cause_source: 'code', cause: 'user_continued', candidate_version: { value: 1 } };
+
+    it('声を出した候補は、種類、語、時刻、観測の値を結末に載せ、流れの行に声を入れる', () => {
+      const view = candidate(load({ events: [...head, deferred, vocalEvent()] })).after_cue;
+      expect(view?.vocal_cue).toMatchObject({ kind: 'pre_beginning', phrase: 'あ、', decided_at: 6050, audio_started_at: 6060, audio_ended_at: 6300, audio_outcome: 'played', resumed_ms: 180 });
+      expect(view?.label).toContain('吸気 → 延期 → 声「あ、」');
+    });
+
+    it('声のイベントは時系列にも出る。声のない候補は null で、結末の行は従来のまま', () => {
+      const item = candidate(load({ events: [...head, deferred, vocalEvent()] }));
+      expect(item.timeline.some((r) => r.event === 'initiative.vocal_cue' && r.label.includes('あ、'))).toBe(true);
+      const plain = candidate(load({ events: [...head, deferred] })).after_cue;
+      expect(plain?.vocal_cue).toBeNull();
+      expect(plain?.label).not.toContain('声');
+    });
+
+    it('声の種類で、研究条件とは別に絞り込める', () => {
+      const session = load({ events: [...head, deferred, vocalEvent({ vocal_cue_kind: 'backchannel', phrase: 'うん' })] });
+      expect(session.meta.vocal_cue_kinds).toEqual(['backchannel']);
+      expect(filterItems(session.items, { vocal_cue: 'backchannel' }).map((i) => i.candidate_id)).toEqual([candidate(session).candidate_id]);
+      expect(filterItems(session.items, { vocal_cue: 'pre_beginning' })).toEqual([]);
+      expect(sessionMatches(session.meta, { vocal_cue: 'pre_beginning' })).toBe(false);
+      expect(sessionMatches(session.meta, { vocal_cue: 'backchannel' })).toBe(true);
+      expect(vocalCueOptions([session.meta])).toEqual(['none', 'backchannel']);
+    });
+
+    it('記録がない古いセッションは声なしとして読める', () => {
+      const session = load({ events: head });
+      expect(session.meta.vocal_cue_kinds).toEqual([]);
+      expect(session.meta.vocal_cue_mode).toBeNull();
+      expect(filterItems(session.items, { vocal_cue: 'none' }).length).toBe(session.items.length);
+    });
   });
 });

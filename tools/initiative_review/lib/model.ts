@@ -122,8 +122,31 @@ export interface AfterCueView {
   withdraw_kind: string | null;
   /** コード由来の原因（CandidateCause）。 */
   code_cause: string | null;
+  /** 吸気の後の短い声（別モード）。出さなかった候補は null。 */
+  vocal_cue: VocalCueView | null;
   /** 画面に出す一行（例: 吸気 → 延期 → 内容の撤回（前提が変わった））。 */
   label: string;
+}
+
+/** 吸気の後の短い声（initiative.vocal_cue）。譲ったとは断定しない観測の値だけ。 */
+export interface VocalCueView {
+  /** pre_beginning ／ backchannel。 */
+  kind: string;
+  phrase: string;
+  decided_at: number | null;
+  audio_started_at: number | null;
+  audio_ended_at: number | null;
+  audio_outcome: string;
+  /** 判定に使った切れ目の値。 */
+  silence_ms: number | null;
+  asr_quiet_ms: number | null;
+  /** 音声の後に人が話し始めるまで（窓の中で話さなければ null）。 */
+  resumed_ms: number | null;
+  resume_null_reason: string | null;
+  /** 窓の間に候補の発話が始まったか。 */
+  candidate_speech_started: boolean;
+  user_speaking_at_audio_end: boolean;
+  ended_by: string | null;
 }
 
 export type ItemKind = 'candidate' | 'none' | 'dropped';
@@ -183,6 +206,10 @@ export interface SessionMeta {
   conversation_type: string;
   persona_id: string | null;
   prompt_versions: string[];
+  /** 吸気の後の短い声のモード（manifest の initiative.vocal_cue）。記録がなければ null（無音の吸気のモードとして扱う）。 */
+  vocal_cue_mode: string | null;
+  /** 実際に声を出した種類（initiative.vocal_cue）。 */
+  vocal_cue_kinds: string[];
   /** セッションのフォルダにある音声（ファイル名）。 */
   audio_files: string[];
 }
@@ -200,4 +227,6 @@ export interface ReviewSession {
 export interface ItemFilter {
   conversation_type?: string | undefined;
   prompt_version?: string | undefined;
+  /** 吸気の後の短い声の種類で絞る（none は声を出さなかった判定）。研究条件（condition）とは別の軸。 */
+  vocal_cue?: string | undefined;
 }

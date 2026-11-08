@@ -18,7 +18,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
-import { BrowserToNode, Condition, ConversationKind, SystemTimeSource, TimingStrategy } from '@llm-vap/contracts';
+import { BrowserToNode, Condition, ConversationKind, SystemTimeSource, TimingStrategy, VocalCueMode } from '@llm-vap/contracts';
 import type { ClientHello, EmitOptions, EventDraft, EventEmitter, ResearchEvent, TimeSource } from '@llm-vap/contracts';
 import { openSessionLogging } from '../logging';
 import type { MaaiWorkerClient } from '../maai';
@@ -63,12 +63,13 @@ function newSessionId(): string {
   return `s${stamp}-${randomBytes(3).toString('hex')}`;
 }
 
-/** 参加者画面の WS の URL の ?conversation_kind= と ?timing_strategy=。新しいセッションを作るときだけ使う。 */
+/** 参加者画面の WS の URL の ?conversation_kind= と ?timing_strategy=、?vocal_cue=。新しいセッションを作るときだけ使う。 */
 interface RequestedInitiative {
   conversation_kind: string | null;
   timing_strategy: string | null;
+  vocal_cue: string | null;
 }
-const NO_REQUEST: RequestedInitiative = { conversation_kind: null, timing_strategy: null };
+const NO_REQUEST: RequestedInitiative = { conversation_kind: null, timing_strategy: null, vocal_cue: null };
 
 export class OrchestratorServer {
   readonly http: Server;
@@ -108,6 +109,7 @@ export class OrchestratorServer {
           this.onBrowser(ws, url.searchParams.get('condition'), {
             conversation_kind: url.searchParams.get('conversation_kind'),
             timing_strategy: url.searchParams.get('timing_strategy'),
+            vocal_cue: url.searchParams.get('vocal_cue'),
           }),
         );
       } else if (url.pathname === '/research') {
@@ -361,11 +363,14 @@ export class OrchestratorServer {
     } };
     const kind = this.resolveChoice('conversation_kind', requested.conversation_kind, kindSchema, config.conversation_kind, config.conversation_kind_from_client);
     const timing = this.resolveChoice('timing_strategy', requested.timing_strategy, TimingStrategy, config.timing_strategy, config.timing_strategy_from_client);
+    const vocalCue = this.resolveChoice('vocal_cue', requested.vocal_cue, VocalCueMode, config.vocal_cue, config.vocal_cue_from_client);
     return {
       conversation_kind: kind.value,
       conversation_kind_source: kind.source,
       timing_strategy: timing.value,
       timing_strategy_source: timing.source,
+      vocal_cue: vocalCue.value,
+      vocal_cue_source: vocalCue.source,
     };
   }
 

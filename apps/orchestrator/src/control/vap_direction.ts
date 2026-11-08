@@ -45,6 +45,11 @@ export interface VapView {
   user_speaking: boolean;
 }
 
+/** vad の人の側（吸気の後の短い声の切れ目の判定）。添字はこのファイルだけ。 */
+export function readVadUser(vap: Vap2chState): number {
+  return vap.vad[VAD_USER_INDEX];
+}
+
 export function readVap(vap: Vap2chState, direction: VapDirectionSettings): VapView {
   return {
     p_now_ai: vap.p_now[direction.p_ai_index],

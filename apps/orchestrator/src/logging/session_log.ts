@@ -71,6 +71,12 @@ export interface SessionManifestDetails {
     /** 選択の由来（client、default、fixed）。 */
     conversation_kind_source?: string | null;
     timing_strategy_source?: string | null;
+    /** 吸気の後の短い声。実際に適用したモード（条件が initiative_inhale 以外、未校正などで動かないときは none）。 */
+    vocal_cue?: string | null;
+    /** 画面と設定で選んだモード（適用の前の値）と、その由来、動かなかった理由。 */
+    vocal_cue_requested?: string | null;
+    vocal_cue_source?: string | null;
+    vocal_cue_reason?: string | null;
   };
 }
 /** session.log の状態を provider.status に出すときの名前。 */

@@ -131,6 +131,30 @@ describe('研究条件の切替（セッション単位）', () => {
       expect((await manifest()).initiative).toMatchObject({ timing_strategy: 'llm', conversation_kind: 'joint_thinking', conversation_kind_source: 'fixed', timing_strategy_source: 'fixed' });
     });
 
+    it('?vocal_cue= を manifest に残す。指定なしは none', async () => {
+      const url = await start();
+      await open(url, '?condition=initiative_inhale&vocal_cue=backchannel');
+      expect((await manifest()).initiative).toMatchObject({ vocal_cue: 'backchannel', vocal_cue_requested: 'backchannel', vocal_cue_source: 'client' });
+    });
+
+    it('vocal_cue の既定は none で、不正な値も none', async () => {
+      const url = await start();
+      await open(url, '?condition=initiative_inhale&vocal_cue=nonsense');
+      expect((await manifest()).initiative).toMatchObject({ vocal_cue: 'none', vocal_cue_source: 'default' });
+    });
+
+    it('VOCAL_CUE_FROM_CLIENT=0 は環境変数の値に固定する（由来は fixed）', async () => {
+      const url = await start({ VOCAL_CUE: 'pre_beginning', VOCAL_CUE_FROM_CLIENT: '0' });
+      await open(url, '?condition=initiative_inhale&vocal_cue=backchannel');
+      expect((await manifest()).initiative).toMatchObject({ vocal_cue: 'pre_beginning', vocal_cue_source: 'fixed' });
+    });
+
+    it('initiative_inhale 以外では求めても動かない（none として理由を残す）', async () => {
+      const url = await start();
+      await open(url, '?condition=reactive&vocal_cue=pre_beginning');
+      expect((await manifest()).initiative).toMatchObject({ vocal_cue: 'none', vocal_cue_requested: 'pre_beginning' });
+    });
+
     it('v2 を選ぶと会話の種類は適用しない（記録も null）', async () => {
       const url = await start();
       await open(url, '?timing_strategy=v2&conversation_kind=companion');

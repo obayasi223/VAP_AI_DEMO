@@ -75,7 +75,8 @@ export class TurnOutcomeWiring {
         const at = draft.event === 'speech.ended' ? draft.ended_at : draft.interrupted_at;
         pending.ended = { at, frame: draft.audio_frame, interrupted: draft.event === 'speech.interrupted', spoken_text: draft.spoken_text };
         pending.settle_at = at + this.settings.settle_ms;
-        this.lastAiEnd = { at };
+        // 吸気の後の短い声は「前の AI の発話」に数えない（この後の候補の発話に spoke_twice を付けない）。
+        if (pending.start.origin !== 'vocal_cue') this.lastAiEnd = { at };
         return;
       }
       default:
@@ -111,6 +112,29 @@ export class TurnOutcomeWiring {
     if (!pending || !finished.no_audio) return;
     pending.null_reason ??= 'no_audio_played';
     pending.settle_at = now;
+  }
+
+  /** 吸気の後の短い声の開始（TurnManager の start_speech を通らないので、session が開始の値を渡す）。 */
+  noteVocalCueStart(input: { audio_playback_id: number; segment_id: number; candidate_id: string; now: number; audio_frame: number; payload: TurnAllowedPayload }): void {
+    this.pending.set(input.audio_playback_id, {
+      start: {
+        audio_playback_id: input.audio_playback_id,
+        segment_id: input.segment_id,
+        origin: 'vocal_cue',
+        candidate_id: present(input.candidate_id),
+        conversation_kind: this.conversationKind,
+        decided_at: input.now,
+        audio_frame: input.audio_frame,
+        payload: input.payload,
+        vad: this.latestVad === null ? null : { user: this.latestVad[0], ai: this.latestVad[1] },
+        vap_age_ms: this.latestVapAt === null ? null : input.now - this.latestVapAt,
+      },
+      previous_ai_end: this.lastAiEnd,
+      started: null,
+      ended: null,
+      null_reason: null,
+      settle_at: null,
+    });
   }
 
   /** tick の最後に、確定した1組の決定を渡す（開始の取消の後）。 */

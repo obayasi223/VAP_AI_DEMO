@@ -16,7 +16,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import path from 'node:path';
 import { ReviewConflict, ReviewInvalid, ReviewStore } from './reviews';
 import { audioTimeline, loadMarks } from './audio_timeline';
-import { SESSION_ID, eventsStamp, filterItems, filterOptions, listAudioFiles, listSessionDirs, loadSession, sessionMatches } from './session';
+import { SESSION_ID, eventsStamp, filterItems, filterOptions, listAudioFiles, listSessionDirs, loadSession, sessionMatches, vocalCueOptions } from './session';
 import type { ItemFilter, ReviewSession } from './model';
 
 const LOOPBACK = '127.0.0.1';
@@ -126,6 +126,7 @@ export class ReviewServer {
     const filter: ItemFilter = {
       conversation_type: url.searchParams.get('conversation_type') ?? undefined,
       prompt_version: url.searchParams.get('prompt_version') ?? undefined,
+      vocal_cue: url.searchParams.get('vocal_cue') ?? undefined,
     };
     if (parts.length === 2 && req.method === 'GET') return this.json(res, 200, this.listSessions(filter));
     const id = parts[2] ?? '';
@@ -182,7 +183,7 @@ export class ReviewServer {
 
   private listSessions(filter: ItemFilter) {
     const metas = listSessionDirs(this.options.sessions_dir).map((id) => this.session(id).meta);
-    return { sessions: metas.filter((m) => sessionMatches(m, filter)), options: filterOptions(metas) };
+    return { sessions: metas.filter((m) => sessionMatches(m, filter)), options: { ...filterOptions(metas), vocal_cue_kinds: vocalCueOptions(metas) } };
   }
 
   private audioTimeline(id: string, center_sec: number, span_sec: number, bins: number) {

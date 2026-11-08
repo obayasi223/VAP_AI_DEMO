@@ -5,7 +5,7 @@
  *  - dropped: 判定がコードに棄てられた要求（stale、ゲート、保留など）。適用されなかったので候補にならないが、見て評価できるようにする。
  */
 import { conversationLabel, fieldsFrom, num, unwrapValue, type Collected, type DecisionRecord, type LlmRecord, type RawEvent, type SttRecord } from './readers';
-import type { AfterCueEnding, AfterCueView, DecisionStep, Field, InhaleRecord, RateAxis, ReflectionView, ReviewItem, SpeechOutcome, SpeechRecord, StableSnapshot, TimelineRow, TranscriptLine } from './model';
+import type { AfterCueEnding, AfterCueView, DecisionStep, Field, InhaleRecord, RateAxis, ReflectionView, ReviewItem, SpeechOutcome, SpeechRecord, StableSnapshot, TimelineRow, TranscriptLine, VocalCueView } from './model';
 
 const FRAMES_PER_MS = 16;
 
@@ -219,7 +219,7 @@ const CODE_CAUSE_LABEL: Record<string, string> = {
 };
 
 /** 候補の状態の列から、吸気の後の結末を読む。延期と内容の撤回を別の項目にする（延期の後に撤回されることもあるため）。 */
-function afterCueOf(states: Collected['states']): AfterCueView | null {
+function afterCueOf(states: Collected['states'], vocalCues: Collected['vocalCues']): AfterCueView | null {
   const cue = states.find((s) => s.to === 'BREATH_INHALE');
   if (cue === undefined) return null;
   const deferredState = states.find((s) => s.to === 'DEFERRED');
@@ -246,6 +246,25 @@ function afterCueOf(states: Collected['states']): AfterCueView | null {
     }
   }
   const end = spoken ?? withdrawn ?? null;
+  const voiced = vocalCues[0] ?? null;
+  const vocal_cue: VocalCueView | null =
+    voiced === null
+      ? null
+      : {
+          kind: voiced.kind,
+          phrase: voiced.phrase,
+          decided_at: voiced.decided_at,
+          audio_started_at: voiced.audio_started_at,
+          audio_ended_at: voiced.audio_ended_at,
+          audio_outcome: voiced.audio_outcome,
+          silence_ms: voiced.silence_ms,
+          asr_quiet_ms: voiced.asr_quiet_ms,
+          resumed_ms: voiced.resumed_ms,
+          resume_null_reason: voiced.resume_null_reason,
+          candidate_speech_started: voiced.candidate_speech_started,
+          user_speaking_at_audio_end: voiced.user_speaking_at_audio_end,
+          ended_by: voiced.ended_by,
+        };
   return {
     deferred: deferredState !== undefined,
     deferred_at: deferredState?.t_ms ?? null,
@@ -254,7 +273,8 @@ function afterCueOf(states: Collected['states']): AfterCueView | null {
     ending_at: end?.t_ms ?? null,
     withdraw_kind: withdrawn?.withdraw_kind ?? null,
     code_cause: withdrawn?.code_cause ?? null,
-    label: ['吸気', ...(deferredState ? ['延期'] : []), ...(revisions > 0 ? [`内容の更新 ×${revisions}`] : []), endingLabel].join(' → '),
+    vocal_cue,
+    label: ['吸気', ...(deferredState ? ['延期'] : []), ...(voiced ? [`声「${voiced.phrase}」`] : []), ...(revisions > 0 ? [`内容の更新 ×${revisions}`] : []), endingLabel].join(' → '),
   };
 }
 
@@ -528,6 +548,15 @@ export function assemble(c: Collected, ctx: AssembleContext): { items: ReviewIte
       provenance: 'code',
     });
   }
+  for (const v of c.vocalCues) {
+    onCandidate(v.candidate_id)?.timeline.push({
+      t_ms: v.t_ms,
+      event: 'initiative.vocal_cue',
+      label: `吸気の後の声: 「${v.phrase}」（${v.kind}）`,
+      detail: `切れ目 ${v.silence_ms ?? '—'}ms ／ ASR の間 ${v.asr_quiet_ms ?? '—'}ms ／ 結果 ${v.audio_outcome}`,
+      provenance: 'code',
+    });
+  }
   for (const other of c.others) {
     const key = (other.candidate_id !== null ? candidateToKey.get(other.candidate_id) : undefined) ?? (other.request_id !== null ? requestToKey.get(other.request_id) : undefined);
     if (key === undefined) continue;
@@ -552,7 +581,7 @@ export function assemble(c: Collected, ctx: AssembleContext): { items: ReviewIte
         prompt_versions: versions,
         headline: headlineOf(item.decisions) + (item.final_state === null ? '' : `（${item.final_state}）`),
         timeline: item.timeline.sort((a, b) => a.t_ms - b.t_ms),
-        after_cue: item.candidate_id === null ? null : afterCueOf(c.states.filter((s) => s.candidate_id === item.candidate_id)),
+        after_cue: item.candidate_id === null ? null : afterCueOf(c.states.filter((s) => s.candidate_id === item.candidate_id), c.vocalCues.filter((v) => v.candidate_id === item.candidate_id)),
         context_before: before.map((l) => l.id),
         context_after: after.map((l) => l.id),
         audio_sec: map.secondsAtT(item.anchor_t_ms),

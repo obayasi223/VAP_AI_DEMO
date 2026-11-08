@@ -305,7 +305,9 @@ export interface PrepareRequest {
   text: string;
   origin:
     | { kind: 'response' }
-    | { kind: 'candidate'; candidate_id: string; candidate_version: number };
+    | { kind: 'candidate'; candidate_id: string; candidate_version: number }
+    /** 吸気の後の短い声（先に合成しておく。候補とは別の音声で、履歴には入れない）。 */
+    | { kind: 'vocal_cue'; vocal_cue_kind: 'pre_beginning' | 'backchannel' };
 }
 
 export interface PreparedSpeech {

@@ -549,11 +549,11 @@ export function scriptedInitiativeReply(request: LlmRequest): string {
   });
 }
 
-export type ScriptedInitiativeMode = 'none' | 'new_on_input' | 'wait_on_input' | 'revise_on_input' | 'withdraw_on_input';
+export type ScriptedInitiativeMode = 'none' | 'new_on_input' | 'wait_on_input' | 'revise_on_input' | 'withdraw_on_input' | 'defer_on_input';
 
-/** 長い台本の文で 2 回の判定を行う経路の台本か（台本の STT の速さと LLM の速さを変える）。 */
+/** 長い台本の文で 2 回の判定を行う経路の台本か（台本の STT の速さと LLM の速さを変える）。defer_on_input は長い文で、2 回目以降は KEEP（延期のまま）。 */
 export function scriptedSecondJudgementMode(mode: ScriptedInitiativeMode): boolean {
-  return mode === 'revise_on_input' || mode === 'withdraw_on_input';
+  return mode === 'revise_on_input' || mode === 'withdraw_on_input' || mode === 'defer_on_input';
 }
 
 const SCRIPTED_DESIRE_NONE = {

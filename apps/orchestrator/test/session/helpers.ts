@@ -166,10 +166,10 @@ export interface RigInitiative {
   responder?: (request: LlmRequest) => string | Promise<string>;
   reason?: string;
   /** 二段判定で動かす（会話の種類の設定は config の joint_thinking）。省略は1段判定（v2）。 */
-  staged?: { timing_strategy: 'llm' | 'immediate' };
+  staged?: { timing_strategy: 'llm' | 'immediate'; vocal_cue?: 'none' | 'pre_beginning' | 'backchannel' };
 }
 
-function stagedSetup(timing_strategy: 'llm' | 'immediate'): Pick<InitiativeSetup, 'staged' | 'choice'> {
+function stagedSetup(timing_strategy: 'llm' | 'immediate', vocal_cue?: 'none' | 'pre_beginning' | 'backchannel'): Pick<InitiativeSetup, 'staged' | 'choice'> {
   const profile = parseConversationKindProfile(JSON.parse(readFileSync(conversationKindFile('joint_thinking'), 'utf8')));
   return {
     staged: {
@@ -180,7 +180,13 @@ function stagedSetup(timing_strategy: 'llm' | 'immediate'): Pick<InitiativeSetup
       timing_prompt_version: 'initiative-timing-ja-v1',
       recent_context: { max_turns: 6, max_chars_per_turn: 300 },
     },
-    choice: { conversation_kind: 'joint_thinking', conversation_kind_source: 'client', timing_strategy, timing_strategy_source: 'default' },
+    choice: {
+      conversation_kind: 'joint_thinking',
+      conversation_kind_source: 'client',
+      timing_strategy,
+      timing_strategy_source: 'default',
+      ...(vocal_cue === undefined ? {} : { vocal_cue, vocal_cue_source: 'client' as const }),
+    },
   };
 }
 
@@ -217,7 +223,7 @@ export async function createRig(
           persona: TEST_PERSONA,
           prompt_version: CURRENT_PROMPT_VERSION,
           model: 'test_double',
-          ...(options.initiative.staged ? stagedSetup(options.initiative.staged.timing_strategy) : {}),
+          ...(options.initiative.staged ? stagedSetup(options.initiative.staged.timing_strategy, options.initiative.staged.vocal_cue) : {}),
         }
     : undefined;
   const providers: SessionProviders = {
