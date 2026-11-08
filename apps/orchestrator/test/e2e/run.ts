@@ -154,7 +154,8 @@ async function startNext(): Promise<ChildProcess> {
 }
 
 async function openParticipant(browser: Browser, query = ''): Promise<Page> {
-  const page = await browser.newPage({ viewport: { width: 480, height: 360 } });
+  // ソフトウェア描画の負荷を抑える小さな画面。会話中のアバターは幅いっぱいなので、描画の画素数が以前（140x360）と同じ程度になる大きさ。
+  const page = await browser.newPage({ viewport: { width: 320, height: 240 } });
   page.on('pageerror', (e) => console.log(`  pageerror: ${String(e)}`));
   await page.addInitScript('window.__name = (f) => f');
   // 初回は Next のコンパイルで時間がかかる。
