@@ -69,4 +69,19 @@ describe('initiative chain', () => {
     );
     expect(row(uncorrected.rows, 'cue_sent_to_render')?.stat).toMatchObject({ status: 'unmeasured', excluded: { endpoint_clock_uncorrected: 1 } });
   });
+
+  it('二段判定: 生成段を判定1回に数え、タイミング段の LLM は判定に数えない。未知の項目があっても読む', () => {
+    const staged: ResearchEvent[] = [
+      base(1000, 'audio.health', { reporter: 'browser', audio_frame: 16000 }, browser),
+      stt(2600, 7, '話の続き', ''),
+      base(2605, 'llm.request', { request_id: 'desire_1', purpose: 'initiative', transcript_revision: 7, sent_at: 2605 }),
+      base(3000, 'llm.response', { request_id: 'desire_1', purpose: 'initiative', transcript_revision: 7, sent_at: 2605, received_at: 3000, output: { value: '{}', source: 'model' } }),
+      base(3001, 'initiative.desire', { request_id: 'desire_1', desire: 'NEW', outcome: 'registered', received_at: 3001, future_field: 1 }),
+      base(3002, 'llm.request', { request_id: 'timing_1', purpose: 'initiative', transcript_revision: 7, sent_at: 3002 }),
+      base(3200, 'initiative.timing', { request_id: 'timing_1', desire_request_id: 'desire_1', timing_strategy: 'llm', timing: 'OFFER_NOW', received_at: 3200, outcome: 'kept', future_field: 2 }),
+    ];
+    const report = computeInitiativeChain(staged);
+    expect(report.judgements.total).toBe(1);
+    expect(report.judgements.outcomes).toEqual({ NEW: 1, 'timing:OFFER_NOW': 1 });
+  });
 });

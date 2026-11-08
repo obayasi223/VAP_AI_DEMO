@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NodeToBrowser } from '@llm-vap/contracts/browser_rpc';
 import type { Avatar } from '../../src/avatar';
-import type { BreathController, InhaleCue, ReleaseReason } from '../../src/avatar/breath';
+import type { BreathController, BreathPhaseEvent, InhaleCue, ReleaseReason } from '../../src/avatar/breath';
 import { CONDITION_LABELS, DEFERRED_SPEECH_PREP_MS, ParticipantController, breathOf, withCondition, withInitiativeChoice } from '../../src/session/participant';
 
 class FakeBreath implements BreathController {
@@ -95,6 +95,60 @@ describe('吸気の合図をアバターへ', () => {
     expect(sent).toEqual([]);
     expect(controller.record.breathCommands).toMatchObject([{ type: 'breath.cue', breath: false }]);
     expect(breathOf(null)).toBeNull();
+  });
+});
+
+describe('局面の実時刻の報告（signal.ended など）', () => {
+  /** onBreathPhase で局面の遷移を流せる偽アバター。 */
+  function avatarWithPhases(breath = new FakeBreath()) {
+    let listener: ((e: BreathPhaseEvent) => void) | null = null;
+    return {
+      avatar: { breath, onBreathPhase: (l: (e: BreathPhaseEvent) => void) => {
+        listener = l;
+        return () => {
+          listener = null;
+        };
+      } } as unknown as Avatar,
+      emit: (e: Partial<BreathPhaseEvent>) => listener?.({ phase: 'idle', nowMs: 0, cueId: 'cue_0001', cause: null, kind: 'prep', ...e } as BreathPhaseEvent),
+      bound: () => listener !== null,
+    };
+  }
+
+  it('onPhase の時刻で ended を返す: 吸気の終わり、保持、脱力の終わり（Node の指示の started は別に返している）', () => {
+    const f = avatarWithPhases();
+    const { sent, deliver, controller } = controllerWith(f.avatar);
+    deliver({ type: 'breath.cue', cue_id: 'cue_0001', candidate_id: 'c_0001', duration_ms: 700 });
+    expect(f.bound()).toBe(true);
+    sent.length = 0;
+    f.emit({ phase: 'inhale', nowMs: 1000 });
+    f.emit({ phase: 'hold', nowMs: 1700 });
+    deliver({ type: 'breath.release', cue_id: 'cue_0001', candidate_id: 'c_0001', reason: 'withdrawn' });
+    f.emit({ phase: 'release', nowMs: 2000, cause: 'withdrawn' });
+    f.emit({ phase: 'idle', nowMs: 2750, cause: 'withdrawn' });
+    expect(sent).toEqual([
+      { type: 'signal.report', candidate_id: 'c_0001', phase: 'inhale', state: 'ended', visible: true, client_t_ms: { value: 1700 } },
+      { type: 'signal.report', candidate_id: 'c_0001', phase: 'ready', state: 'started', visible: true, client_t_ms: { value: 1700 } },
+      { type: 'signal.report', candidate_id: 'c_0001', phase: 'relax', state: 'started', visible: true, client_t_ms: { value: 123.5 } },
+      { type: 'signal.report', candidate_id: 'c_0001', phase: 'ready', state: 'ended', visible: true, client_t_ms: { value: 2000 } },
+      { type: 'signal.report', candidate_id: 'c_0001', phase: 'relax', state: 'ended', visible: true, client_t_ms: { value: 2750 } },
+    ]);
+    expect(controller.record.signalReports).toHaveLength(6);
+  });
+
+  it('撤回が来たら、短い準備の後の発声の予約を取り消す（声を出さない）', () => {
+    vi.useFakeTimers();
+    try {
+      const calls: unknown[] = [];
+      const breath = { startInhale: () => true, release: (r: ReleaseReason) => { calls.push(r); return true; }, phase: () => 'idle' as const, prepareShort: () => undefined };
+      const { deliver } = controllerWith({ breath } as unknown as Avatar);
+      deliver({ type: 'breath.prepare', candidate_id: 'c_0001' });
+      vi.advanceTimersByTime(DEFERRED_SPEECH_PREP_MS / 2);
+      deliver({ type: 'breath.release', cue_id: 'cue_0001', candidate_id: 'c_0001', reason: 'withdrawn' });
+      vi.advanceTimersByTime(DEFERRED_SPEECH_PREP_MS);
+      expect(calls).toEqual(['withdrawn']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

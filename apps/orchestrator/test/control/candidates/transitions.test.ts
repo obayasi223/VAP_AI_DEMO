@@ -7,7 +7,7 @@ import { CandidateCause, CandidateState } from '@llm-vap/contracts';
 import { checkTransition, transitionTable } from '../../../src/control/candidates';
 import type { TransitionCause } from '../../../src/control/candidates';
 
-const WITHDRAW = ['model_decision', 'expired', 'evidence_lost', 'stale_result', 'normal_response_started', 'woz'];
+const WITHDRAW = ['model_decision', 'expired', 'evidence_lost', 'stale_result', 'normal_response_started', 'woz', 'audio_unavailable'];
 const SPEAK = ['turn_allowed', 'invitation', 'woz'];
 
 /** 'from>to' → 許す原因。ここにない組は全部拒否。 */

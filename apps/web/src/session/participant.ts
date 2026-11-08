@@ -7,7 +7,7 @@
  *  - 視線: Node の gaze.command → Avatar.setGaze。描画の報告（onGazeReport）を gaze.report で返す。
  *  - 吸気: Node の breath.cue → アバターの BreathController.startInhale、breath.release → release（波3、条件
  *    initiative_inhale のときだけ届く）。吸気の長さは Node が決め、吸気の完了も Node の時計で判定する
- *    （ここから完了を知らせない）。描画を始めた時刻だけを signal.report で返す（記録のため）。
+ *    （ここから完了を知らせない）。描画を始めた時刻と局面の実時刻（BreathLayer.onPhase、吸気・保持・脱力の始まりと終わり）を signal.report で返す（記録のため）。
  *  - 研究条件: 開始の前に選んだ条件を WS の URL（?condition=）で Node へ伝える（セッション単位）。
  *  - 状態: server.hello、session.status、playback.begin／stop、リンクの状態。
  */
@@ -24,7 +24,8 @@ import type {
 } from '@llm-vap/contracts/browser_rpc';
 import { startBrowserAudio, type BrowserAudioSession, type LinkState } from '../audio';
 import type { Avatar } from '../avatar';
-import type { BreathController } from '../avatar/breath';
+import type { BreathController, BreathPhaseEvent } from '../avatar/breath';
+import { BreathSignalReporter } from '../avatar/breath_signal';
 
 /** 研究条件の表示名（開始画面の選択）。本番の実験では選択を隠す（NEXT_PUBLIC_HIDE_CONDITION_PICKER）。 */
 export const CONDITION_LABELS: Record<Condition, string> = {
@@ -33,8 +34,8 @@ export const CONDITION_LABELS: Record<Condition, string> = {
   initiative_no_cue: '吸気なし',
 };
 
-/** 会話の種類の表示名（開始画面。隠すときは NEXT_PUBLIC_HIDE_CONDITION_PICKER）。 */
-export const CONVERSATION_KIND_LABELS: Record<ConversationKind, string> = {
+/** 会話の種類の表示名（開始画面。隠すときは NEXT_PUBLIC_HIDE_CONDITION_PICKER）。種類は設定ファイルの ID で、ここにない種類は ID のまま表示する。 */
+export const CONVERSATION_KIND_LABELS: Record<string, string> = {
   joint_thinking: '共同思考',
   companion: 'コンパニオン',
 };
@@ -43,7 +44,7 @@ export const CONVERSATION_KIND_LABELS: Record<ConversationKind, string> = {
 export const TIMING_STRATEGY_LABELS: Record<TimingStrategy, string> = {
   llm: 'LLM が判定（既定）',
   immediate: 'すぐ申し出る（比較用）',
-  v2: '従来の1段判定（比較用）',
+  v2: 'v2（比較・再現用）',
 };
 
 /** WS の URL に会話の種類と方式を足す。null の項目は足さない（Node の既定）。 */
@@ -181,6 +182,31 @@ export class ParticipantController {
     messages: [] as string[],
   };
 
+  /** breath.prepare の後に release('speech_started') を呼ぶ予約（撤回が来たら取り消す）。 */
+  private prepareTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 局面の報告の対応（cue_id → candidate_id）。古い順に落とす。 */
+  private readonly breathCandidates = new Map<string, string>();
+  /** breath.prepare の候補（短い準備は cue_id が null のことがある）。 */
+  private prepareCandidate: string | null = null;
+  private breathReportedAvatar: Avatar | null = null;
+  private breathReportUnsubscribe: (() => void) | null = null;
+  /** アバターの吸気の局面の実時刻を signal.report へ（started の一部と ended、記録だけ）。 */
+  private readonly breathSignals = new BreathSignalReporter(
+    (cueId) => (cueId !== null ? (this.breathCandidates.get(cueId) ?? this.prepareCandidate) : this.prepareCandidate),
+    (event) => {
+      const signal: SignalReport = {
+        type: 'signal.report',
+        candidate_id: event.candidate_id,
+        phase: event.phase,
+        state: event.state,
+        visible: true,
+        client_t_ms: { value: event.client_t_ms },
+      };
+      this.record.signalReports.push(signal);
+      this.audio?.send(signal);
+    },
+  );
+
   constructor(private readonly options: ParticipantOptions) {}
 
   current(): ParticipantView {
@@ -300,8 +326,14 @@ export class ParticipantController {
       case 'breath.prepare': {
         const breath = breathOf(this.options.avatar());
         this.record.breathCommands.push({ type: message.type, cue_id: null, client_t_ms: performance.now(), breath: breath !== null });
+        this.prepareCandidate = message.candidate_id;
+        this.bindBreathPhases();
         breath?.prepareShort?.(DEFERRED_SPEECH_PREP_MS);
-        setTimeout(() => breath?.release('speech_started'), DEFERRED_SPEECH_PREP_MS);
+        this.clearPrepareTimer();
+        this.prepareTimer = setTimeout(() => {
+          this.prepareTimer = null;
+          breath?.release('speech_started');
+        }, DEFERRED_SPEECH_PREP_MS);
         break;
       }
       case 'session.status':
@@ -329,6 +361,10 @@ export class ParticipantController {
     });
     // アバターがなければ描いていないので報告しない（Node は合図を出した記録だけを持つ）。
     if (breath === null) return;
+    // Node の解除が先に来たら、予約した短い準備の後の発声はしない（撤回の後に声を出さない）。
+    if (message.type === 'breath.release') this.clearPrepareTimer();
+    if (message.type === 'breath.cue') this.noteBreathCandidate(message.cue_id, message.candidate_id);
+    this.bindBreathPhases();
     // アバターが受け付けなかった合図（吸気中の二重の吸気、話している間の吸気、もう戻っている脱力など）は描かれていない。
     const applied =
       message.type === 'breath.cue'
@@ -354,7 +390,31 @@ export class ParticipantController {
     else requestAnimationFrame((t) => report(true, t));
   }
 
+  /** 吸気の局面の報告をアバターへつなぐ（アバターの作り直しに備えて毎回確かめる）。 */
+  private bindBreathPhases(): void {
+    const avatar = this.options.avatar();
+    if (avatar === null || avatar === this.breathReportedAvatar) return;
+    this.breathReportUnsubscribe?.();
+    this.breathReportedAvatar = avatar;
+    const subscribe = (avatar as Avatar & { onBreathPhase?: Avatar['onBreathPhase'] }).onBreathPhase;
+    this.breathReportUnsubscribe = subscribe?.call(avatar, (event: BreathPhaseEvent) => this.breathSignals.onPhase(event)) ?? null;
+  }
+
+  private noteBreathCandidate(cueId: string, candidateId: string): void {
+    this.breathCandidates.set(cueId, candidateId);
+    if (this.breathCandidates.size > 16) this.breathCandidates.delete(this.breathCandidates.keys().next().value as string);
+  }
+
+  private clearPrepareTimer(): void {
+    if (this.prepareTimer !== null) clearTimeout(this.prepareTimer);
+    this.prepareTimer = null;
+  }
+
   async stop(): Promise<void> {
+    this.clearPrepareTimer();
+    this.breathReportUnsubscribe?.();
+    this.breathReportUnsubscribe = null;
+    this.breathReportedAvatar = null;
     if (this.raf !== null) cancelAnimationFrame(this.raf);
     this.raf = null;
     this.analyser = null;

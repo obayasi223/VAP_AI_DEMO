@@ -23,6 +23,7 @@ import { CURRENT_PROMPT_VERSION, parseConversationKindProfile } from '../../src/
 import type { SessionLog, SessionManifestDetails } from '../../src/logging';
 import type { MaaiClientListeners, MaaiWorkerClient } from '../../src/maai';
 import { Session } from '../../src/session/session';
+import type { SessionOptions } from '../../src/session/session';
 
 export const repoRoot = join(import.meta.dirname, '..', '..', '..', '..');
 export const productionJaPolicy = (): PolicyJa =>
@@ -184,7 +185,7 @@ function stagedSetup(timing_strategy: 'llm' | 'immediate'): Pick<InitiativeSetup
 }
 
 export async function createRig(
-  options: { policy?: Policy; maai?: boolean; reply?: string; initiative?: RigInitiative; condition?: Condition } = {},
+  options: { policy?: Policy; maai?: boolean; reply?: string; initiative?: RigInitiative; condition?: Condition; sessionAudio?: SessionOptions['sessionAudio'] } = {},
 ): Promise<Rig> {
   const time = new ManualTimeSource(1000);
   const events = new MemoryEventSink();
@@ -250,6 +251,7 @@ export async function createRig(
     providers,
     maai: maai as unknown as MaaiWorkerClient | null,
     ...(maai === null ? { maaiUnavailableReason: 'maai_disabled_in_test' } : {}),
+    ...(options.sessionAudio ? { sessionAudio: options.sessionAudio } : {}),
     tickTimer: false,
   });
   const link = new FakeLink();

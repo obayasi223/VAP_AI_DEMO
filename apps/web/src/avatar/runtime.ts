@@ -146,6 +146,8 @@ export interface Avatar {
   advanceTime(ms: number): void;
   /** 発話希望の準備吸気（H2）。フレームの更新はランタイムが行う。 */
   readonly breath: BreathController;
+  /** 吸気の phase の遷移（rAF 時刻つき）を受ける。戻り値で解除する。signal.ended の報告に使う（participant.ts）。 */
+  onBreathPhase(listener: (event: BreathPhaseEvent) => void): () => void;
   /** 呼吸のパラメータの部分的な上書き（確認ページ用）。 */
   setBreathParams(patch: { normal?: Partial<NormalBreathParams>; prep?: Partial<PrepBreathParams> }): void;
   getBreathParams(): BreathParams;
@@ -231,13 +233,17 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
   const blinkLayer = new BlinkLayer(blinkScheduler);
   const mouthLayer = new MouthLayer(lipSync);
   const expression = new ExpressionLayer(rng, () => mouthOpenAmount(mouthLayer.shape));
+  const breathPhaseListeners = new Set<(event: BreathPhaseEvent) => void>();
   const breath = new BreathLayer(rng, {
     output: { chest: breathMorph.chestBone },
     speechOpen: () => mouthOpenAmount(mouthLayer.shape),
     setIdleScale: (scale) => {
       idle.suppression = scale;
     },
-    onPhase: (event) => options.onBreathPhase?.(event),
+    onPhase: (event) => {
+      options.onBreathPhase?.(event);
+      for (const listener of breathPhaseListeners) listener(event);
+    },
   });
   stack.add(new RestPoseLayer());
   stack.add(idle);
@@ -414,6 +420,10 @@ export async function createAvatar(options: AvatarOptions): Promise<Avatar> {
       placeCamera(currentFraming);
     },
     breath,
+    onBreathPhase: (listener) => {
+      breathPhaseListeners.add(listener);
+      return () => breathPhaseListeners.delete(listener);
+    },
     setBreathParams: (patch) => {
       breath.params = mergeBreathParams(breath.params, patch);
     },

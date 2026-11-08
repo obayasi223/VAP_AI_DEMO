@@ -133,6 +133,7 @@ http://localhost:3000/research?source=ws&url=ws://localhost:8787/research
   - `events.jsonl`：すべてのイベント
   - `manifest.json`：条件（`condition`）、方策（`policy_id`）、プロバイダごとの区分（`providers`、`production`／`test_double`／`unavailable`）、版、終了の状態。`log:check` はこの区分を必ず見て、`production` 以外が1つでもあれば受け入れの証拠に数えません。
   - `quarantine.jsonl`：契約に合わなかったもの。空が正常です。
+  - `session_audio.wav` と `session_audio_sync.jsonl`：**`SAVE_SESSION_AUDIO=1` のときだけ**できます（9 節）。既定では音声を保存しません。`manifest.json` の `session_audio` と、セッション開始時の起動ログに、保存の有無が残ります。
 - 記録が契約どおりかを調べ、遅延の内訳を出すコマンドです。
 
 ```bash
@@ -212,6 +213,12 @@ npm run dev:tune
 | AI の連続発話 | 前の AI の発話が終わってから開始まで、利用者の声（vad[0]）が一度もない開始 |
 | 視線を逸らした回数と長さ | `gaze.decision` が away に変わった回数と、user へ戻るまでの長さ |
 
+**発話の結果（観測に基づく推定）**
+
+- 録音の再生の「発話の結果」の表に、`turn.outcome` のラベル（`suspected_premature_start`、`user_overlap`、`spoke_twice` など）の件数を記録と再計算で並べます。開始の一覧と時間軸の「結果（推定）」の帯にも、発話ごとに出ます。定義と暫定の閾値は `docs/known_gaps.md` §14 です。
+- ラベルは機械的な推定で、確定した失敗ではありません。再計算の側は反実仮想です（開始が変わっても人の声と ASR は記録のまま）。
+- `turn.outcome` のない古いログは、記録の入力から同じ規則で算出します。
+
 **良い値を使う**
 
 1. 画面の「config/policy.ja.local.json に保存」を押します。いまの作業ツリーの `config/policy.ja.json` との差分だけが書かれます。このファイルは git に入りません。正本の `config/policy.ja.json` は書き換えません。
@@ -232,6 +239,17 @@ npm run dev:tune
 
 ## 8. 発話希望の評価画面（`npm run review:initiative`）
 
+各判定の詳細の「発話」の欄に、その発話の `turn.outcome`（結果のラベルと開始の時点の値）が出ます。
+
+**セッションごとの結果の一覧**（文は出力しない）:
+
+```bash
+npx tsx tools/latency_report/turn_outcomes.ts sessions/<id>           # 1件ごとの一覧と中央値（--json、--policy <file>、--replay）
+```
+
+`turn.outcome` のない古いログは、記録の入力から同じ規則で算出します。`--replay` は開始を計算し直した値（反実仮想）です。
+
+
 自然な実音声での発話希望の妥当性を、研究者が1判定ずつ見て評価する画面です。**回数や発生率ではなく、内容と申し出る時点の適切さを見るための道具です。** 画面に件数の集計は出しません。
 
 ```bash
@@ -242,7 +260,8 @@ npm run review:initiative -- --port 8792  # ポートを変えるとき
 - 127.0.0.1 からだけ受けます。`sessions/` の外へは何も送りません。実 API も使いません。画面の写しや書き出しを外へ出さないでください（利用者の発話が入っています）。
 - 評価者の名前を入れると評価できます。別の人の評価の中身は画面に出しません（独立に評価するため）。
 - 絞り込み: 会話の種類とプロンプトの版。会話の種類は `manifest.json` の `conversation_kind`（`initiative` の下でも可）を使います。まだ記録されていないセッションは `persona: <persona_id>` と出ます（推測で種類を当てません）。
-- 音声: `sessions/<id>/` に音声（`.wav`、`.webm`、`.ogg`、`.oga`、`.mp3`、`.m4a`、`.flac`）を置くと、判定の時点の少し前から再生できます。音声の先頭が音声枠 0 の時刻である前提です。
+- 音声: `SAVE_SESSION_AUDIO=1` で保存した `session_audio.wav` は、`session_audio_sync.jsonl` の対応で再生の位置を引き（9 節）、詳細画面の音声の欄に波形と印を同じ時間軸で並べます。
+  - 別の音声（`.wav`、`.webm`、`.ogg`、`.oga`、`.mp3`、`.m4a`、`.flac`）を `sessions/<id>/` に置いても再生できます。そのときは音声の先頭が音声枠 0 の時刻である前提で、`vap.state` の組から位置を求めます（波形と印は出ません）。
 
 **評価の欄**（別々に保存します。計画 §4.5a の3列）
 
@@ -258,3 +277,39 @@ npm run review:initiative -- --port 8792  # ポートを変えるとき
 **保存**: `sessions/<id>/initiative_review/<評価者>.json`（`sessions/` ごと git の対象外）。評価者ごとに別のファイルです。入力すると 0.5 秒後に自動で保存します。同じ評価者を2つの画面で開いて編集すると、後から保存した方は「別の画面で先に保存された」と出ます。
 
 **試験**: ルートの vitest の対象に入っていないので、`npx vitest run --config tools/initiative_review/vitest.config.ts` で動かします。
+
+## 9. 自己実験の手順（音声の保存と照合）
+
+研究者本人の声で、音声、イベントログ、吸気のタイミングを照合するときの手順です。**音声の保存は既定で OFF です。** 明示的に設定したときだけ保存します。
+
+**他の人の声は保存しないでください。** 参加者実験の同意の取得と保存の方法は別途整備します（`docs/known_gaps.md` の 13）。それまでは本人の自己実験だけに使います。
+
+**ON にする**
+
+```bash
+SAVE_SESSION_AUDIO=1 npm run dev:orchestrator
+# 使い終わったら環境変数を外して起動し直す（.env に書くと常に ON になるので、書かないほうが安全）
+```
+
+- セッションの開始時にターミナル1へ `session audio: SAVING ...` と出ます。出ないときは保存していません（`not saved` と出ます）。
+- `sessions/<id>/manifest.json` の `session_audio.saved` で結果を確かめます。
+- `sessions/` は git の対象外です。音声を外へ写さないでください。
+
+**保存される形式**
+
+| ファイル | 内容 |
+|---|---|
+| `session_audio.wav` | 2ch、16kHz、PCM 16bit。ch1 = マイク、ch2 = AI の再生音声。MaAI に渡している上りの枠と同じ順序と時刻。容量は約 3.84MB／分（約 230MB／時） |
+| `session_audio_sync.jsonl` | 音声の位置（`wav_sample`、`audio_frame`）と `t_monotonic_ms` の対応（約 1 秒ごとの `anchor`）、欠落（`gap`）、終了（`end`） |
+
+- 空きが `SAVE_SESSION_AUDIO_MIN_FREE_MB`（既定 1024）を下回ると、始めない、または途中で止めます。会話は続きます。理由は `manifest.json` の `session_audio.stop_reason` と、研究者画面の `session_audio` の状態に出ます。
+- 書き込みが遅れても制御は止まりません。追いつかない分は無音に置き換え、`gap`（`queue_overflow`）として残します（WAV の位置は実時間のままです）。ブラウザの切断などで届かなかった区間も無音で埋めて `gap`（`client_gap`）に残します。60 秒より長い欠落は埋めず、対応の区間を分けます。
+- 異常終了でも WAV のヘッダは約 2 秒ごとに更新しているので、最後の数秒以外は読めます。
+
+**照合する**
+
+1. `npm run review:initiative` で評価画面を開き、セッションと判定を選びます。
+2. 詳細の「音声」の欄で再生すると、同じ時間軸にマイクと AI の波形、判定（生成段、タイミング段）、吸気の合図の送信、描画の開始と終了、`breath.release` の理由、発話の開始と終了が並びます。波形をクリックするか、表の「ここへ」でその位置へ移ります。
+3. 欄の下に出る精度を確かめます。「音声の対応の幅」は枠を受信した時刻の揺れ（anchor は窓の中で最も遅れの小さい枠）、「ブラウザの時計の誤差」は `clock.sync`（`browser_rtt`）の推定です。描画と発話の時刻はブラウザの時計を記録時に orchestrator の時計へ写したもので、表の各行に誤差を出します。
+
+**時刻の精度の目安**: 音声の位置と `t_monotonic_ms` の対応は、受信の遅れ（ブラウザの Worker から Node まで、数 ms〜数十 ms）を含みます。`vap.state` の組（推論の遅れを含み、数百 ms ずれる）より小さい誤差です。音声の枠は 20ms 単位です。

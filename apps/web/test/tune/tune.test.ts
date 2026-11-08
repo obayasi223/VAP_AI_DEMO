@@ -4,9 +4,10 @@ import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { VALID_FIXTURES } from '../../../../packages/contracts/src/fixtures';
 import { PolicyJa, type TuneMetricSet, type TunePolicyLeaf, type TurnDiagnosticBody } from '@llm-vap/contracts';
 import { createFakeEventScript } from '../../src/research/fake_events';
-import { allowedSpans, avertSpans, quantile, voicedSpans } from '../../src/tune/chart_spec';
+import { allowedSpans, avertSpans, outcomeBand, quantile, voicedSpans } from '../../src/tune/chart_spec';
 import { buildInitiativeFlow } from '../../src/tune/initiative_flow';
 import { TuneLiveStore } from '../../src/tune/live_store';
 import { parseOfflineLog } from '../../src/tune/offline_log';
@@ -165,5 +166,41 @@ describe('表と区間', () => {
     ]);
     expect(quantile([1, 2, 3, 4], 0.5)).toBe(2.5);
     expect(quantile([], 0.5)).toBeNull();
+  });
+
+  it('発話希望の流れは二段判定（desire／timing）を読む。未知の項目は除いて読む（古いと新しいの混在で落とさない）', () => {
+    const fixture = (name: string) => {
+      const found = VALID_FIXTURES.events.find((f) => f.name === name);
+      if (!found) throw new Error(name);
+      return { ...(found.value as Record<string, unknown>), added_by_someone_else: 42 };
+    };
+    const desire = fixture('initiative.desire');
+    const timing = fixture('initiative.timing/immediate');
+    const log = parseOfflineLog([JSON.stringify(desire), JSON.stringify(timing)].join('\n'));
+    const decisions = log.flow.filter((r) => r.kind === 'decision');
+    expect(decisions.map((r) => (r.kind === 'decision' ? r.row.decision : ''))).toEqual(['NEW', 'OFFER_NOW']);
+    expect(log.invalid).toBe(0);
+  });
+
+  it('ライブの結果の帯: ラベルの名前で読める（色だけで区別しない）', () => {
+    const outcome = {
+      event: 'turn.outcome' as const,
+      kind: 'no_response' as const,
+      labels: { value: ['no_response_after_user_yield'] as ('no_response_after_user_yield')[] },
+      segment_id: 1,
+      transcript_revision: { value: 1 },
+      waited_ms: 4000,
+      last_user_voice_at: { value: 1000 },
+      asr_chars: 3,
+      asr_is_final: true,
+      wait_state: 'not_permitted' as const,
+      vap_freshness: 'fresh' as const,
+      p_now: { value: 0.2 },
+      p_future: { value: 0.2 },
+      completion_p: { value: 0.1 },
+      decision_source: { value: 'vap' },
+    };
+    const band = outcomeBand('結果', [outcome], { flagged: 'r', clean: 'g', unsettled: 'y' });
+    expect(band.spans[0]).toMatchObject({ start: 1000, end: 5000, color: 'r', label: 'no_response_after_user_yield' });
   });
 });

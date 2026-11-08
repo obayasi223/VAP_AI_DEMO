@@ -27,7 +27,11 @@ import type { ConversationKind, TimingStrategy } from '@llm-vap/contracts';
 
 const CONDITIONS: Condition[] = ['reactive', 'initiative_inhale', 'initiative_no_cue'];
 const isCondition = (value: string | null | undefined): value is Condition => CONDITIONS.includes(value as Condition);
-const CONVERSATION_KINDS: ConversationKind[] = ['joint_thinking', 'companion'];
+// 既知の種類に、環境変数と URL で足せる（種類は config/conversation_kind.<id>.ja.json の ID）。コードを変えずに種類を増やすため。
+const CONVERSATION_KIND_ID = /^[a-z][a-z0-9_]{0,63}$/;
+const CONVERSATION_KINDS: ConversationKind[] = [
+  ...new Set(['joint_thinking', 'companion', ...(process.env.NEXT_PUBLIC_CONVERSATION_KINDS ?? '').split(',').map((k) => k.trim()).filter((k) => CONVERSATION_KIND_ID.test(k))]),
+];
 const TIMING_STRATEGIES: TimingStrategy[] = ['llm', 'immediate', 'v2'];
 
 /** URL、環境変数の順で初期値を読む。どちらもなければ null（未選択で orchestrator の既定に任せる）。 */
@@ -104,10 +108,14 @@ export default function ParticipantPage() {
   const [avatarStatus, setAvatarStatus] = useState('アバターを読み込み中…');
   const [condition, setCondition] = useState<Condition | null>(null);
   const [conversationKind, setConversationKind] = useState<ConversationKind | null>(null);
+  const [kindChoices, setKindChoices] = useState<ConversationKind[]>(CONVERSATION_KINDS);
   const [timingStrategy, setTimingStrategy] = useState<TimingStrategy | null>(null);
   useEffect(() => {
     setCondition(initialCondition());
-    setConversationKind(initialChoice('conversation_kind', process.env.NEXT_PUBLIC_DEFAULT_CONVERSATION_KIND, CONVERSATION_KINDS));
+    const urlKind = new URLSearchParams(window.location.search).get('conversation_kind');
+    const kinds = urlKind !== null && CONVERSATION_KIND_ID.test(urlKind) && !CONVERSATION_KINDS.includes(urlKind) ? [...CONVERSATION_KINDS, urlKind] : CONVERSATION_KINDS;
+    setKindChoices(kinds);
+    setConversationKind(initialChoice('conversation_kind', process.env.NEXT_PUBLIC_DEFAULT_CONVERSATION_KIND, kinds));
     setTimingStrategy(initialChoice('timing_strategy', process.env.NEXT_PUBLIC_DEFAULT_TIMING_STRATEGY, TIMING_STRATEGIES));
   }, []);
 
@@ -234,7 +242,7 @@ export default function ParticipantPage() {
                   />{' '}
                   指定しない（サーバーの既定）
                 </label>
-                {CONVERSATION_KINDS.map((k) => (
+                {kindChoices.map((k) => (
                   <label key={k} style={styles.conditionLabel}>
                     <input
                       type="radio"
@@ -243,7 +251,7 @@ export default function ParticipantPage() {
                       checked={conversationKind === k}
                       onChange={() => setConversationKind(k)}
                     />{' '}
-                    {CONVERSATION_KIND_LABELS[k]}
+                    {CONVERSATION_KIND_LABELS[k] ?? k}
                   </label>
                 ))}
               </fieldset>

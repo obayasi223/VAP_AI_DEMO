@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createWsFeed } from '../research/feed';
 import { CHART_COLORS, TuneChart, type ChartSpec } from './TuneChart';
-import { allowedSpans, avertSpans, completionLane, gapLane, vapLanes, voicedSpans } from './chart_spec';
+import { allowedSpans, avertSpans, completionLane, gapLane, outcomeBand, vapLanes, voicedSpans } from './chart_spec';
 import { LIVE_WINDOW_MS, TuneLiveStore, type LiveSnapshot } from './live_store';
 import { getAt, thresholdLines } from './policy_edit';
 import { DiagnosticTable, FlowTable } from './TuneTables';
@@ -41,6 +41,7 @@ export function liveChartSpec(s: LiveSnapshot): ChartSpec | null {
         marks: [],
       },
       { name: '視線を逸らす', spans: avertSpans(s.gaze, t1).map((a) => ({ ...a, color: CHART_COLORS.gaze })), marks: [] },
+      outcomeBand('発話の結果（推定）', s.outcomes, { flagged: CHART_COLORS.guard, clean: CHART_COLORS.muted, unsettled: CHART_COLORS.initiative }),
       {
         name: '発話希望',
         spans: [],

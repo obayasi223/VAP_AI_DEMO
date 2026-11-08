@@ -2,7 +2,10 @@
  * 開発用の HTTP の口（apps/orchestrator/src/dev/dev_server.ts、`npm run dev:tune`）の呼び出し。
  * 既定の宛先は http://127.0.0.1:8790。画面のクエリ ?dev=http://127.0.0.1:<port> で変えられる。
  */
-import type { Policy, TunePolicyLeaf, TuneReplayResult, TuneSessionSummary } from '@llm-vap/contracts';
+import type { Policy, TunePolicyLeaf, TuneReplayResult, TuneSessionSummary, TuneTurnOutcomes } from '@llm-vap/contracts';
+
+/** /dev/replay の返事（AI の発話の結果の比較つき）。 */
+export type TuneReplayWithOutcomes = TuneReplayResult & { outcomes: TuneTurnOutcomes };
 
 export const DEFAULT_DEV_URL = 'http://127.0.0.1:8790';
 export const DEFAULT_LIVE_WS = 'ws://localhost:8787/research?tune=1';
@@ -33,7 +36,7 @@ export function createDevApi(base: string) {
     events: (id: string) => call<string>(base, `/dev/sessions/${encodeURIComponent(id)}/events`),
     policy: () => call<PolicyInfo>(base, '/dev/policy'),
     replay: (body: { session_id: string; policy: unknown; options?: { assumed_prepare_ms?: number; assumed_speech_ms?: number }; recorded_policy?: 'head' | 'current' }, signal?: AbortSignal) =>
-      call<TuneReplayResult>(base, '/dev/replay', {
+      call<TuneReplayWithOutcomes>(base, '/dev/replay', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),

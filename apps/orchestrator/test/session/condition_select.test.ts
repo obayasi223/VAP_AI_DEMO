@@ -108,7 +108,7 @@ describe('研究条件の切替（セッション単位）', () => {
         conversation_kind: 'companion',
         conversation_kind_source: 'client',
         timing_strategy_source: 'client',
-        desire_prompt_version: 'initiative-desire-ja-v1',
+        desire_prompt_version: 'initiative-desire-ja-v2',
         profile_version: 1,
       });
     });

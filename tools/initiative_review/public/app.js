@@ -1,6 +1,8 @@
 // 評価画面の本体。ビルドなしの素の JS。ログの文字はすべて textContent で入れる（innerHTML は使わない）。
 // 他の評価者の評価の中身は取りにいかない（評価の独立のため）。回数や発生率は出さない。
 
+import { renderAudioTimeline } from '/audio_timeline.js';
+
 const PROVENANCE_LABEL = { model_output: 'LLM 生成', verified: 'コードの検証', code: 'コード' };
 
 const AXES = {
@@ -332,11 +334,23 @@ function timelineTable(item) {
   );
 }
 
+// その発話の結果（turn.outcome）。ラベルは音声と ASR からの機械的な推定で、確定した失敗ではない。
+function outcomeBlock(outcome) {
+  if (!outcome) return null;
+  const label = outcome.labels === null ? `分類なし（${outcome.null_reason ?? '理由なし'}）` : outcome.labels.length === 0 ? 'ラベルなし' : outcome.labels.join('、');
+  return el(
+    'div',
+    { class: 'meta' },
+    el('b', { text: `結果（観測に基づく推定）: ${label}` }),
+    ...outcome.fields.map((f) => el('div', { text: `${f.label}: ${f.value}` })),
+  );
+}
+
 function actualBlock(item) {
   if (item.kind !== 'candidate') return el('p', { class: 'note', text: '候補にならなかった判定なので、吸気も発話もありません。' });
   const rows = [
     ...item.inhale.map((s) => el('tr', {}, el('th', { text: `合図 ${s.phase}` }), el('td', { text: `送信 ${fmtT(s.sent_at)} ／ 描画開始 ${fmtT(s.started_at)} ／ 終了 ${fmtT(s.ended_at)}${s.visible === false ? '（描画なし）' : ''}` }))),
-    ...item.speech.map((s) => el('tr', {}, el('th', { text: '発話' }), el('td', {}, `開始 ${fmtT(s.started_at)} ／ 終了 ${fmtT(s.ended_at)}`, el('div', { class: 'meta', text: s.spoken_text ?? '（発話文の記録なし）' })))),
+    ...item.speech.map((s) => el('tr', {}, el('th', { text: '発話' }), el('td', {}, `開始 ${fmtT(s.started_at)} ／ 終了 ${fmtT(s.ended_at)}`, el('div', { class: 'meta', text: s.spoken_text ?? '（発話文の記録なし）' }), outcomeBlock(s.outcome)))),
   ];
   return rows.length === 0 ? el('p', { class: 'note', text: '吸気も発話も起きていません。' }) : el('table', {}, rows);
 }
@@ -392,7 +406,7 @@ function audioBlock(tMs, audioSec) {
     if (player.readyState >= 1) seek();
     else player.addEventListener('loadedmetadata', seek, { once: true });
   };
-  return el(
+  const row = el(
     'div',
     { class: 'audio-row' },
     player,
@@ -401,6 +415,11 @@ function audioBlock(tMs, audioSec) {
     el('button', { class: 'primary', disabled: audioSec === null, onclick: play, text: `${fmtT(tMs)} の時点を再生` }),
     audioSec === null ? el('span', { class: 'note', text: '音声枠と時刻の対応が記録にありません。' }) : null,
   );
+  // 保存した音声（2ch の WAV と同期ファイル）なら、同じ時間軸に波形と合図、発話、判定の時刻を並べる。
+  if (audioSec === null || files[0] !== 'session_audio.wav') return row;
+  const timeline = el('div', { class: 'audio-timeline-host' });
+  void renderAudioTimeline(timeline, { sessionId: state.sessionId, player, centerSec: audioSec, fmtT });
+  return el('div', {}, row, timeline);
 }
 
 function renderDetail() {

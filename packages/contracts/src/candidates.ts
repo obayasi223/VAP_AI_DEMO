@@ -36,6 +36,8 @@ export const CandidateCause = z.enum([
   'active_candidate_exists',
   'signal_cooldown',
   'normal_response_started',
+  /** 候補の音声を発声の前に用意できなかった（TTS の失敗、吸気の後の期限切れ）。内容の撤回でも期限切れでもない。 */
+  'audio_unavailable',
   'speech_finished',
   'speech_interrupted',
   /** 再生の途中で D が失敗した（SPEAKING を終端する）。 */
@@ -78,18 +80,29 @@ export type CandidateRejectReason = z.infer<typeof CandidateRejectReason>;
 
 /**
  * 発話希望の二段判定（docs/initiative_v3_design.md）。
- * 会話の種類。種類ごとの persona と観点は config/conversation_kind.*.ja.json。
+ * 会話の種類の ID。種類ごとの persona と判定の条件は config/conversation_kind.<id>.ja.json にあり、ID はそのファイル名の <id>。
+ * 種類を増やすのにコードを変えない（ここは形式だけを検証する。実在の確認はファイルの読み込みで行う）。
  */
-export const ConversationKind = z.enum(['joint_thinking', 'companion']);
+export const ConversationKind = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 export type ConversationKind = z.infer<typeof ConversationKind>;
 
 /** タイミング段の方式。llm=希望があるときだけ2回目の LLM、immediate=希望が出たら次の機会に申し出る、v2=既存の1段判定。 */
 export const TimingStrategy = z.enum(['llm', 'immediate', 'v2']);
 export type TimingStrategy = z.infer<typeof TimingStrategy>;
 
-/** タイミング段の判定（話の途中で申し出る／話し終わりまで待つ／取り下げる）。NONE/NEW/KEEP/REVISE/WITHDRAW とは別の軸。 */
+/**
+ * タイミング段の判定（話の途中で申し出る／話し終わりまで待つ）。NONE/NEW/KEEP/REVISE/WITHDRAW とは別の軸。
+ * WITHDRAW は initiative-timing-ja-v1 の時点の値（残っているログを読むために残す）。現在のタイミング段は出さない（撤回は生成段）。
+ */
 export const TimingVerdict = z.enum(['OFFER_NOW', 'WAIT_FOR_TURN_END', 'WITHDRAW']);
 export type TimingVerdict = z.infer<typeof TimingVerdict>;
+
+/**
+ * 内容の撤回の分類（生成段が付ける。docs/initiative_v3_design.md §4）。タイミングの「今は言わない」とは別の軸。
+ * 意味の定義は設計メモ。分類は LLM の判断で、ログでは ModelOutput で包む。
+ */
+export const ContentWithdrawKind = z.enum(['question_resolved', 'premise_changed', 'topic_moved']);
+export type ContentWithdrawKind = z.infer<typeof ContentWithdrawKind>;
 
 export interface CandidateRegistration {
   segment_id: number;
@@ -110,6 +123,11 @@ export interface CandidateRecord extends CandidateRegistration {
   candidate_version: number;
   state: CandidateState;
   updated_at: number;
+  /**
+   * 通常応答の開始を越えて保留を続けている（WAIT_FOR_TURN_END の候補）。元の根拠は前の segment にあり、今の安定テキストには
+   * 無いので、根拠の残存の検査と撤回の根拠の位置の検査は行わない（docs/initiative_v3_design.md §4）。
+   */
+  carried_over?: { from_segment_id: number; at: number };
 }
 
 export type CandidateContentPatch = Partial<

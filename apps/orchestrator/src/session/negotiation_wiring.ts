@@ -13,11 +13,12 @@
  * 撤回と改訂のときの未再生の PCM の破棄は E2a（ledger の discardCandidate）が行う。
  * 吸気の長さは orchestrator が決め、完了は orchestrator の時計で判定する（ブラウザの報告は記録だけ）。
  */
-import { absent, present } from '@llm-vap/contracts';
+import { absent, modelOutput, present } from '@llm-vap/contracts';
 import type {
   Condition,
   EventEmitter,
   NodeToBrowser,
+  PrepareRequest,
   PolicyJa,
   SignalReport,
   TimeMapping,
@@ -26,13 +27,16 @@ import { atFromBrowser } from '@llm-vap/contracts';
 import {
   initialNegotiatorState,
   negotiate,
+  observeCueReaction,
   reasonKey,
   releaseForSpeech,
   selectSpeech,
+  startCueReaction,
 } from '../control/negotiator';
 import type {
   CandidateAudio,
   CandidateView,
+  CueReaction,
   GateResult,
   NegotiatorAction,
   NegotiatorSettings,
@@ -41,6 +45,8 @@ import type {
 } from '../control/negotiator';
 import type { TurnState } from '../control';
 import type { SpeechGeneratorImpl, SpeechStateChange } from '../speech';
+import type { PendingResponseMaterial } from '../speech/response_prompt';
+import { PENDING_MATERIAL_PROMPT_VERSION, RESPONSE_PROMPT_VERSION } from '../speech/response_prompt';
 import type { InitiativeWiring } from './initiative_wiring';
 
 /** 方策と条件から交渉の設定を作る。negotiation の節がなければ null（候補を記録するだけ、波2の振る舞い）。 */
@@ -59,6 +65,7 @@ export function negotiatorSettings(policy: PolicyJa, condition: Condition, optio
     max_new_stable_chars_since_judgement: maxChars,
     cue_max_judgement_age_ms: maxAge,
     ...(options.timing_gate ? { timing_gate: true } : {}),
+    ...(n.cue_reaction_window_ms !== undefined ? { cue_reaction_window_ms: n.cue_reaction_window_ms } : {}),
   };
 }
 
@@ -79,13 +86,16 @@ export interface BeforeStepContext {
   ai_speaking: boolean;
   avatar_available: boolean;
   user_speaking: boolean;
+  /** VAP の AI 側の p_now（合図の後の反応の観測）。使えないときは null。 */
+  p_now_ai?: number | null;
 }
 
 export interface CandidateChoice extends Selection {
   candidate: CandidateView | null;
-  /** 候補を話すときの音声（D の audio_playback_id）と、E2a の記録の transcript_revision。 */
+  /** 候補を話すときの音声（D の audio_playback_id）と、E2a の記録の transcript_revision。user_text は人の発話（失敗の復帰用）。 */
   audio_playback_id: number | null;
   transcript_revision: number | null;
+  user_text: string | null;
 }
 
 interface PreparedAudio {
@@ -108,6 +118,8 @@ export class NegotiationWiring {
   private lastSelectionKey = '';
   /** 開始できなかった理由の最後（同じ理由を tick ごとに記録しない。lastSelectionKey とは別に持つ）。 */
   private lastNotStartedKey = '';
+  /** 観測中の合図の後の反応（合図ごと。窓の満了か AI の発話の開始か候補の解決で閉じる）。 */
+  private readonly reactions = new Map<string, CueReaction>();
   /** 棄てた候補の未再生の音声（撤回、改訂、期限）。D の状態の通知から。試験と研究者向け（JSONL には専用の項目がない）。 */
   readonly discardedAudio: { candidate_id: string; candidate_version: number; reason: string; chunks: number; samples: number }[] = [];
   /** 試験と研究者向けの数。 */
@@ -133,8 +145,9 @@ export class NegotiationWiring {
       user_speaking: ctx.user_speaking,
     });
     this.state = step.state;
-    for (const action of step.actions) this.apply(action, ctx.now);
+    for (const action of step.actions) this.apply(action, ctx.now, ctx);
     if (step.gate !== null) this.logGate(step.gate);
+    this.observeReactions(ctx);
     return step.hold_start === null || this.state.cue === null ? null : step.hold_start;
   }
 
@@ -159,6 +172,7 @@ export class NegotiationWiring {
       candidate: view,
       audio_playback_id: audio && view && audio.candidate_version === view.candidate_version ? audio.audio_playback_id : null,
       transcript_revision: record?.transcript_revision ?? null,
+      user_text: turn.asr_result,
     };
     // 許可がない間と、候補のない通常の応答は記録しない（tick ごとに出さない）。
     if (selection.choice === 'none') this.lastNotStartedKey = '';
@@ -226,12 +240,15 @@ export class NegotiationWiring {
 
   /** ブラウザの描画の報告（記録だけ。吸気の完了の判定には使わない）。 */
   onSignalReport(report: SignalReport, mapping: TimeMapping | null): boolean {
-    const cue = [...this.cues.values()].find((c) => c.candidate_id === report.candidate_id && this.phaseMatches(c, report.phase));
+    // Node の指示なしで始まる局面（保持 ready、短い準備、保持の上限の脱力）は同じ phase の合図がないので、その候補の最新の合図へ結びつける。
+    const ofCandidate = [...this.cues.values()].filter((c) => c.candidate_id === report.candidate_id);
+    const exact = ofCandidate.find((c) => this.phaseMatches(c, report.phase));
+    const cue = exact ?? ofCandidate.at(-1);
     if (cue === undefined || mapping === null) {
       this.counters.signal_reports_unmatched += 1;
       return false;
     }
-    const parameters = { ...cue.parameters, reported_phase: report.phase };
+    const parameters = { ...cue.parameters, reported_phase: report.phase, ...(exact ? {} : { report_origin: 'browser_without_command' }) };
     const client = report.client_t_ms.value;
     const nullReason = report.client_t_ms.value === null ? report.client_t_ms.null_reason : 'not_visible';
     if (report.state === 'started') {
@@ -267,15 +284,117 @@ export class NegotiationWiring {
     return true;
   }
 
+  /** 保留の希望（WAIT の候補）の持ち越しつきで、通常応答の開始を E2a へ伝える。吸気あり以外は従来どおり全部撤回。 */
+  onNormalResponseStarted(now: number): void {
+    const { ledger, monitor } = this.options.initiative;
+    const carries = this.settings.condition === 'initiative_inhale' && this.settings.timing_gate === true;
+    const carried = ledger.onNormalResponseStarted(
+      now,
+      carries ? (record) => record.state === 'INTENT_READY' && monitor.latestTiming(record.candidate_id, record.candidate_version)?.timing === 'WAIT_FOR_TURN_END' : undefined,
+    );
+    for (const ref of carried) {
+      const record = ledger.get(ref.candidate_id);
+      if (!record?.carried_over) continue;
+      this.options.emitter.emit({
+        event: 'initiative.not_offered',
+        candidate_id: ref.candidate_id,
+        candidate_version: ref.candidate_version,
+        segment_id: record.carried_over.from_segment_id,
+        at: now,
+        reason: 'wait_for_turn_end',
+      });
+    }
+  }
+
+  /** 通常応答の準備の時点で、保留中の希望（WAIT の候補）があれば材料として渡す。記録は「渡した」事実だけ（使われたかは分からない）。 */
+  responseMaterial(request: PrepareRequest, now: number): PendingResponseMaterial | null {
+    if (request.origin.kind !== 'response') return null;
+    if (this.settings.condition !== 'initiative_inhale' || this.settings.timing_gate !== true) return null;
+    const { ledger, monitor } = this.options.initiative;
+    for (const record of ledger.list()) {
+      if (record.state !== 'INTENT_READY') continue;
+      if (monitor.latestTiming(record.candidate_id, record.candidate_version)?.timing !== 'WAIT_FOR_TURN_END') continue;
+      this.options.emitter.emit({
+        event: 'initiative.response_material',
+        candidate_id: record.candidate_id,
+        candidate_version: record.candidate_version,
+        segment_id: request.segment_id,
+        transcript_revision: request.transcript_revision,
+        prompt_version: `${RESPONSE_PROMPT_VERSION}+${PENDING_MATERIAL_PROMPT_VERSION}`,
+        proposed_utterance: modelOutput(record.proposed_utterance),
+        at: now,
+      });
+      return { intent_type: record.intent_type, proposed_utterance: record.proposed_utterance };
+    }
+    return null;
+  }
+
+  /** セッションの終わりで、観測中の反応を閉じる。 */
+  finishReactions(now: number): void {
+    for (const [cue_id, reaction] of [...this.reactions]) this.closeReaction(cue_id, reaction, now, 'session_ended');
+  }
+
   private phaseMatches(cue: SentCue, phase: SignalReport['phase']): boolean {
     return phase === cue.parameters.phase_sent;
   }
 
   // ---- 内部 ----------------------------------------------------------------------
 
+  /** 観測中の合図を tick ごとに更新し、窓の満了、AI の発話の開始、候補の解決で閉じる。 */
+  private observeReactions(ctx: BeforeStepContext): void {
+    const ledger = this.options.initiative.ledger;
+    for (const [cue_id, reaction] of [...this.reactions]) {
+      const record = ledger.get(reaction.candidate_id);
+      const state = record?.state ?? null;
+      const next = observeCueReaction(reaction, ctx.now, { user_speaking: ctx.user_speaking, p_now_ai: ctx.p_now_ai ?? null, candidate_state: state });
+      const resolved = state === null || state === 'WITHDRAWN' || state === 'SPOKEN';
+      if (ctx.ai_speaking) this.closeReaction(cue_id, next, ctx.now, 'ai_speech_started');
+      else if (resolved) this.closeReaction(cue_id, next, ctx.now, 'candidate_withdrawn');
+      else if (ctx.now - next.cue_sent_at >= next.window_ms) this.closeReaction(cue_id, next, ctx.now, 'window');
+      else this.reactions.set(cue_id, next);
+    }
+  }
+
+  private closeReaction(cue_id: string, reaction: CueReaction, now: number, ended_by: 'window' | 'ai_speech_started' | 'candidate_withdrawn' | 'session_ended'): void {
+    this.reactions.delete(cue_id);
+    const speakingAtCue = reaction.user_speaking_at_cue;
+    const vap = (value: number | null) => (value === null ? absent('vap_unavailable') : present(value));
+    this.options.emitter.emit({
+      event: 'negotiation.cue_reaction',
+      cue_id,
+      candidate_id: reaction.candidate_id,
+      candidate_version: reaction.candidate_version,
+      cue_sent_at: reaction.cue_sent_at,
+      ended_at: now,
+      window_ms: reaction.window_ms,
+      ended_by,
+      observed_ms: Math.max(0, now - reaction.cue_sent_at),
+      ticks: reaction.ticks,
+      user_speaking_ticks: reaction.user_speaking_ticks,
+      user_speaking_at_cue: speakingAtCue,
+      user_speaking_at_end: reaction.last_user_speaking,
+      time_to_user_stop_ms: !speakingAtCue
+        ? absent('user_not_speaking_at_cue')
+        : reaction.user_stopped_at === null
+          ? absent('user_did_not_stop_in_window')
+          : present(Math.max(0, reaction.user_stopped_at - reaction.cue_sent_at)),
+      time_to_user_start_ms: speakingAtCue
+        ? absent('user_speaking_at_cue')
+        : reaction.user_started_at === null
+          ? absent('user_did_not_start_in_window')
+          : present(Math.max(0, reaction.user_started_at - reaction.cue_sent_at)),
+      p_now_ai_at_cue: vap(reaction.p_at_cue),
+      p_now_ai_at_end: vap(reaction.p_last),
+      p_now_ai_min: vap(reaction.p_min),
+      p_now_ai_max: vap(reaction.p_max),
+      candidate_states: reaction.states,
+    });
+  }
+
   /** 候補の先行音声。候補の文（proposed_utterance）をそのまま TTS へ。条件 reactive では作らない（話さないので費用だけかかる）。 */
   private prepareAudio(): void {
     if (this.settings.condition === 'reactive') return;
+    const { monitor } = this.options.initiative;
     const speech = this.options.speech();
     if (speech === null) return;
     const ledger = this.options.initiative.ledger;
@@ -283,6 +402,8 @@ export class NegotiationWiring {
     for (const record of ledger.list()) {
       live.add(record.candidate_id);
       if (record.state === 'SPEAKING') continue;
+      // 吸気ありの WAIT_FOR_TURN_END は話さないので作らない（OFFER_NOW に変わったらこの tick で作る）。
+      if (this.settings.condition === 'initiative_inhale' && record.state === 'INTENT_READY' && monitor.latestTiming(record.candidate_id, record.candidate_version)?.timing === 'WAIT_FOR_TURN_END') continue;
       const prepared = this.audio.get(record.candidate_id);
       if (prepared && prepared.candidate_version === record.candidate_version) continue;
       // 古い版の PCM は E2a が REVISE のときに棄てている（discardCandidate）。
@@ -323,7 +444,7 @@ export class NegotiationWiring {
     });
   }
 
-  private apply(action: NegotiatorAction, now: number): void {
+  private apply(action: NegotiatorAction, now: number, ctx?: BeforeStepContext): void {
     const ledger = this.options.initiative.ledger;
     switch (action.kind) {
       case 'cue': {
@@ -334,6 +455,15 @@ export class NegotiationWiring {
           return;
         }
         this.counters.cues += 1;
+        if (ctx && this.settings.cue_reaction_window_ms !== undefined) {
+          this.reactions.set(
+            action.cue_id,
+            startCueReaction(
+              { cue_id: action.cue_id, candidate_id: action.candidate_id, candidate_version: action.candidate_version, at: now, window_ms: this.settings.cue_reaction_window_ms },
+              { user_speaking: ctx.user_speaking, p_now_ai: ctx.p_now_ai ?? null, candidate_state: moved.to },
+            ),
+          );
+        }
         const parameters = { cue_id: action.cue_id, duration_ms: action.duration_ms, inhale_completion: 'orchestrator_clock', phase_sent: 'inhale' };
         this.cues.set(`${action.cue_id}:inhale`, { cue_id: action.cue_id, candidate_id: action.candidate_id, parameters });
         if (this.options.send({ type: 'breath.cue', cue_id: action.cue_id, candidate_id: action.candidate_id, duration_ms: action.duration_ms })) {
@@ -347,7 +477,7 @@ export class NegotiationWiring {
         ledger.transition(action.candidate_id, 'BREATH_HOLD_OR_READY', 'inhale_completed', now);
         return;
       case 'audio_abandoned': {
-        const record = ledger.transition(action.candidate_id, 'WITHDRAWN', 'expired', now, action.candidate_version);
+        const record = ledger.transition(action.candidate_id, 'WITHDRAWN', 'audio_unavailable', now, action.candidate_version);
         this.options.emitter.emit({
           event: 'negotiation.decision',
           stage: 'candidate_audio',

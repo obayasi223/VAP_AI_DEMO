@@ -16,13 +16,14 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { BrowserToNode, Condition, ConversationKind, SystemTimeSource, TimingStrategy } from '@llm-vap/contracts';
 import type { ClientHello, EmitOptions, EventDraft, EventEmitter, ResearchEvent, TimeSource } from '@llm-vap/contracts';
 import { openSessionLogging } from '../logging';
 import type { MaaiWorkerClient } from '../maai';
 import type { OrchestratorConfig } from '../app/config';
-import { createSessionProviders } from '../app/providers';
+import { conversationKindFile, createSessionProviders } from '../app/providers';
 import type { ChoiceSource, InitiativeChoice } from '../app/providers';
 import { Session, type BrowserLink } from '../session/session';
 import { handleResearchMessage, researchConfigMessage, type NoteTarget } from './research_channel';
@@ -353,7 +354,12 @@ export class OrchestratorServer {
   /** 会話の種類と方式の選択。画面の求めが正しく *_FROM_CLIENT が有効ならそれ、なければ既定。理由は起動ログと manifest の由来に残す。 */
   private sessionInitiativeChoice(requested: RequestedInitiative): InitiativeChoice {
     const { config } = this.options;
-    const kind = this.resolveChoice('conversation_kind', requested.conversation_kind, ConversationKind, config.conversation_kind, config.conversation_kind_from_client);
+    // 種類の ID は設定ファイルで決まる（形式が正しくてもファイルがなければ既定へ）。
+    const kindSchema = { safeParse: (v: unknown): { success: true; data: string } | { success: false } => {
+      const parsed = ConversationKind.safeParse(v);
+      return parsed.success && existsSync(conversationKindFile(parsed.data)) ? { success: true, data: parsed.data } : { success: false };
+    } };
+    const kind = this.resolveChoice('conversation_kind', requested.conversation_kind, kindSchema, config.conversation_kind, config.conversation_kind_from_client);
     const timing = this.resolveChoice('timing_strategy', requested.timing_strategy, TimingStrategy, config.timing_strategy, config.timing_strategy_from_client);
     return {
       conversation_kind: kind.value,

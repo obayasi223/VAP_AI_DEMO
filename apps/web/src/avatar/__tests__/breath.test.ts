@@ -434,8 +434,12 @@ describe('フレームへの出力', () => {
     step(500);
     expect(frame.expression('aa')).toBeGreaterThan(0);
     open = 0.3;
+    // 譲るのは滑らかに（1 フレームで切らない。切ると口がカクッと閉じる）。
+    const before = frame.expression('aa');
     step(DT);
-    expect(frame.expression('aa')).toBe(0);
+    expect(before - frame.expression('aa')).toBeLessThan(0.05);
+    step(300);
+    expect(frame.expression('aa')).toBeLessThan(0.001);
   });
 
   it('視線は既定では触らない。gazeToUser で相手へ寄せる', () => {
@@ -463,7 +467,10 @@ describe('フレームへの出力', () => {
     step(500);
     expect(idleScale.value).toBeCloseTo(1, 3);
     layer.startInhale({ cue_id: 'c', duration_ms: 450 });
-    step(300);
+    // 頭が一度に戻らないよう、吸気に重ねて下げる。
+    step(150);
+    expect(idleScale.value).toBeGreaterThan(0.5);
+    step(600);
     expect(idleScale.value).toBeLessThan(0.3);
   });
 });

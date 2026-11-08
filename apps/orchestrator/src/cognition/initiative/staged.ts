@@ -1,40 +1,43 @@
 /**
  * 発話希望の二段判定（docs/initiative_v3_design.md）。InitiativeMonitor の増分の起動から呼ばれる。
  *
- *   生成段（desire）: 言いたいことが生じたか、その内容だけを判定する。「今言うべきか」は判定しない。
- *   タイミング段（timing）: 未解決の希望を「話の途中で申し出る／話し終わりまで待つ／取り下げる」に分ける。
+ *   生成段（desire）: 言いたいことが生じたか（NONE／NEW）と、未解決の希望の内容がどうなったか（KEEP／REVISE／WITHDRAW）を判定する。
+ *     「今言うべきか」は判定しない。
+ *   タイミング段（timing）: 未解決の希望を「話の途中で申し出る／話し終わりまで待つ」に分ける。希望を消さない。
  *     方式は llm（希望があるときだけ2回目の呼び出し）、immediate（比較用、LLM を呼ばず次の機会に申し出る）。
  *     v2（既存の1段判定）はここを通らない。
  *
  * - 2つの段はプロンプト、出力の形、ログのイベント（initiative.desire、initiative.timing）を分ける。
- * - E2a（CandidateLedger）の入口は既存の applyModelDecision のまま。NEW と REVISE は生成段、WITHDRAW と KEEP はタイミング段が渡す。
- *   KEEP は「判定が古くない」の基準（last_request_id）を進めるためにも要る。
- * - タイミング段の判定は候補に結びついた値として持ち、合図の許可でも発声の許可でもない（第2段階で negotiator が読む）。
+ * - E2a（CandidateLedger）の入口は既存の applyModelDecision のまま。NEW／KEEP／REVISE／WITHDRAW はすべて生成段が渡す。
+ *   KEEP は「判定が古くない」の基準（last_request_id）を進めるためにも要る。タイミング段は E2a を変えない。
+ * - REVISE でも内容が実質同じなら（revise_min_utterance_similarity）維持として扱い、音声を作り直さない。基準は記録する。
+ * - タイミング段の判定は候補に結びついた値として持ち、合図の許可でも発声の許可でもない（negotiator が読む）。
  * - LLM が書いた理由は ModelOutput で包み、ゲートは読まない。
  * - 根拠の範囲: evidence_span は今話している側の安定テキストだけに照合する（E2a の照合と同じ）。
  *   過去のターンは prior_turn_evidence_span で文脈として示せるが、単独では根拠にならず、照合に失敗したら棄却する。
  */
-import { absent, modelOutput, modelOutputAbsent, present, verified } from '@llm-vap/contracts';
+import { ContentWithdrawKind, absent, modelOutput, modelOutputAbsent, present, verified } from '@llm-vap/contracts';
 import type {
   CandidateRecord,
   CandidateRef,
   ConversationHistoryReader,
   EventEmitter,
+  InitiativeDesireOutcome,
   LlmProvider,
   LlmResult,
   MaybeModelOutput,
   TimeSource,
   TimingStrategy,
-  TimingVerdict,
 } from '@llm-vap/contracts';
 import type { CandidateContent, CandidateModelNotes, DecisionMeta, DecisionResult, ModelDecision } from '../../control/candidates/types';
 import type { ConversationKindProfile } from './conversation_kind';
 import { failureReason } from './failure';
+import { SIMILARITY_METHOD, charNgramCosine } from '../similarity';
 import { checkEvidence, checkFreshness, checkPriorTurnEvidence, checkWithdrawEvidence } from './gate';
 import { recentTurnsFromHistory } from './recent_turns';
 import type { RecentContextLimits, RecentTurn } from './recent_turns';
 import { DESIRE_JSON_SCHEMA, TIMING_JSON_SCHEMA, parseDesireOutput, parseTimingOutput } from './staged_output';
-import type { DesireOutput, TimingOutput } from './staged_output';
+import type { DesireOutput, TimingChoice, TimingOutput } from './staged_output';
 import { CURRENT_DESIRE_PROMPT_VERSION, CURRENT_TIMING_PROMPT_VERSION, getDesirePrompt, getTimingPrompt } from './staged_prompt';
 import type { StagedPromptVersion } from './staged_prompt';
 import { normalizeForMatch } from './text';
@@ -51,6 +54,8 @@ export interface StagedOptions {
   timing_llm?: LlmProvider;
   /** 直近の会話の取り出し元。省略は直近の会話を渡さない（履歴を配線するまでの状態）。 */
   history?: Pick<ConversationHistoryReader, 'snapshot' | 'version'>;
+  /** REVISE を維持として扱う proposed_utterance の類似度の下限（policy.initiative.staged の暫定値）。省略は比較しない。 */
+  revise_min_utterance_similarity?: number;
 }
 
 /** 1回の判定の入力（段ごとに作り直す）。 */
@@ -91,13 +96,21 @@ export interface StagedDeps {
   options: StagedOptions;
 }
 
-/** 候補の最新のタイミング段の判定。第2段階で negotiator が読む。 */
+/** 候補の最新のタイミング段の判定。negotiator が読む。 */
 export interface LatestTiming {
-  timing: Exclude<TimingVerdict, 'WITHDRAW'>;
+  timing: TimingChoice;
   strategy: Exclude<TimingStrategy, 'v2'>;
   candidate_version: number;
   request_id: string;
   decided_at: number;
+}
+
+/** REVISE の前後の比較（コードの基準。記録するだけでなく、維持として扱うかの判断に使う）。 */
+interface ReviseComparison {
+  method: string;
+  similarity: number;
+  threshold: number;
+  same_intent_type: boolean;
 }
 
 interface StageContext {
@@ -227,7 +240,9 @@ export class StagedPipeline<I extends StagedInput> {
 
   /** 戻り値は「鮮度の上限を超えて棄てた」か。 */
   private applyDesire(input: I, output: DesireOutput, result: LlmResult, received_at: number, context: StageContext): boolean {
-    if (output.desire === 'NONE') {
+    // 未解決の希望があるときの NONE は「内容は変わらない」（プロンプトは KEEP を求めている）。維持として扱う。
+    const implicitKeep = output.desire === 'NONE' ? judgeableCandidate(input.candidates) : null;
+    if (output.desire === 'NONE' && implicitKeep === null) {
       const applied = this.deps.ledger.applyModelDecision({ decision: 'NONE', ...this.meta(input, received_at) });
       this.emitDesire(input, output, result, received_at, context, {
         ref: null,
@@ -237,6 +252,11 @@ export class StagedPipeline<I extends StagedInput> {
         outcome: applied.ok ? 'none' : 'rejected',
         ledger_reason: applied.ok ? ACCEPTED : present(applied.reason),
       });
+      return false;
+    }
+    if (output.desire === 'KEEP' || implicitKeep !== null) return this.applyContentKeep(input, output, result, received_at, context, implicitKeep);
+    if (output.desire === 'WITHDRAW') {
+      this.applyContentWithdraw(input, output, result, received_at, context);
       return false;
     }
 
@@ -269,6 +289,23 @@ export class StagedPipeline<I extends StagedInput> {
     }
 
     const priorFound = prior.ok ? prior.found : null;
+    const comparison = target ? this.reviseComparison(output, target) : null;
+    // REVISE でも内容が実質同じなら作り直さない（既知の問題: 小さな言い換えの繰り返しで音声を作り直していた）。根拠は通っている。
+    if (target && comparison !== null && comparison.same_intent_type && comparison.similarity >= comparison.threshold) {
+      const ref = { candidate_id: target.candidate_id, candidate_version: target.candidate_version };
+      const kept = this.deps.ledger.applyModelDecision({ decision: 'KEEP', ...this.meta(input, received_at), target: ref });
+      const lost = kept.ok && kept.to === 'WITHDRAWN';
+      this.emitDesire(input, output, result, received_at, context, {
+        ref: kept.ok ? ref : (kept.ref ?? ref),
+        evidence_segment_ids: null,
+        prior_found: priorFound,
+        gate_reasons: [],
+        outcome: !kept.ok ? 'rejected' : lost ? 'kept_evidence_lost' : 'revise_suppressed',
+        ledger_reason: kept.ok ? ACCEPTED : present(kept.reason),
+        revise_comparison: comparison,
+      });
+      return false;
+    }
     const content = this.content(output, target);
     const notes = this.notes(output);
     const applied =
@@ -290,6 +327,7 @@ export class StagedPipeline<I extends StagedInput> {
         gate_reasons: [],
         outcome: applied.held ? 'held' : 'rejected',
         ledger_reason: present(applied.reason),
+        ...(comparison !== null ? { revise_comparison: comparison } : {}),
       });
       return false;
     }
@@ -301,9 +339,102 @@ export class StagedPipeline<I extends StagedInput> {
       gate_reasons: [],
       outcome: output.desire === 'NEW' ? 'registered' : 'revised',
       ledger_reason: ACCEPTED,
+      ...(comparison !== null ? { revise_comparison: comparison } : {}),
     });
     this.host.prepareSpeech(ref, input, output.proposed_utterance);
     return false;
+  }
+
+  /** REVISE の前後の比較（proposed_utterance の文字 2-gram のコサインと意図の種類）。基準が未設定なら null。 */
+  private reviseComparison(output: DesireOutput, target: CandidateRecord): ReviseComparison | null {
+    const threshold = this.deps.options.revise_min_utterance_similarity;
+    if (threshold === undefined) return null;
+    return {
+      method: SIMILARITY_METHOD,
+      similarity: Math.min(1, charNgramCosine(target.proposed_utterance, output.proposed_utterance)),
+      threshold,
+      same_intent_type: output.intent_type === '' || output.intent_type === target.intent_type,
+    };
+  }
+
+  /** 内容の維持（KEEP）。鮮度を超えた結果は棄てて再判定する。E2a が根拠の残存を確かめる。 */
+  private applyContentKeep(input: I, output: DesireOutput, result: LlmResult, received_at: number, context: StageContext, implicit: CandidateRecord | null): boolean {
+    const target = implicit ?? input.candidates.find((c) => c.candidate_id === output.target_candidate_id);
+    const stale = this.freshnessReasons(input);
+    if (stale.length > 0) this.host.markStale();
+    if (!target || stale.length > 0) {
+      this.emitDesire(input, output, result, received_at, context, {
+        ref: null,
+        evidence_segment_ids: null,
+        prior_found: null,
+        gate_reasons: [...(target ? [] : ['target_candidate_not_in_input']), ...stale],
+        outcome: 'gate_rejected',
+        ledger_reason: absent('gate_rejected'),
+      });
+      return stale.length > 0;
+    }
+    const ref = { candidate_id: target.candidate_id, candidate_version: target.candidate_version };
+    const kept = this.deps.ledger.applyModelDecision({ decision: 'KEEP', ...this.meta(input, received_at), target: ref });
+    const lost = kept.ok && kept.to === 'WITHDRAWN';
+    this.emitDesire(input, output, result, received_at, context, {
+      ref: kept.ok ? ref : (kept.ref ?? ref),
+      evidence_segment_ids: null,
+      prior_found: null,
+      gate_reasons: [],
+      outcome: !kept.ok ? 'rejected' : lost ? 'kept_evidence_lost' : 'kept',
+      ledger_reason: kept.ok ? ACCEPTED : present(kept.reason),
+    });
+    return false;
+  }
+
+  /** 内容の撤回（WITHDRAW、分類つき）。タイミングの「今は言わない」とは別の経路。鮮度では棄却しない（安全側の判定なので）。 */
+  private applyContentWithdraw(input: I, output: DesireOutput, result: LlmResult, received_at: number, context: StageContext): void {
+    const target = input.candidates.find((c) => c.candidate_id === output.target_candidate_id);
+    const reasons: string[] = [];
+    if (!target) reasons.push('target_candidate_not_in_input');
+    const kind = ContentWithdrawKind.safeParse(output.withdraw_kind);
+    if (!kind.success) reasons.push('withdraw_kind_invalid');
+    if (target) {
+      const check = checkWithdrawEvidence({
+        span: output.withdraw_evidence_span,
+        segment_ids: output.withdraw_evidence_segment_ids,
+        input: input.segments,
+        latest: this.host.snapshot(),
+        candidate_evidence_span: target.evidence_span,
+        ...(target.carried_over ? { candidate_carried: true } : {}),
+      });
+      if (!check.ok) reasons.push(...check.reasons.map((r) => `withdraw_rejected:${r}`));
+    }
+    if (reasons.length > 0 || !target || !kind.success) {
+      this.emitDesire(input, output, result, received_at, context, {
+        ref: null,
+        evidence_segment_ids: null,
+        prior_found: null,
+        gate_reasons: reasons,
+        outcome: 'gate_rejected',
+        ledger_reason: absent('gate_rejected'),
+      });
+      return;
+    }
+    const applied = this.deps.ledger.applyModelDecision({
+      decision: 'WITHDRAW',
+      ...this.meta(input, received_at),
+      target: { candidate_id: target.candidate_id, candidate_version: target.candidate_version },
+      withdraw_evidence_span: output.withdraw_evidence_span,
+      withdraw_evidence_segment_ids: output.withdraw_evidence_segment_ids,
+      withdraw_reason: maybeText(output.withdraw_reason),
+      withdraw_kind: kind.data,
+    });
+    this.emitDesire(input, output, result, received_at, context, {
+      ref: applied.ok ? (applied.ref as CandidateRef) : applied.ref,
+      evidence_segment_ids: null,
+      prior_found: null,
+      gate_reasons: [],
+      outcome: applied.ok ? 'withdrawn' : 'rejected',
+      ledger_reason: applied.ok ? ACCEPTED : present(applied.reason),
+      withdraw: { kind: kind.data, reason: output.withdraw_reason, span: output.withdraw_evidence_span, segment_ids: applied.ok ? (applied.withdraw_evidence_segment_ids ?? null) : null },
+    });
+    if (applied.ok) this.verdicts.delete(target.candidate_id);
   }
 
   /** E2a が保留を解いた結果。保留の理由は受け取った時点で initiative.desire に残してある。 */
@@ -366,8 +497,10 @@ export class StagedPipeline<I extends StagedInput> {
       evidence_segment_ids: { source: 'verified'; value: number[]; method: string } | null;
       prior_found: { turn_index: number; role: RecentTurn['role'] } | null;
       gate_reasons: string[];
-      outcome: 'none' | 'registered' | 'revised' | 'gate_rejected' | 'held' | 'held_promoted' | 'rejected';
+      outcome: InitiativeDesireOutcome;
       ledger_reason: { value: string } | { value: null; null_reason: string };
+      revise_comparison?: ReviseComparison;
+      withdraw?: { kind: ContentWithdrawKind; reason: string; span: string; segment_ids: { source: 'verified'; value: number[]; method: string } | null };
     },
   ): void {
     const ref = fields.ref;
@@ -389,6 +522,15 @@ export class StagedPipeline<I extends StagedInput> {
       gate: verified({ passed: fields.gate_reasons.length === 0, reasons: fields.gate_reasons }, 'stage_gate'),
       outcome: fields.outcome,
       ledger_reason: fields.ledger_reason,
+      ...(fields.revise_comparison ? { revise_comparison: verified(fields.revise_comparison, 'staged_revise_comparison') } : {}),
+      ...(output.desire === 'WITHDRAW'
+        ? {
+            withdraw_kind: fields.withdraw ? modelOutput(fields.withdraw.kind) : modelOutputAbsent('gate_or_ledger_rejected'),
+            withdraw_reason: maybeText(output.withdraw_reason),
+            withdraw_evidence_span: maybeText(output.withdraw_evidence_span),
+            withdraw_evidence_segment_ids: fields.withdraw?.segment_ids ? present(fields.withdraw.segment_ids) : absent('not_applied'),
+          }
+        : {}),
     });
   }
 
@@ -430,13 +572,10 @@ export class StagedPipeline<I extends StagedInput> {
     this.applyTiming(desire, input, target, parsed.output, result, this.deps.time.monotonicMs(), context);
   }
 
-  /** immediate: LLM を呼ばず、希望が残っている間は次の機会に申し出る。比較用。 */
+  /** immediate: LLM を呼ばず、希望が残っている間は次の機会に申し出る（吸気の合図のゲートへ。声は吸気の後）。E2a は変えない。 */
   private applyImmediate(desire: I, target: CandidateRecord): void {
     const now = this.deps.time.monotonicMs();
-    const ref = { candidate_id: target.candidate_id, candidate_version: target.candidate_version };
-    // 判定の鮮度の基準（last_request_id）を進め、根拠の消失を E2a に確かめさせるために KEEP を渡す。
-    const applied = this.deps.ledger.applyModelDecision({ decision: 'KEEP', ...this.meta(desire, now), target: ref });
-    const withdrawn = applied.ok && applied.to === 'WITHDRAWN';
+    const change = this.remember(target, 'OFFER_NOW', desire.request_id, now);
     this.deps.emitter.emit({
       event: 'initiative.timing',
       timing_strategy: 'immediate',
@@ -450,14 +589,13 @@ export class StagedPipeline<I extends StagedInput> {
       profile_version: this.deps.options.profile.profile_version,
       decided_at: now,
       model_call: false,
-      outcome: !applied.ok ? 'rejected' : withdrawn ? 'withdrawn' : 'kept',
-      ledger_reason: applied.ok ? ACCEPTED : present(applied.reason),
+      outcome: 'kept',
+      ledger_reason: ACCEPTED,
+      ...change,
     });
-    if (applied.ok && !withdrawn) {
-      this.remember(target, 'OFFER_NOW', desire.request_id, now);
-    }
   }
 
+  /** タイミングの判定を記録する。内容（E2a）は変えない。「今は言わない」は希望を消さず、次の判定で OFFER_NOW に変わりうる。 */
   private applyTiming(
     desire: I,
     input: I,
@@ -467,24 +605,11 @@ export class StagedPipeline<I extends StagedInput> {
     received_at: number,
     context: StageContext,
   ): void {
-    const ref = { candidate_id: target.candidate_id, candidate_version: target.candidate_version };
     const reasons: string[] = [];
     if (output.target_candidate_id !== target.candidate_id) reasons.push('target_candidate_not_in_input');
-    if (output.timing === 'WITHDRAW') {
-      // WITHDRAW は鮮度で棄却しない（安全側の判定なので。計画 §4.5 と同じ）。
-      const withdrawCheck = checkWithdrawEvidence({
-        span: output.withdraw_evidence_span,
-        segment_ids: output.withdraw_evidence_segment_ids,
-        input: input.segments,
-        latest: this.host.snapshot(),
-        candidate_evidence_span: target.evidence_span,
-      });
-      if (!withdrawCheck.ok) reasons.push(...withdrawCheck.reasons.map((r) => `withdraw_rejected:${r}`));
-    } else {
-      const staleReasons = this.freshnessReasons(input);
-      reasons.push(...staleReasons);
-      if (staleReasons.length > 0) this.host.markStale();
-    }
+    const staleReasons = this.freshnessReasons(input);
+    reasons.push(...staleReasons);
+    if (staleReasons.length > 0) this.host.markStale();
     const base = {
       ...this.stageMeta(input, result, received_at, context, this.timingPrompt),
       timing_strategy: 'llm' as const,
@@ -495,57 +620,45 @@ export class StagedPipeline<I extends StagedInput> {
       reason: maybeText(output.reason),
       why_now: maybeText(output.why_now),
       cost_of_waiting: maybeText(output.cost_of_waiting),
-      withdraw_reason: maybeText(output.withdraw_reason),
+      withdraw_reason: modelOutputAbsent(NOT_JUDGED_HERE),
+      withdraw_evidence_segment_ids: absent('timing_stage_does_not_withdraw'),
     };
     if (reasons.length > 0) {
       this.deps.emitter.emit({
         event: 'initiative.timing',
         ...base,
-        withdraw_evidence_segment_ids: absent('gate_rejected'),
         gate: verified({ passed: false, reasons }, 'stage_gate'),
         outcome: 'gate_rejected',
         ledger_reason: absent('gate_rejected'),
       });
       return;
     }
-
-    if (output.timing === 'WITHDRAW') {
-      const applied = this.deps.ledger.applyModelDecision({
-        decision: 'WITHDRAW',
-        ...this.meta(input, received_at),
-        target: ref,
-        withdraw_evidence_span: output.withdraw_evidence_span,
-        withdraw_evidence_segment_ids: output.withdraw_evidence_segment_ids,
-        withdraw_reason: maybeText(output.withdraw_reason),
-      });
+    // 判定の間に候補が解決したか版が進んでいれば、判定を残さない（E2a を変えないので、ここで確かめる）。
+    const current = this.deps.ledger.list().find((c) => c.candidate_id === target.candidate_id && c.candidate_version === target.candidate_version);
+    if (!current) {
       this.deps.emitter.emit({
         event: 'initiative.timing',
         ...base,
-        withdraw_evidence_segment_ids:
-          applied.ok && applied.withdraw_evidence_segment_ids ? present(applied.withdraw_evidence_segment_ids) : absent('not_applied'),
         gate: verified({ passed: true, reasons: [] }, 'stage_gate'),
-        outcome: applied.ok ? 'withdrawn' : 'rejected',
-        ledger_reason: applied.ok ? ACCEPTED : present(applied.reason),
+        outcome: 'rejected',
+        ledger_reason: present('candidate_no_longer_pending'),
       });
-      if (applied.ok) this.verdicts.delete(target.candidate_id);
       return;
     }
-
-    // OFFER_NOW と WAIT_FOR_TURN_END は候補の内容を変えない。判定の鮮度の基準を進めるために KEEP を渡す。
-    const applied = this.deps.ledger.applyModelDecision({ decision: 'KEEP', ...this.meta(input, received_at), target: ref });
-    const withdrawn = applied.ok && applied.to === 'WITHDRAWN';
+    const change = this.remember(target, output.timing, input.request_id, received_at);
     this.deps.emitter.emit({
       event: 'initiative.timing',
       ...base,
-      withdraw_evidence_segment_ids: absent('not_withdraw'),
       gate: verified({ passed: true, reasons: [] }, 'stage_gate'),
-      outcome: !applied.ok ? 'rejected' : withdrawn ? 'withdrawn' : 'kept',
-      ledger_reason: applied.ok ? ACCEPTED : present(applied.reason),
+      outcome: 'kept',
+      ledger_reason: ACCEPTED,
+      ...change,
     });
-    if (applied.ok && !withdrawn) this.remember(target, output.timing, input.request_id, received_at);
   }
 
-  private remember(target: CandidateRecord, timing: LatestTiming['timing'], request_id: string, decided_at: number): void {
+  /** 候補の最新の判定を更新し、直前の判定との違いを返す（発話中のタイミングの扱いの時系列を initiative.timing に残す）。 */
+  private remember(target: CandidateRecord, timing: LatestTiming['timing'], request_id: string, decided_at: number): { previous_timing: LatestTiming['timing'] | null; timing_changed: boolean } {
+    const previous = this.verdicts.get(target.candidate_id)?.timing ?? null;
     this.verdicts.set(target.candidate_id, {
       timing,
       strategy: this.strategy,
@@ -553,5 +666,6 @@ export class StagedPipeline<I extends StagedInput> {
       request_id,
       decided_at,
     });
+    return { previous_timing: previous, timing_changed: previous !== null && previous !== timing };
   }
 }

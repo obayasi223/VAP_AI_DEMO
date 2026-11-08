@@ -926,6 +926,107 @@
         }
       },
       {
+        "name": "initiative.not_offered",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "initiative.not_offered",
+          "candidate_id": "c_0007",
+          "candidate_version": 1,
+          "segment_id": 3,
+          "at": 1500,
+          "reason": "wait_for_turn_end"
+        }
+      },
+      {
+        "name": "initiative.response_material",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "initiative.response_material",
+          "candidate_id": "c_0007",
+          "candidate_version": 2,
+          "segment_id": 4,
+          "transcript_revision": 50,
+          "prompt_version": "response_prompt_v1+pending_material_v1",
+          "proposed_utterance": {
+            "source": "model_output",
+            "value": "それは先ほどの前提と違いませんか"
+          },
+          "at": 1600
+        }
+      },
+      {
+        "name": "negotiation.cue_reaction",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "negotiation.cue_reaction",
+          "cue_id": "cue_0001",
+          "candidate_id": "c_0007",
+          "candidate_version": 1,
+          "cue_sent_at": 1000,
+          "ended_at": 3000,
+          "window_ms": 2000,
+          "ended_by": "window",
+          "observed_ms": 2000,
+          "ticks": 100,
+          "user_speaking_ticks": 60,
+          "user_speaking_at_cue": true,
+          "user_speaking_at_end": false,
+          "time_to_user_stop_ms": {
+            "value": 1200
+          },
+          "time_to_user_start_ms": {
+            "value": null,
+            "null_reason": "user_speaking_at_cue"
+          },
+          "p_now_ai_at_cue": {
+            "value": 0.2
+          },
+          "p_now_ai_at_end": {
+            "value": 0.7
+          },
+          "p_now_ai_min": {
+            "value": 0.1
+          },
+          "p_now_ai_max": {
+            "value": 0.8
+          },
+          "candidate_states": [
+            "BREATH_INHALE",
+            "BREATH_HOLD_OR_READY"
+          ]
+        }
+      },
+      {
         "name": "candidate.state_changed/code",
         "value": {
           "schema_version": 1,
@@ -1410,6 +1511,307 @@
           },
           "reason": "user_speaking",
           "event": "turn.allowed"
+        }
+      },
+      {
+        "name": "turn.outcome/ai_utterance",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "turn.outcome",
+          "kind": "ai_utterance",
+          "audio_playback_id": 5,
+          "segment_id": 3,
+          "origin": "response",
+          "candidate_id": {
+            "value": null,
+            "null_reason": "normal_response"
+          },
+          "conversation_kind": {
+            "value": null,
+            "null_reason": "reactive_condition"
+          },
+          "labels": {
+            "value": [
+              "user_continued_after_start",
+              "suspected_premature_start"
+            ]
+          },
+          "start": {
+            "decided_at": 1000,
+            "audio_frame": 16000,
+            "decision_source": "completion_timeout",
+            "reason": "L74_completion_timeout",
+            "policy_id": "ja",
+            "p_now": {
+              "value": 0.66
+            },
+            "p_future": {
+              "value": 0.5
+            },
+            "vad_user": {
+              "value": 0.2
+            },
+            "vad_ai": {
+              "value": 0.1
+            },
+            "vap_freshness": "fresh",
+            "vap_age_ms": {
+              "value": 40
+            },
+            "completion_p": {
+              "value": 0.75
+            },
+            "completion_revision": {
+              "value": 10
+            },
+            "gap_ms": {
+              "value": 500
+            },
+            "user_speaking": false
+          },
+          "speech_started_at": {
+            "value": 1040
+          },
+          "speech_ended_at": {
+            "value": 3040
+          },
+          "played_ms": {
+            "value": 2000
+          },
+          "interrupted": false,
+          "observed": {
+            "user_voice_gap_before_ms": {
+              "value": 500
+            },
+            "user_voiced_just_before": true,
+            "previous_ai_end_gap_ms": {
+              "value": null,
+              "null_reason": "first_ai_utterance"
+            },
+            "user_voice_since_previous_ai": {
+              "value": null,
+              "null_reason": "first_ai_utterance"
+            },
+            "continuation": {
+              "continued": true,
+              "first_result_after_start_ms": {
+                "value": 450
+              },
+              "first_audio_offset_ms": {
+                "value": 240
+              },
+              "chars": 2,
+              "text_kind": "content"
+            },
+            "overlap": {
+              "overlap_ms": {
+                "value": 320
+              },
+              "first_after_start_ms": {
+                "value": 240
+              },
+              "longest_run_ms": {
+                "value": 240
+              },
+              "chars": 2,
+              "text_kind": "content"
+            },
+            "echo": {
+              "suspected": false,
+              "text_similarity": {
+                "value": 0.1
+              },
+              "overlap_ratio": {
+                "value": 0.16
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "turn.outcome/ai_utterance_unsettled",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "turn.outcome",
+          "kind": "ai_utterance",
+          "audio_playback_id": 6,
+          "segment_id": 4,
+          "origin": "candidate",
+          "candidate_id": {
+            "value": "c_1"
+          },
+          "conversation_kind": {
+            "value": "joint_thinking"
+          },
+          "labels": {
+            "value": null,
+            "null_reason": "speech_failed:tts_error"
+          },
+          "start": {
+            "decided_at": 1000,
+            "audio_frame": 16000,
+            "decision_source": "vap",
+            "reason": "L67_vap_yield",
+            "policy_id": "ja",
+            "p_now": {
+              "value": 0.7
+            },
+            "p_future": {
+              "value": 0.7
+            },
+            "vad_user": {
+              "value": 0.1
+            },
+            "vad_ai": {
+              "value": 0.1
+            },
+            "vap_freshness": "fresh",
+            "vap_age_ms": {
+              "value": 40
+            },
+            "completion_p": {
+              "value": 0.75
+            },
+            "completion_revision": {
+              "value": 10
+            },
+            "gap_ms": {
+              "value": 900
+            },
+            "user_speaking": false
+          },
+          "speech_started_at": {
+            "value": null,
+            "null_reason": "speech_failed:tts_error"
+          },
+          "speech_ended_at": {
+            "value": null,
+            "null_reason": "speech_failed:tts_error"
+          },
+          "played_ms": {
+            "value": null,
+            "null_reason": "speech_failed:tts_error"
+          },
+          "interrupted": false,
+          "observed": {
+            "user_voice_gap_before_ms": {
+              "value": 900
+            },
+            "user_voiced_just_before": true,
+            "previous_ai_end_gap_ms": {
+              "value": 5000
+            },
+            "user_voice_since_previous_ai": {
+              "value": true
+            },
+            "continuation": {
+              "continued": false,
+              "first_result_after_start_ms": {
+                "value": null,
+                "null_reason": "no_continuation"
+              },
+              "first_audio_offset_ms": {
+                "value": null,
+                "null_reason": "no_continuation"
+              },
+              "chars": 0,
+              "text_kind": "none"
+            },
+            "overlap": {
+              "overlap_ms": {
+                "value": null,
+                "null_reason": "speech_not_played"
+              },
+              "first_after_start_ms": {
+                "value": null,
+                "null_reason": "speech_not_played"
+              },
+              "longest_run_ms": {
+                "value": null,
+                "null_reason": "speech_not_played"
+              },
+              "chars": 0,
+              "text_kind": "none"
+            },
+            "echo": {
+              "suspected": false,
+              "text_similarity": {
+                "value": null,
+                "null_reason": "speech_not_played"
+              },
+              "overlap_ratio": {
+                "value": null,
+                "null_reason": "speech_not_played"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "turn.outcome/no_response",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "initiative_inhale",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "turn.outcome",
+          "kind": "no_response",
+          "labels": {
+            "value": [
+              "no_response_after_user_yield"
+            ]
+          },
+          "segment_id": 2,
+          "transcript_revision": {
+            "value": 5
+          },
+          "waited_ms": 4000,
+          "last_user_voice_at": {
+            "value": 900
+          },
+          "asr_chars": 12,
+          "asr_is_final": true,
+          "wait_state": "not_permitted",
+          "vap_freshness": "fresh",
+          "p_now": {
+            "value": 0.2
+          },
+          "p_future": {
+            "value": 0.2
+          },
+          "completion_p": {
+            "value": 0.1
+          },
+          "decision_source": {
+            "value": "vap"
+          }
         }
       },
       {

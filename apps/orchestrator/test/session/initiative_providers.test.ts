@@ -25,7 +25,7 @@ describe('発話希望の判定を動かす条件', () => {
       expect(initiative).toMatchObject({ enabled: true, reason: null, prompt_version: 'initiative-ja-v2' });
       expect(initiative?.llm).toBeInstanceOf(ScriptedReplyLlm);
       // 既定は二段判定（llm）で、会話の種類の設定が persona を兼ねる（1段判定に戻すのは TIMING_STRATEGY=v2）。
-      expect(initiative?.staged).toMatchObject({ timing_strategy: 'llm', conversation_kind: 'joint_thinking', desire_prompt_version: 'initiative-desire-ja-v1' });
+      expect(initiative?.staged).toMatchObject({ timing_strategy: 'llm', conversation_kind: 'joint_thinking', desire_prompt_version: 'initiative-desire-ja-v2' });
       expect(initiative?.persona?.persona_id).toBe('joint_thinking_partner');
     }
   });
@@ -41,7 +41,7 @@ describe('発話希望の判定を動かす条件', () => {
     const { initiative } = await setupFor({ CONVERSATION_KIND: 'companion', TIMING_STRATEGY: 'immediate' });
     expect(initiative?.staged).toMatchObject({ timing_strategy: 'immediate', conversation_kind: 'companion' });
     expect(initiative?.staged?.profile.persona_id).toBe('companion_partner');
-    expect(() => readConfig({ ...base, CONVERSATION_KIND: 'nonsense' })).toThrow();
+    expect(() => readConfig({ ...base, CONVERSATION_KIND: 'Bad Kind' })).toThrow();
     expect(() => readConfig({ ...base, TIMING_STRATEGY: 'nonsense' })).toThrow();
   });
 

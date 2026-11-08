@@ -70,6 +70,15 @@ export interface SpeechRecord {
   started_at: number | null;
   ended_at: number | null;
   spoken_text: string | null;
+  /** その発話の turn.outcome（観測に基づく推定のラベルと主な値）。古いログには無い。 */
+  outcome: SpeechOutcome | null;
+}
+
+/** 発話の結果（turn.outcome）の表示用の抜き出し。 */
+export interface SpeechOutcome {
+  labels: string[] | null;
+  null_reason: string | null;
+  fields: { label: string; value: string }[];
 }
 
 export type ItemKind = 'candidate' | 'none' | 'dropped';

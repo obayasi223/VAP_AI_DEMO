@@ -31,6 +31,8 @@ export const EVENT_ROUTES = {
   'initiative.aborted': { origin: 'node' },
   'initiative.desire': { origin: 'node' },
   'initiative.timing': { origin: 'node' },
+  'initiative.not_offered': { origin: 'node' },
+  'initiative.response_material': { origin: 'node' },
   'candidate.state_changed': { origin: 'node' },
   'candidate.rejected': { origin: 'node' },
   'signal.sent': { origin: 'node' },
@@ -52,6 +54,8 @@ export const EVENT_ROUTES = {
   // 中身は研究者画面の research.note だが、時刻は Node の受信時刻（研究者のブラウザの時計は補正しない）。
   'research.note': { origin: 'node' },
   'negotiation.decision': { origin: 'node' },
+  'negotiation.cue_reaction': { origin: 'node' },
+  'turn.outcome': { origin: 'node' },
 } as const satisfies Record<ResearchEventName, EventRoute>;
 
 /** ローカル時刻を orchestrator の基準へ写す関数と、その由来。J が clock.sync の推定から作る。 */

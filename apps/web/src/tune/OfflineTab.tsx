@@ -5,14 +5,14 @@
  * 画面の方策での判断を記録の判断と同じ時間軸に重ねる。値を動かすと 300ms 後に計算し直す（LLM と TTS は呼ばない）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { TuneReplayResult, TuneSessionSummary, TurnDiagnosticBody } from '@llm-vap/contracts';
-import { createDevApi, type PolicyInfo } from './api';
+import type { TuneSessionSummary, TurnDiagnosticBody, TurnOutcomeBody } from '@llm-vap/contracts';
+import { createDevApi, type PolicyInfo, type TuneReplayWithOutcomes } from './api';
 import { CHART_COLORS, TuneChart, type ChartSpec } from './TuneChart';
-import { allowedSpans, avertSpans, completionLane, gapLane, vapLanes, voicedSpans } from './chart_spec';
+import { allowedSpans, avertSpans, completionLane, gapLane, outcomeBand, vapLanes, voicedSpans } from './chart_spec';
 import { parseOfflineLog, type OfflineLog } from './offline_log';
 import { PolicyEditor } from './PolicyEditor';
 import { changedPaths, getAt, replayEffect, thresholdLines } from './policy_edit';
-import { DiagnosticTable, FlowTable, MetricsTable } from './TuneTables';
+import { DiagnosticTable, FlowTable, MetricsTable, OutcomeMetricsTable, outcomeText } from './TuneTables';
 import styles from './tune.module.css';
 
 type BaseChoice = 'head' | 'current' | 'local';
@@ -21,6 +21,7 @@ const COUNTERFACTUAL = [
   '再生は記録の入力をそのまま使う反実仮想です。AI の話し始めの時刻が変わっても、利用者の声、STT、VAP は記録のまま（実際には AI の声で利用者の話し方も VAP も変わるはず）。',
   'AI の声の VAP（2ch の AI 側）は記録の音声から計算された値で、再計算の発話の時刻には合いません。',
   '準備（LLM と TTS）の待ち時間は、記録で同じ transcript_revision の準備があればその値、なければ下の仮定の値を使います。発話の長さも同じ。',
+  '発話の結果の分類（suspected_premature_start など）は、記録の人の声と ASR から機械的に推定した印です。再計算の側は、開始が変わっても人の振る舞いが記録のままの反実仮想で、確定した失敗の数ではありません。',
   '発話希望（initiative）は記録の判定を出すだけです。initiative.trigger を変えたときは、記録の STT から起動の回数だけ数え直します（LLM がどう判定するかは分かりません）。',
 ];
 
@@ -30,7 +31,7 @@ function prepareThreshold(policy: unknown): number | null {
   return typeof v === 'number' ? v : null;
 }
 
-function offlineSpec(log: OfflineLog, result: TuneReplayResult, policy: unknown, t0: number, t1: number): ChartSpec {
+function offlineSpec(log: OfflineLog, result: TuneReplayWithOutcomes, policy: unknown, t0: number, t1: number): ChartSpec {
   const aiIndex = getAt(policy, 'vap.p_ai_index') === 0 ? 0 : 1;
   const speaking = getAt(policy, 'vap.speaking_threshold');
   const rec = result.recorded;
@@ -56,6 +57,8 @@ function offlineSpec(log: OfflineLog, result: TuneReplayResult, policy: unknown,
       { name: '許可・再計算', spans: allowedSpans(rep.turn_changes, result.t_end).map((s) => ({ ...s, color: CHART_COLORS.replayed })), marks: [] },
       { name: '視線・記録', spans: avertSpans(rec.gaze, result.t_end).map((s) => ({ ...s, color: CHART_COLORS.recorded })), marks: [] },
       { name: '視線・再計算', spans: avertSpans(rep.gaze, result.t_end).map((s) => ({ ...s, color: CHART_COLORS.replayed })), marks: [] },
+      outcomeBand('結果（推定）・記録', result.outcomes.recorded, { flagged: CHART_COLORS.guard, clean: CHART_COLORS.muted, unsettled: CHART_COLORS.initiative }),
+      outcomeBand('結果（推定）・再計算', result.outcomes.replayed, { flagged: CHART_COLORS.guard, clean: CHART_COLORS.muted, unsettled: CHART_COLORS.initiative }),
       {
         name: '準備（再計算）',
         spans: [],
@@ -72,11 +75,15 @@ function offlineSpec(log: OfflineLog, result: TuneReplayResult, policy: unknown,
   };
 }
 
-function StartsTable({ result }: { result: TuneReplayResult }) {
+function StartsTable({ result }: { result: TuneReplayWithOutcomes }) {
   const s = (t: number) => `${((t - result.t_start) / 1000).toFixed(2)}s`;
+  const outcomeBy = (list: TurnOutcomeBody[]) =>
+    new Map(list.flatMap((o) => (o.kind === 'ai_utterance' ? ([[o.audio_playback_id, o]] as const) : [])));
+  const recordedOutcomes = outcomeBy(result.outcomes.recorded);
+  const replayedOutcomes = outcomeBy(result.outcomes.replayed);
   const rows = [
-    ...result.recorded.starts.map((x) => ({ ...x, side: '記録' })),
-    ...result.replayed.starts.map((x) => ({ ...x, side: '再計算' })),
+    ...result.recorded.starts.map((x) => ({ ...x, side: '記録', outcome: recordedOutcomes.get(x.audio_playback_id) ?? null })),
+    ...result.replayed.starts.map((x) => ({ ...x, side: '再計算', outcome: replayedOutcomes.get(x.audio_playback_id) ?? null })),
   ].sort((a, b) => a.t - b.t || a.side.localeCompare(b.side));
   return (
     <table className={styles.table} data-testid="starts-table">
@@ -88,6 +95,7 @@ function StartsTable({ result }: { result: TuneReplayResult }) {
           <th>間 ms</th>
           <th>p_now(AI)</th>
           <th>completion</th>
+          <th>結果（観測に基づく推定）</th>
         </tr>
       </thead>
       <tbody>
@@ -99,6 +107,7 @@ function StartsTable({ result }: { result: TuneReplayResult }) {
             <td className={styles.num}>{r.gap_ms ?? '—'}</td>
             <td className={styles.num}>{r.p_now === null ? '—' : r.p_now.toFixed(3)}</td>
             <td className={styles.num}>{r.completion_p === null ? '—' : r.completion_p.toFixed(2)}</td>
+            <td className={styles.path}>{r.outcome === null ? '—' : outcomeText(r.outcome)}</td>
           </tr>
         ))}
       </tbody>
@@ -116,7 +125,7 @@ export function OfflineTab({ devUrl }: { devUrl: string }) {
   const [edited, setEdited] = useState<unknown>(null);
   const [assumedPrepare, setAssumedPrepare] = useState<string>('');
   const [assumedSpeech, setAssumedSpeech] = useState<string>('');
-  const [result, setResult] = useState<TuneReplayResult | null>(null);
+  const [result, setResult] = useState<TuneReplayWithOutcomes | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
@@ -331,6 +340,10 @@ export function OfflineTab({ devUrl }: { devUrl: string }) {
               <div className={styles.card}>
                 <h2 className={styles.heading}>指標</h2>
                 <MetricsTable recorded={result.recorded.metrics} replayed={result.replayed.metrics} />
+              </div>
+              <div className={styles.card} data-testid="outcome-metrics">
+                <h2 className={styles.heading}>発話の結果（観測に基づく推定）</h2>
+                <OutcomeMetricsTable recorded={result.outcomes.recorded} replayed={result.outcomes.replayed} note={result.outcomes.note} />
               </div>
               <div className={styles.card}>
                 <h2 className={styles.heading}>開始の一覧</h2>

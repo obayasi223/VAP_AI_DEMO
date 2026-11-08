@@ -4,7 +4,7 @@
  * 「LLM 生成」の欄に分け、実測の時刻とコードの検証結果とは混ぜない。数値の「話したい度合い」はない（判定の種類だけ）。
  */
 import type { EventOf, ResearchEvent } from '@llm-vap/contracts';
-import { decisionRow, type DecisionRow } from '../research/candidates_view';
+import { decisionRow, desireRow, timingRow, type DecisionRow } from '../research/candidates_view';
 
 export type FlowRow =
   | {
@@ -47,6 +47,12 @@ export class InitiativeFlow {
         return;
       case 'initiative.decision':
         this.push({ kind: 'decision', key: `d${this.seq++}`, t: event.received_at, row: decisionRow(event, this.seq) });
+        return;
+      case 'initiative.desire':
+        this.push({ kind: 'decision', key: `d${this.seq++}`, t: event.received_at, row: desireRow(event, this.seq) });
+        return;
+      case 'initiative.timing':
+        this.push({ kind: 'decision', key: `d${this.seq++}`, t: event.timing_strategy === 'llm' ? event.received_at : event.t_monotonic_ms, row: timingRow(event, this.seq) });
         return;
       case 'candidate.state_changed':
         this.push({

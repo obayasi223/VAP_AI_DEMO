@@ -13,12 +13,10 @@
  * 再計算では利用者の振る舞いが記録のままなので、AI の開始が変わった後の値は反実仮想の近似。
  */
 import type { TuneGazeChange, TuneMetricSet, TuneSpan, TuneStart } from '@llm-vap/contracts';
-import { normalizeForSimilarity } from '../cognition/similarity';
+import { continuationAfter } from '../control/turn_outcome';
 
 export const MID_UTTERANCE_WINDOW_MS = 1500;
 const DELAY_LOOKBACK_MS = 30_000;
-/** 音声位置の比較の余裕（10ms）。 */
-const FRAME_MARGIN = 160;
 
 export interface MetricInputs {
   starts: TuneStart[];
@@ -46,15 +44,7 @@ function lastVoicedBefore(vap: MetricInputs['vap'], t: number, threshold: number
 }
 
 export function midUtterance(input: Pick<MetricInputs, 'stt' | 'frameAt'>, t: number): boolean {
-  const frame = input.frameAt(t);
-  const latest = new Map<number, number>();
-  for (const r of input.stt) {
-    if (r.t > t + MID_UTTERANCE_WINDOW_MS) break;
-    const chars = [...normalizeForSimilarity(r.text)].length;
-    if (r.t > t && r.audio_frame_end > frame + FRAME_MARGIN && chars > (latest.get(r.key) ?? 0)) return true;
-    latest.set(r.key, chars);
-  }
-  return false;
+  return continuationAfter(input.stt, input.frameAt(t), t, MID_UTTERANCE_WINDOW_MS).continued;
 }
 
 export function computeMetrics(input: MetricInputs): TuneMetricSet {

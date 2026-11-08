@@ -96,6 +96,22 @@ function flag(value: string | undefined, fallback: boolean): boolean {
   return value === '1' || value.toLowerCase() === 'true';
 }
 
+/** 会話の音声の保存（既定は保存しない）。docs/runbook.md の自己実験の手順と docs/known_gaps.md §13。 */
+export interface SessionAudioConfig {
+  /** SAVE_SESSION_AUDIO=1（または true）のときだけ true。 */
+  enabled: boolean;
+  /** 空きがこれを下回ると保存を始めない・止める（SAVE_SESSION_AUDIO_MIN_FREE_MB、既定 1024）。 */
+  min_free_bytes: number;
+}
+
+const DEFAULT_SESSION_AUDIO_MIN_FREE_MB = 1024;
+
+export function readSessionAudioConfig(env: NodeJS.ProcessEnv = process.env): SessionAudioConfig {
+  const raw = Number(env.SAVE_SESSION_AUDIO_MIN_FREE_MB);
+  const minFreeMb = env.SAVE_SESSION_AUDIO_MIN_FREE_MB && Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_SESSION_AUDIO_MIN_FREE_MB;
+  return { enabled: flag(env.SAVE_SESSION_AUDIO, false), min_free_bytes: minFreeMb * 1024 * 1024 };
+}
+
 export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorConfig {
   const policyFile = path.resolve(REPO_ROOT, env.POLICY_FILE || 'config/policy.ja.json');
   const basePolicy = Policy.parse(JSON.parse(readFileSync(policyFile, 'utf-8')));

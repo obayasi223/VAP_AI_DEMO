@@ -72,3 +72,6 @@ details pre { white-space: pre-wrap; background: #fafaf7; padding: 6px; font-siz
 .audio-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 audio { height: 32px; max-width: 100%; }
 @media (max-width: 1000px) { main { grid-template-columns: 1fr; height: auto; } #list, #detail, #form { overflow: visible; border: 0; } }
+.audio-timeline { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.audio-marks { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+.audio-marks th, .audio-marks td { text-align: left; padding: 2px 6px; border-bottom: 1px solid var(--line); }

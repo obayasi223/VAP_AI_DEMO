@@ -55,6 +55,10 @@ function timing(partial: Record<string, unknown> = {}): string {
   });
 }
 
+/** 内容の撤回（生成段）。分類は既定で question_resolved、根拠は LATER の後半。 */
+const WITHDRAW_DESIRE = (partial: Record<string, unknown> = {}) =>
+  desire({ desire: 'WITHDRAW', target_candidate_id: 'c_0001', withdraw_kind: 'question_resolved', withdraw_reason: '解消した', withdraw_evidence_span: '問題はなくなりました', withdraw_evidence_segment_ids: [0], ...partial });
+
 const isTiming = (r: LlmRequest): boolean => r.request_id.endsWith('_timing');
 
 function makeStaged(responder: Responder, staged: Partial<StagedOptions> = {}, extra: Record<string, unknown> = {}) {
@@ -94,7 +98,7 @@ describe('段の分離', () => {
     expect(d).not.toContain('(a)');
     const t = getTimingPrompt(CURRENT_TIMING_PROMPT_VERSION).system(JOINT);
     expect(t).toContain('OFFER_NOW');
-    expect(t).toContain('内容の良し悪しや書き換えは判定しません');
+    expect(t).toContain('内容の良し悪しや書き換え');
     expect(JSON.stringify(TIMING_JSON_SCHEMA)).not.toContain('proposed_utterance');
     expect(JSON.stringify(DESIRE_JSON_SCHEMA)).not.toContain('why_now');
     expect(JSON.stringify(DESIRE_JSON_SCHEMA)).not.toContain('WAIT_FOR_TURN_END');
@@ -301,31 +305,31 @@ describe('ゲート（根拠の範囲）', () => {
     expect(sink.ofType('initiative.desire')[0]!.gate.value.reasons).toContain('prior_turn_evidence_not_in_shown_turns');
   });
 
-  it('タイミング段の WITHDRAW は、候補の根拠より後ろの発話に根拠がなければ棄却する', async () => {
+  it('生成段の WITHDRAW は、候補の根拠より後ろの発話に根拠がなければ棄却し、候補を残す', async () => {
     const script: Responder = (r, i) => {
-      if (isTiming(r)) return timing({ timing: 'WITHDRAW', withdraw_reason: 'w', withdraw_evidence_span: '来週の水曜', withdraw_evidence_segment_ids: [0] });
-      return i === 0 ? NEW_DESIRE() : desire();
+      if (isTiming(r)) return timing();
+      return i === 0 ? NEW_DESIRE() : WITHDRAW_DESIRE({ withdraw_evidence_span: '来週の水曜' });
     };
     const { monitor, sink, ledger } = makeStaged(script);
     await feed(monitor, STABLE);
-    const event = sink.ofType('initiative.timing')[0]!;
-    expect(event).toMatchObject({ timing: 'WITHDRAW', outcome: 'gate_rejected' });
-    if (event.timing_strategy !== 'llm') throw new Error('unexpected');
+    await feed(monitor, LATER);
+    const event = sink.ofType('initiative.desire')[1]!;
+    expect(event).toMatchObject({ desire: 'WITHDRAW', outcome: 'gate_rejected' });
     expect(event.gate.value.reasons.join(',')).toContain('withdraw_rejected');
     expect(ledger.list()[0]!.state).toBe('INTENT_READY');
   });
 
-  it('タイミング段の WITHDRAW は根拠が通れば候補を取り下げ、ID の対象違いは棄却する', async () => {
+  it('生成段の WITHDRAW は根拠が通れば候補を取り下げる。タイミング段の対象違いは棄却する', async () => {
     const script: Responder = (r, i) => {
-      if (isTiming(r)) return i === 1 ? timing({ target_candidate_id: 'c_9999' }) : timing({ timing: 'WITHDRAW', withdraw_reason: 'w', withdraw_evidence_span: '問題はなくなりました', withdraw_evidence_segment_ids: [0] });
-      return i === 0 ? NEW_DESIRE() : desire();
+      if (isTiming(r)) return timing({ target_candidate_id: 'c_9999' });
+      return i === 0 ? NEW_DESIRE() : WITHDRAW_DESIRE();
     };
     const { monitor, sink, ledger } = makeStaged(script);
     await feed(monitor, STABLE);
     expect(sink.ofType('initiative.timing')[0]).toMatchObject({ outcome: 'gate_rejected' });
     expect(monitor.latestTiming('c_0001', 1)).toBeNull();
     await feed(monitor, LATER);
-    expect(sink.ofType('initiative.timing')[1]).toMatchObject({ outcome: 'withdrawn', timing: 'WITHDRAW' });
+    expect(sink.ofType('initiative.desire')[1]).toMatchObject({ desire: 'WITHDRAW', outcome: 'withdrawn' });
     expect(ledger.list()).toHaveLength(0);
     expect(sink.ofType('candidate.state_changed').some((e) => e.to === 'WITHDRAWN')).toBe(true);
   });
@@ -382,14 +386,14 @@ describe('評価できる記録', () => {
     expect(t.cost_of_waiting).toEqual({ source: 'model_output', value: '待つと' });
   });
 
-  it('タイミング段の判定は候補に結びつき、KEEP で判定の基準を進める。版が変われば前の判定は読めない', async () => {
+  it('タイミング段の判定は候補に結びつくが E2a の基準は動かさない。版が変われば前の判定は読めない', async () => {
     const { monitor, ledger } = makeStaged((r) => (isTiming(r) ? timing({ timing: 'OFFER_NOW' }) : NEW_DESIRE()));
     await feed(monitor, STABLE);
     expect(monitor.latestTiming('c_0001', 1)).toMatchObject({ timing: 'OFFER_NOW', strategy: 'llm' });
     expect(ledger.list()[0]!.state).toBe('INTENT_READY');
     expect(monitor.latestTiming('c_0001', 2)).toBeNull();
     const request_id = ledger.getRecord('c_0001')!.last_request_id;
-    expect(request_id).toBe('ini_0001_timing');
+    expect(request_id).toBe('ini_0001');
     expect(monitor.stableCharsSinceInput(request_id)).toBe(0);
   });
 
@@ -470,6 +474,6 @@ describe('会話の種類（設定ファイル）', () => {
 
   it('不足のある設定は読み込みで落ちる', () => {
     expect(() => parseConversationKindProfile({ ...JOINT, desire_lens: { viewpoints: [], intent_type_examples: ['X'] } })).toThrow();
-    expect(() => parseConversationKindProfile({ ...JOINT, conversation_kind: 'other' })).toThrow();
+    expect(() => parseConversationKindProfile({ ...JOINT, conversation_kind: 'Bad Kind' })).toThrow();
   });
 });

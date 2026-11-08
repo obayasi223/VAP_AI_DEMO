@@ -13,7 +13,7 @@ import {
   TrackSettings,
   VisibilityName,
 } from './browser_rpc';
-import { CandidateCause, CandidateRejectReason, CandidateState, ConversationKind, TimingVerdict } from './candidates';
+import { CandidateCause, CandidateRejectReason, CandidateState, ContentWithdrawKind, ConversationKind, TimingVerdict } from './candidates';
 import {
   AsrSegmentId,
   AudioFrameIndex,
@@ -47,7 +47,7 @@ import {
   Verified,
   WallClock,
 } from './common';
-import { GazeDecisionPayload, PrepareTrigger, TurnAllowedPayload } from './turn';
+import { GazeDecisionPayload, PrepareTrigger, TurnAllowedPayload, VapFreshness } from './turn';
 import { Vap1chState, Vap2chState } from './vap';
 
 export const EVENT_SCHEMA_VERSION = 1 as const;
@@ -360,16 +360,25 @@ export const InitiativeDesireOutcome = z.enum([
   'held_promoted',
   /** E2a が受け付けなかった（ledger_reason）。 */
   'rejected',
+  /** 内容の再評価で維持した（KEEP、または未解決の希望があるときの NONE）。 */
+  'kept',
+  /** KEEP の時点で根拠が安定テキストから消えていた（コード由来の撤回。内容の撤回ではない）。 */
+  'kept_evidence_lost',
+  /** 内容の再評価で撤回した（WITHDRAW、withdraw_kind に分類）。 */
+  'withdrawn',
+  /** REVISE だが実質同じ内容なので維持として扱った（音声を作り直さない。revise_comparison に基準）。 */
+  'revise_suppressed',
 ]);
 export type InitiativeDesireOutcome = z.infer<typeof InitiativeDesireOutcome>;
 
 /**
  * 生成段の結果（言いたいことが生じたかと、その内容）。「今言うべきか」はここに入らない。
- * desire の値は initiative.decision の正本（NONE/NEW/REVISE）の部分集合。
+ * desire の値は initiative.decision の正本（NONE/NEW/KEEP/REVISE/WITHDRAW）と同じ語。KEEP/REVISE/WITHDRAW は未解決の希望の
+ * 内容の再評価（タイミング段の「今は言わない」とは別の軸）。withdraw_* と revise_comparison は該当するときだけ入る（古いログにはない）。
  */
 export const InitiativeDesireEvent = eventSchema('initiative.desire', {
   ...InitiativeStageMeta,
-  desire: z.enum(['NONE', 'NEW', 'REVISE']),
+  desire: z.enum(['NONE', 'NEW', 'KEEP', 'REVISE', 'WITHDRAW']),
   /** 候補にならなかったときは null と理由。 */
   candidate_id: Maybe(CandidateId),
   candidate_version: Maybe(CandidateVersion),
@@ -389,6 +398,20 @@ export const InitiativeDesireEvent = eventSchema('initiative.desire', {
   gate: StageGate,
   outcome: InitiativeDesireOutcome,
   ledger_reason: Maybe(NonEmptyString),
+  /** WITHDRAW の分類（question_resolved／premise_changed／topic_moved）。LLM の出力。 */
+  withdraw_kind: MaybeModelOutput(ContentWithdrawKind).optional(),
+  withdraw_reason: MaybeModelOutput(z.string()).optional(),
+  withdraw_evidence_span: MaybeModelOutput(z.string()).optional(),
+  withdraw_evidence_segment_ids: Maybe(Verified(z.array(AsrSegmentId).min(1))).optional(),
+  /** REVISE の前後の比較（コードの基準。維持として扱ったかは outcome の revise_suppressed）。 */
+  revise_comparison: Verified(
+    z.strictObject({
+      method: NonEmptyString,
+      similarity: Probability,
+      threshold: Probability,
+      same_intent_type: z.boolean(),
+    }),
+  ).optional(),
 });
 
 const TimingBody = {
@@ -402,6 +425,10 @@ const TimingBody = {
   profile_version: NonNegativeInt,
   outcome: z.enum(['kept', 'withdrawn', 'gate_rejected', 'rejected']),
   ledger_reason: Maybe(NonEmptyString),
+  /** この候補の直前の判定（版をまたいでも同じ候補なら読む。初回は null）。古いログにはない。 */
+  previous_timing: TimingVerdict.nullable().optional(),
+  /** 直前と判定が変わった（WAIT → OFFER_NOW など。初回は false）。古いログにはない。 */
+  timing_changed: z.boolean().optional(),
 };
 
 /**
@@ -466,8 +493,37 @@ export const CandidateStateChangedEvent = z.discriminatedUnion('cause_source', [
     decision: z.enum(['NEW', 'REVISE', 'WITHDRAW']),
     /** 元の initiative.decision と llm.response の request_id。 */
     request_id: NonEmptyString,
+    /** decision=WITHDRAW の内容の分類（二段判定のとき。LLM の出力）。 */
+    withdraw_kind: MaybeModelOutput(ContentWithdrawKind).optional(),
   }),
 ]);
+
+/**
+ * 今は申し出ないと判定された（WAIT_FOR_TURN_END）候補が、通常応答に回され、撤回されずに保留へ持ち越された。
+ * 内容の撤回（initiative.desire の withdraw_kind）とは別の出来事。理由はタイミング段の判定から写した値で、この時点の判断ではない。
+ */
+export const InitiativeNotOfferedEvent = eventSchema('initiative.not_offered', {
+  candidate_id: CandidateId,
+  candidate_version: CandidateVersion,
+  segment_id: SegmentId,
+  at: MonotonicMs,
+  reason: z.literal('wait_for_turn_end'),
+});
+
+/**
+ * 保留中の希望を通常応答の材料として渡した（プロンプトに含めた。準備の時点で手元にあるものだけ）。
+ * **実際の応答で使われたかは分からない**（ここは「渡した」事実だけ）。proposed_utterance は LLM が先に生成した文。
+ */
+export const InitiativeResponseMaterialEvent = eventSchema('initiative.response_material', {
+  candidate_id: CandidateId,
+  candidate_version: CandidateVersion,
+  /** 通常応答の準備の入力（prefetch.started と segment_id、transcript_revision で結べる）。 */
+  segment_id: SegmentId,
+  transcript_revision: TranscriptRevision,
+  prompt_version: NonEmptyString,
+  proposed_utterance: ModelOutput(z.string()),
+  at: MonotonicMs,
+});
 
 /**
  * E2a が受け付けなかった要求（計画 §5 E2a の「不正な遷移は拒否して理由を残す」）。発行は E。
@@ -498,6 +554,39 @@ export const CandidateRejectedEvent = eventSchema('candidate.rejected', {
 });
 
 // ---- 合図 ------------------------------------------------------------------
+
+/**
+ * 吸気の合図の後の、人の反応の観測（cue ごとに1回）。**譲ったと確定した記録ではない**。話し続けた時間、VAP の p_now の変化、
+ * 話が止まるまでの時間などを、窓（policy.initiative.negotiation.cue_reaction_window_ms）の間に測った値だけを残す。
+ */
+export const NegotiationCueReactionEvent = eventSchema('negotiation.cue_reaction', {
+  cue_id: NonEmptyString,
+  candidate_id: CandidateId,
+  candidate_version: CandidateVersion,
+  cue_sent_at: MonotonicMs,
+  ended_at: MonotonicMs,
+  /** 窓の設定値（暫定、未校正）。 */
+  window_ms: NonNegativeMs,
+  /** window は窓の満了。ai_speech_started は窓の前に AI が話し始めた（候補か通常応答）。candidate_withdrawn は窓の前に候補が消えた。session_ended はセッションの終わり。 */
+  ended_by: z.enum(['window', 'ai_speech_started', 'candidate_withdrawn', 'session_ended']),
+  observed_ms: NonNegativeMs,
+  /** 窓の間の tick の数と、人が話していた tick の数（前の tick の user_speaking）。 */
+  ticks: NonNegativeInt,
+  user_speaking_ticks: NonNegativeInt,
+  user_speaking_at_cue: z.boolean(),
+  user_speaking_at_end: z.boolean(),
+  /** 合図の時点で話していた人が止まるまでの時間（窓の中で止まらなければ null と理由）。 */
+  time_to_user_stop_ms: Maybe(NonNegativeMs),
+  /** 合図の時点で黙っていた人が話し始めるまでの時間（窓の中で話さなければ null と理由）。 */
+  time_to_user_start_ms: Maybe(NonNegativeMs),
+  /** VAP の AI 側の p_now（合図の時点、終わりの時点、窓の中の最小と最大）。使えない tick を除く。全部なければ null と理由。 */
+  p_now_ai_at_cue: Maybe(Probability),
+  p_now_ai_at_end: Maybe(Probability),
+  p_now_ai_min: Maybe(Probability),
+  p_now_ai_max: Maybe(Probability),
+  /** 窓の間に通った、候補の状態の順（BREATH_INHALE など）。 */
+  candidate_states: z.array(CandidateState),
+});
 
 const SignalShape = {
   candidate_id: CandidateId,
@@ -707,6 +796,160 @@ export const ResearchNoteEvent = eventSchema('research.note', {
   client_wall_clock: WallClock,
 });
 
+// ---- AI の発話の結果（観測に基づく推定） --------------------------------------
+
+/**
+ * turn.outcome: AI の発話の開始の判断が、その後の人の振る舞いから見てどうだったかの記録。
+ * 開始の判断には使わない（観測だけ。control/turn_outcome.ts、docs/known_gaps.md の節「発話の失敗の記録」）。
+ * ラベルはどれも音声と ASR から機械的に推定した印で、会話の失敗を確定するものではない。条件と閾値は turn.outcome（暫定）。
+ *  - suspected_premature_start: 開始の直前まで人の声があり、開始の直後に同じ発話の続きが来た（「発話の途中で始めた」の疑い）。
+ *  - user_continued_after_start: 開始より後の音声で ASR の文が伸びた（/tune の「発話の途中での開始」と同じ定義）。相槌だけは除く。
+ *  - user_overlap: AI の発話中に人の声が overlap_min_ms 以上あり、ASR に内容のある文が出た。
+ *  - backchannel_overlap: AI の発話中の人の声、または文が相槌だけ（turn.after_ai_speech.backchannel_phrases と同じ語句の判定）。
+ *  - overlap_without_asr: AI の発話中に人の声（vad）はあったが ASR に文が出なかった（雑音や息の可能性）。
+ *  - ai_interrupted_early: AI の発話が interrupted_early_max_ms より短いうちに止められた。
+ *  - spoke_twice: 前の AI の発話が終わってから開始まで、人の声（vad[0]）が一度もなかった（/tune の連続発話と同じ定義）。
+ *  - no_response_after_user_yield: 人が話し終えたのに、no_response_wait_ms 待っても AI が話し始めなかった。
+ */
+export const TurnOutcomeLabel = z.enum([
+  'suspected_premature_start',
+  'user_continued_after_start',
+  'user_overlap',
+  'backchannel_overlap',
+  'overlap_without_asr',
+  'ai_interrupted_early',
+  'spoke_twice',
+  'no_response_after_user_yield',
+]);
+export type TurnOutcomeLabel = z.infer<typeof TurnOutcomeLabel>;
+
+/** none はこの区間に利用者の文がない。backchannel は語句がすべて相槌。content はそれ以外の文。 */
+export const OutcomeTextKind = z.enum(['none', 'backchannel', 'content']);
+export type OutcomeTextKind = z.infer<typeof OutcomeTextKind>;
+
+/** 開始の時点の値（開始した tick の turn.allowed と同じ値）。後の項目の参照用に残す。 */
+export const TurnOutcomeStart = z.strictObject({
+  decided_at: MonotonicMs,
+  /** 開始の tick の受信済み音声の先頭（advance_segment の at_audio_frame）。 */
+  audio_frame: AudioFrameIndex,
+  decision_source: TurnAllowedPayload.shape.decision_source,
+  reason: NonEmptyString,
+  policy_id: NonEmptyString,
+  p_now: Maybe(Probability),
+  p_future: Maybe(Probability),
+  vad_user: Maybe(Probability),
+  vad_ai: Maybe(Probability),
+  vap_freshness: VapFreshness,
+  /** 開始の tick から見た最新の VAP の受信からの経過。 */
+  vap_age_ms: Maybe(NonNegativeMs),
+  completion_p: Maybe(Probability),
+  completion_revision: Maybe(TranscriptRevision),
+  /** 利用者の発話の終わりからの間（TurnManager の gap_ms）。 */
+  gap_ms: Maybe(NonNegativeMs),
+  user_speaking: z.boolean(),
+});
+export type TurnOutcomeStart = z.infer<typeof TurnOutcomeStart>;
+
+/** 開始の前と、開始の後に観測した値。すべて実測（ASR の文は持たず、文字数と種類だけ）。 */
+export const TurnOutcomeObserved = z.strictObject({
+  /** 最後の人の声（vad[0] が speaking_threshold 以上）から開始まで。30 秒より前は null。 */
+  user_voice_gap_before_ms: Maybe(NonNegativeMs),
+  /** 開始の直前まで人の声があったか（user_just_before_ms 以内）。 */
+  user_voiced_just_before: z.boolean(),
+  /** 前の AI の発話の終わりから開始まで。最初の発話は null。 */
+  previous_ai_end_gap_ms: Maybe(NonNegativeMs),
+  /** 前の AI の発話の終わりから開始までに人の声があったか。 */
+  user_voice_since_previous_ai: Maybe(z.boolean()),
+  /** 開始より後の音声で ASR の文が伸びたか（/tune の発話の途中での開始と同じ定義、continuation_window_ms の窓）。 */
+  continuation: z.strictObject({
+    continued: z.boolean(),
+    first_result_after_start_ms: Maybe(NonNegativeMs),
+    first_audio_offset_ms: Maybe(NonNegativeMs),
+    chars: NonNegativeInt,
+    text_kind: OutcomeTextKind,
+  }),
+  /** 再生区間の人の声（vad[0]）の重なり。VAP の値が区間にないと null。 */
+  overlap: z.strictObject({
+    overlap_ms: Maybe(NonNegativeMs),
+    first_after_start_ms: Maybe(NonNegativeMs),
+    longest_run_ms: Maybe(NonNegativeMs),
+    /** 再生区間の音声に属する ASR の文字数と種類。 */
+    chars: NonNegativeInt,
+    text_kind: OutcomeTextKind,
+  }),
+  /** AI の声がマイクに回り込んだ疑い。立っていると labels は null（分類しない）。 */
+  echo: z.strictObject({
+    suspected: z.boolean(),
+    /** ASR の文と AI の発話文の文字 n-gram の cosine。文がない、発話文が記録にないと null。 */
+    text_similarity: Maybe(Probability),
+    /** 再生区間に占める人の声の割合。 */
+    overlap_ratio: Maybe(Probability),
+  }),
+});
+export type TurnOutcomeObserved = z.infer<typeof TurnOutcomeObserved>;
+
+const TurnOutcomeBase = {
+  event: z.literal('turn.outcome'),
+  /** null は分類しなかった（echo_suspected、再生の未確定、中止など。null_reason に理由）。 */
+  labels: Maybe(z.array(TurnOutcomeLabel)),
+};
+
+export const TurnOutcomeEvent = z.discriminatedUnion('kind', [
+  z.strictObject({
+    ...Envelope,
+    ...TurnOutcomeBase,
+    kind: z.literal('ai_utterance'),
+    audio_playback_id: AudioPlaybackId,
+    segment_id: SegmentId,
+    origin: z.enum(['response', 'candidate']),
+    candidate_id: Maybe(CandidateId),
+    /** 二段判定の会話の種類（manifest の conversation_kind）。 */
+    conversation_kind: Maybe(NonEmptyString),
+    start: TurnOutcomeStart,
+    speech_started_at: Maybe(MonotonicMs),
+    speech_ended_at: Maybe(MonotonicMs),
+    played_ms: Maybe(NonNegativeMs),
+    interrupted: z.boolean(),
+    observed: TurnOutcomeObserved,
+  }),
+  z.strictObject({
+    ...Envelope,
+    ...TurnOutcomeBase,
+    kind: z.literal('no_response'),
+    segment_id: SegmentId,
+    transcript_revision: Maybe(TranscriptRevision),
+    waited_ms: NonNegativeMs,
+    last_user_voice_at: Maybe(MonotonicMs),
+    asr_chars: NonNegativeInt,
+    asr_is_final: z.boolean(),
+    /** permitted_but_not_ready は許可が出ていて音声の準備を待っていた（LLM、TTS の遅れ）。not_permitted は許可が出なかった（方策の判断）。 */
+    wait_state: z.enum(['not_permitted', 'permitted_but_not_ready']),
+    vap_freshness: VapFreshness,
+    p_now: Maybe(Probability),
+    p_future: Maybe(Probability),
+    completion_p: Maybe(Probability),
+    decision_source: Maybe(NonEmptyString),
+  }),
+]);
+export type TurnOutcomeEvent = z.infer<typeof TurnOutcomeEvent>;
+
+/** 封筒を除いた turn.outcome の本体（TurnOutcomeBody）。 */
+export type TurnOutcomeBody = TurnOutcomeEvent extends infer E
+  ? E extends unknown
+    ? Omit<E, 'schema_version' | 't_monotonic_ms' | 'wall_clock' | 'session_id' | 'condition' | 'time_basis'>
+    : never
+  : never;
+export type TurnOutcomeAiUtterance = Extract<TurnOutcomeBody, { kind: 'ai_utterance' }>;
+export type TurnOutcomeNoResponse = Extract<TurnOutcomeBody, { kind: 'no_response' }>;
+
+/** /tune の再生が返す、発話ごとの結果と集計の材料（dev_server、apps/web/src/tune）。 */
+export interface TuneTurnOutcomes {
+  recorded: TurnOutcomeBody[];
+  replayed: TurnOutcomeBody[];
+  /** 方策が turn.outcome を持たないなど、分類しなかった理由。 */
+  note: string | null;
+}
+
 // ---- 全体 ------------------------------------------------------------------
 
 export const ResearchEvent = z.discriminatedUnion('event', [
@@ -724,12 +967,15 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   InitiativeAbortedEvent,
   InitiativeDesireEvent,
   InitiativeTimingEvent,
+  InitiativeNotOfferedEvent,
+  InitiativeResponseMaterialEvent,
   CandidateStateChangedEvent,
   CandidateRejectedEvent,
   SignalSentEvent,
   SignalStartedEvent,
   SignalEndedEvent,
   NegotiationDecisionEvent,
+  NegotiationCueReactionEvent,
   TurnAllowedEvent,
   SpeechStartedEvent,
   SpeechEndedEvent,
@@ -743,6 +989,7 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   SessionClientEvent,
   GazeRenderedEvent,
   ResearchNoteEvent,
+  TurnOutcomeEvent,
 ]);
 export type ResearchEvent = z.infer<typeof ResearchEvent>;
 export type ResearchEventName = ResearchEvent['event'];
@@ -763,6 +1010,8 @@ export const EVENT_NAMES = [
   'initiative.aborted',
   'initiative.desire',
   'initiative.timing',
+  'initiative.not_offered',
+  'initiative.response_material',
   'candidate.state_changed',
   'signal.sent',
   'signal.started',
@@ -782,6 +1031,8 @@ export const EVENT_NAMES = [
   'research.note',
   'candidate.rejected',
   'negotiation.decision',
+  'negotiation.cue_reaction',
+  'turn.outcome',
 ] as const satisfies readonly ResearchEventName[];
 
 export type EventOf<N extends ResearchEventName> = Extract<ResearchEvent, { event: N }>;

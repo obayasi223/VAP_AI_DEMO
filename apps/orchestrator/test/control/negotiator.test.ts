@@ -365,8 +365,12 @@ describe('二段判定のタイミング（timing_gate）', () => {
   const select = (candidate: Partial<CandidateView>, condition: Condition = 'initiative_inhale') =>
     selectSpeech(settings(condition, { timing_gate: true }), { candidate: view(candidate), permitted: true, invitation: NO_INVITATION, user_text: '話し終わりました' });
 
-  it('WAIT_FOR_TURN_END は許可が出たら合図なしで話す（吸気の条件でも）', () => {
-    expect(select({ timing: 'WAIT_FOR_TURN_END' })).toMatchObject({ choice: 'candidate', reasons: ['natural_yield', 'from:INTENT_READY', 'timing_wait_for_turn_end'], cause: 'turn_allowed' });
+  it('WAIT_FOR_TURN_END は吸気の条件では候補を話さず、通常応答へ回す（許可が出ていても）', () => {
+    expect(select({ timing: 'WAIT_FOR_TURN_END' })).toMatchObject({ choice: 'response', reasons: ['timing_wait_for_turn_end'] });
+  });
+
+  it('no_cue の WAIT_FOR_TURN_END は従来どおり許可で話す（条件を変えない）', () => {
+    expect(select({ timing: 'WAIT_FOR_TURN_END' }, 'initiative_no_cue')).toMatchObject({ choice: 'candidate', reasons: ['natural_yield', 'from:INTENT_READY', 'timing_wait_for_turn_end'], cause: 'turn_allowed' });
   });
 
   it('OFFER_NOW で合図がまだなら通常応答（吸気の条件は合図を経て話す）', () => {

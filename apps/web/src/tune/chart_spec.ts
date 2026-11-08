@@ -5,8 +5,8 @@
  *    L64 が続いた時間（L67 が見る値）。判断の材料（turn_diagnostic）から描く。
  *  - completion: 制御が使った completion_p と準備の閾値。
  */
-import type { TurnDiagnosticBody } from '@llm-vap/contracts';
-import type { ChartLane, ChartThreshold } from './TuneChart';
+import type { TurnDiagnosticBody, TurnOutcomeBody } from '@llm-vap/contracts';
+import type { ChartBand, ChartLane, ChartThreshold } from './TuneChart';
 import type { ThresholdLines, ThresholdLine } from './policy_edit';
 
 /** 図の色（CSS 変数。tune.module.css で明暗を切り替える）。 */
@@ -81,6 +81,25 @@ export function vapLanes(points: VapLike[], aiIndex: 0 | 1, lines: ThresholdLine
       thresholds: thresholds(lines.vad),
     },
   ];
+}
+
+/**
+ * AI の発話の結果の帯（観測に基づく推定）。発話の開始から終わりまでを区間にして、ラベルを名前にする（図の下の読み出しに出る）。
+ * 色だけで区別しない: ラベルは区間の名前で読む。分類なしは名前に理由を出す。
+ */
+export function outcomeBand(name: string, outcomes: readonly TurnOutcomeBody[], colors: { flagged: string; clean: string; unsettled: string }): ChartBand {
+  const spans = outcomes.map((o) => {
+    const labels = o.labels.value ?? [];
+    const label = o.labels.value === null ? `分類なし: ${o.labels.null_reason}` : labels.length === 0 ? 'ラベルなし' : labels.join(',');
+    if (o.kind === 'no_response') {
+      const t = o.last_user_voice_at.value ?? 0;
+      return { start: t, end: t + o.waited_ms, color: colors.flagged, label };
+    }
+    const start = o.start.decided_at;
+    const end = o.speech_ended_at.value ?? o.speech_started_at.value ?? start + 1000;
+    return { start, end: Math.max(end, start + 400), color: o.labels.value === null ? colors.unsettled : labels.length === 0 ? colors.clean : colors.flagged, label };
+  });
+  return { name, spans, marks: [] };
 }
 
 export const GAP_LANE_MAX_MS = 4000;

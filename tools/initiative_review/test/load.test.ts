@@ -255,4 +255,40 @@ describe('二段判定（initiative.desire と initiative.timing）', () => {
     expect(session.meta.conversation_type).toBe('コンパニオン');
     expect(session.warnings.join(' ')).toContain('違います');
   });
+
+  it('その発話の結果（turn.outcome）を候補の発話の詳細に載せる', () => {
+    const outcomeEvent = {
+      schema_version: 1,
+      t_monotonic_ms: 9000,
+      wall_clock: 'x',
+      session_id: 's',
+      condition: 'initiative_inhale',
+      time_basis: { source: 'orchestrator', uncertainty_ms: { value: 0 } },
+      event: 'turn.outcome',
+      kind: 'ai_utterance',
+      audio_playback_id: 9,
+      segment_id: 4,
+      origin: 'candidate',
+      candidate_id: { value: 'c_0001' },
+      conversation_kind: { value: null, null_reason: 'none' },
+      labels: { value: ['user_overlap'] },
+      start: { decided_at: 7000, decision_source: 'vap', reason: 'L67_vap_yield', p_now: { value: 0.7 }, p_future: { value: 0.6 }, vad_user: { value: 0.1 }, vap_freshness: 'fresh', completion_p: { value: 0.5 }, gap_ms: { value: 900 } },
+      speech_started_at: { value: 7040 },
+      speech_ended_at: { value: 8040 },
+      played_ms: { value: 1000 },
+      interrupted: false,
+      observed: {
+        user_voice_gap_before_ms: { value: 950 },
+        user_voiced_just_before: true,
+        continuation: { continued: false, chars: 0 },
+        overlap: { overlap_ms: { value: 320 }, first_after_start_ms: { value: 100 }, chars: 4, text_kind: 'content' },
+        echo: { suspected: false, text_similarity: { value: 0.2 }, overlap_ratio: { value: 0.3 } },
+      },
+    };
+    const start = { schema_version: 1, t_monotonic_ms: 7030, wall_clock: 'x', session_id: 's', condition: 'initiative_inhale', time_basis: { source: 'orchestrator', uncertainty_ms: { value: 0 } }, event: 'speech.started', audio_playback_id: 9, audio_frame: 1000, started_at: 7040, origin: 'candidate', candidate_id: 'c_0001', candidate_version: 1 };
+    const session = load({ extraLines: [JSON.stringify(start), JSON.stringify(outcomeEvent)] });
+    const item = candidate(session);
+    expect(item.speech.find((r) => r.audio_playback_id === 9)?.outcome?.labels).toEqual(['user_overlap']);
+    expect(item.timeline.some((r) => r.event === 'turn.outcome')).toBe(true);
+  });
 });

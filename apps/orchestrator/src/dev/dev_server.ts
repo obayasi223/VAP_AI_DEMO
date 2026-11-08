@@ -15,7 +15,7 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from '
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { Policy } from '@llm-vap/contracts';
-import type { PolicyJa, TuneReplayResult, TuneSessionSummary } from '@llm-vap/contracts';
+import type { PolicyJa, TuneReplayResult, TuneSessionSummary, TuneTurnOutcomes } from '@llm-vap/contracts';
 import { parsePersona, type InitiativePersona } from '../cognition/initiative';
 import { initiativeTriggerReport } from './initiative_trigger';
 import { applyOverride, diffOverride, overrideKeys } from './policy_override';
@@ -262,7 +262,7 @@ export class DevServer {
     }
   }
 
-  async replay(body: unknown): Promise<TuneReplayResult> {
+  async replay(body: unknown): Promise<TuneReplayResult & { outcomes: TuneTurnOutcomes }> {
     const request = body as { session_id?: unknown; policy?: unknown; options?: ReplayOptions; recorded_policy?: unknown };
     if (typeof request.session_id !== 'string') throw new HttpError(400, 'session_id is required');
     const parsed = Policy.safeParse(request.policy);

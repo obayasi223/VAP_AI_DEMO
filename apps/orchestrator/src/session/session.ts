@@ -57,16 +57,22 @@ import { ResponsePrefetch } from '../cognition/prefetch';
 import { createTurnManager, userTextFor } from '../control';
 import type { TurnState } from '../control';
 import type { SessionLog, SessionManifestDetails } from '../logging';
-import { BrowserClockRecorder, WorkerClockRecorder } from '../logging';
+import { BrowserClockRecorder, SessionAudioRecorder, WorkerClockRecorder, sessionAudioOffManifest } from '../logging';
+import type { SessionAudioFileSystem, SessionAudioManifest, SessionAudioOptions } from '../logging';
 import { attachMaaiEventBridge } from '../maai';
 import type { MaaiWorkerClient } from '../maai';
 import { SpeechGeneratorImpl, createResponsePromptBuilder } from '../speech';
 import type { SessionProviders } from '../app/providers';
 import { isReadyBufferMs } from '../app/maai_setup';
+import { readSessionAudioConfig } from '../app/config';
+import type { SessionAudioConfig } from '../app/config';
 import { FALLBACK_ENERGY_FLOOR_DBFS, PlaybackTracker, rmsDbfs } from './audio_state';
 import { SessionHistory, UserUtterances } from './history';
 import { InitiativeWiring } from './initiative_wiring';
 import { NegotiationWiring, negotiatorSettings } from './negotiation_wiring';
+import { readVap, vapDirectionSettings } from '../control/vap_direction';
+import { turnOutcomeSettings } from '../control/turn_outcome';
+import { TurnOutcomeWiring } from './turn_outcome_wiring';
 import type { CandidateChoice } from './negotiation_wiring';
 
 export interface BrowserLink {
@@ -90,6 +96,8 @@ export interface SessionOptions {
   onStatusChange?: (status: SessionStatusView) => void;
   /** false なら tick のタイマーを動かさない（試験が tick() を直接呼ぶ）。既定は true。 */
   tickTimer?: boolean;
+  /** 会話の音声の保存の設定。省略時は環境変数（SAVE_SESSION_AUDIO。既定は保存しない）。試験が差し替える。 */
+  sessionAudio?: SessionAudioConfig & { dir?: string; fs?: SessionAudioFileSystem; recorder?: Partial<SessionAudioOptions> };
 }
 
 export interface SessionStatusView {
@@ -114,6 +122,8 @@ export interface SessionCounters {
 }
 
 const TTS_SAMPLE_RATE_HZ = 24000;
+/** vap.state の入力の窓（worker の1周期）。raw.worker_input がないときの代わり。 */
+const ZERO_FILL_VAP_WINDOW_FRAMES = 1280;
 
 function stripType<T extends { type: unknown }>(message: T): Omit<T, 'type'> {
   const { type: _type, ...rest } = message;
@@ -155,10 +165,15 @@ export class Session {
   /** 発話希望の判定と候補。無効（条件、方策）か作れなければ null。 */
   private initiative: InitiativeWiring | null = null;
   private initiativeReason: string | null = null;
+  /** AI の発話の結果の記録（観測だけ）。方策に turn.outcome がなければ null。 */
+  private readonly outcome: TurnOutcomeWiring | null;
   /** 発話希望の交渉（波3）。判定が動いていない、または方策に negotiation がなければ null。 */
   private negotiation: NegotiationWiring | null = null;
   /** 判定は動いているのに交渉だけ作れなかった理由（negotiatorSettings が null）。 */
   private negotiationReason: string | null = null;
+  /** 会話の音声の保存。設定がなければ null（何も書かない）。 */
+  private audioRecorder: SessionAudioRecorder | null = null;
+  private manifestDetails: SessionManifestDetails | null = null;
   private readonly unsubscribe: Unsubscribe[] = [];
   private tickTimer: NodeJS.Timeout | null = null;
   private closed = false;
@@ -179,6 +194,8 @@ export class Session {
   private lastStatusKey = '';
   /** 再生を始めた segment（履歴の並び）。 */
   private readonly startedInSegment = new Map<number, number>();
+  /** ネットワーク欠損でゼロ埋めされた音声の範囲（FRAMES_DROPPED）。 */
+  private readonly zeroFilledFrames: { from: number; to: number }[] = [];
 
   constructor(private readonly options: SessionOptions) {
     this.session_id = options.session_id;
@@ -191,6 +208,18 @@ export class Session {
         options.policy.policy_id === 'ja' ? (options.policy.turn.fallback_energy_silence_dbfs ?? null) : null,
     });
     this.turnState = this.turnManager.initialState();
+    const outcomeSettings = turnOutcomeSettings(options.policy, this.turnManager.settings);
+    this.outcome =
+      outcomeSettings === null
+        ? null
+        : new TurnOutcomeWiring({
+            settings: outcomeSettings,
+            emitter: this.emitter,
+            conversation_kind:
+              options.providers.initiative?.staged?.conversation_kind != null
+                ? present(options.providers.initiative.staged.conversation_kind)
+                : absent('no_staged_conversation_kind'),
+          });
     this.browserClock = new BrowserClockRecorder(this.emitter);
     this.workerClock = new WorkerClockRecorder(this.emitter);
   }
@@ -199,6 +228,7 @@ export class Session {
   async start(link: BrowserLink, hello: ClientHello): Promise<void> {
     this.link = link;
     this.recordClient(hello, 'new_session');
+    this.startAudioRecording();
     const { providers } = this.options;
     for (const [kind, cls] of Object.entries(providers.classes)) {
       if (cls === 'test_double') this.fixedReasons.push(`test_double:${kind}:${providers.names[kind as 'stt']}`);
@@ -317,7 +347,7 @@ export class Session {
       provider_class: maai === null ? 'unavailable' : maai.providerClass,
       reason: maai === null ? (this.options.maaiUnavailableReason ?? 'maai_disabled') : null,
     };
-    void this.options.log.describe({
+    this.manifestDetails = {
       condition: this.options.condition,
       policy_id: this.options.policy.policy_id,
       providers: manifest,
@@ -341,6 +371,45 @@ export class Session {
           this.negotiation === null || this.options.condition === 'reactive'
             ? 'log_and_research_view_only'
             : `negotiation:${this.options.condition}`,
+      },
+    };
+    void this.describeWithAudio();
+  }
+
+  /** manifest を書く。音声の保存の有無（session_audio）は必ず載せる。 */
+  private describeWithAudio(audio?: SessionAudioManifest): Promise<boolean> {
+    if (this.manifestDetails === null) return Promise.resolve(false);
+    const session_audio = audio ?? this.audioRecorder?.manifest() ?? sessionAudioOffManifest('SAVE_SESSION_AUDIO_not_set');
+    const details: SessionManifestDetails & { session_audio: SessionAudioManifest } = { ...this.manifestDetails, session_audio };
+    return this.options.log.describe(details);
+  }
+
+  /** 設定があるときだけ音声の保存を始める。起動ログに保存の有無を必ず出す。 */
+  private startAudioRecording(): void {
+    const setting: NonNullable<SessionOptions['sessionAudio']> = this.options.sessionAudio ?? readSessionAudioConfig(process.env);
+    if (!setting.enabled) {
+      console.log(`[session ${this.session_id}] session audio: not saved (SAVE_SESSION_AUDIO is not set)`);
+      return;
+    }
+    const dir = setting.dir ?? this.options.log.paths.dir;
+    console.log(`[session ${this.session_id}] session audio: SAVING mic and AI audio to ${dir} (SAVE_SESSION_AUDIO=1; others' voices need a consent procedure first)`);
+    this.audioRecorder = new SessionAudioRecorder({
+      ...setting.recorder,
+      dir,
+      session_id: this.session_id,
+      minFreeBytes: setting.min_free_bytes,
+      ...(setting.fs ? { fs: setting.fs } : {}),
+      onProblem: (problem) => {
+        console.error(`[session ${this.session_id}] session audio: ${problem.kind}: ${problem.message}`);
+        this.emitter.emit({
+          event: 'provider.status',
+          provider: 'session_audio',
+          provider_class: 'production',
+          status: 'degraded',
+          reason: present(`${problem.kind}: ${problem.message}`.slice(0, 300)),
+          retry_attempt: 0,
+          next_retry_ms: absent('not_retrying'),
+        });
       },
     });
   }
@@ -407,7 +476,10 @@ export class Session {
     const speech = new SpeechGeneratorImpl({
       tts,
       llm,
-      prompt: createResponsePromptBuilder({ history: this.history }),
+      prompt: createResponsePromptBuilder({
+        history: this.history,
+        pending_material: (request) => this.negotiation?.responseMaterial(request, this.time.monotonicMs()) ?? null,
+      }),
       sink: {
         begin: (m) => this.send({ type: 'playback.begin', ...m }),
         pcm: (frame) => this.link?.sendBinary(encodePcmFrame(frame)),
@@ -415,7 +487,7 @@ export class Session {
         stop: (m) => this.send({ type: 'playback.stop', ...m }),
       },
       time: this.time,
-      emitter: this.emitter,
+      emitter: this.outcome?.tee(this.emitter) ?? this.emitter,
       is_ready_buffer_ms: isReadyBufferMs(policy),
     });
     this.speech = speech;
@@ -423,15 +495,21 @@ export class Session {
     this.unsubscribe.push(
       speech.onStateChange((change) => {
         this.negotiation?.onSpeechState(change);
+        this.outcome?.onSpeechState(change);
         const origin = change.request.origin;
         if (change.state === 'failed' && origin.kind === 'candidate') {
+          const wasSpeaking = this.initiative?.ledger.getRecord(origin.candidate_id)?.audio_playback_id === change.audio_playback_id;
           this.initiative?.onSpeechFailed(origin.candidate_id, change.audio_playback_id, this.time.monotonicMs());
+          // 1 音も出ないまま再生に失敗した候補: 人の発話への応答を通常の経路へ戻す（再試行はしない）。
+          if (wasSpeaking) this.queueCandidateRecovery(origin.candidate_id, 'speech_failed', change.audio_playback_id);
         }
       }),
     );
     this.unsubscribe.push(
       speech.onFinished((finished) => {
         this.initiative?.onSpeechFinished(finished, this.time.monotonicMs());
+        if (finished.no_audio && finished.origin.kind === 'candidate') this.queueCandidateRecovery(finished.origin.candidate_id, 'speech_no_audio', finished.audio_playback_id);
+        this.outcome?.onFinished(finished, this.time.monotonicMs());
         const segment = this.startedInSegment.get(finished.audio_playback_id);
         this.startedInSegment.delete(finished.audio_playback_id);
         this.history.commitAssistantSpoken(
@@ -477,6 +555,7 @@ export class Session {
                 desire_prompt_version: setup.staged.desire_prompt_version,
                 timing_prompt_version: setup.staged.timing_prompt_version,
                 history: this.history,
+                ...(policy.initiative.staged?.revise_min_utterance_similarity !== undefined ? { revise_min_utterance_similarity: policy.initiative.staged.revise_min_utterance_similarity } : {}),
               },
             }
           : {}),
@@ -544,8 +623,16 @@ export class Session {
         onVapState: (message, at) => {
           // 設定し直す前の結果（前のセッションの番号）は使わない。
           if (this.workerReadyAt === null || message.channel_layout !== '2ch') return;
+          // ゼロ埋めの音声で計算した値は VAP として使わない（docs/known_gaps.md §12）。入力を更新しなければ、続いたときだけ stale になる。
+          if (this.overlapsZeroFill(message)) return;
           this.vap = stripType(message) as Vap2chState;
           this.vapReceivedAt = at;
+          this.outcome?.onVap(at, message.audio_frame, message.vad);
+        },
+        onFramesDropped: (message) => {
+          if (!message.zero_filled) return;
+          this.zeroFilledFrames.push({ from: message.from_audio_frame, to: message.from_audio_frame + message.sample_count });
+          if (this.zeroFilledFrames.length > 64) this.zeroFilledFrames.shift();
         },
         onAvailability: (availability) => {
           if (!availability.vap_available) {
@@ -559,6 +646,14 @@ export class Session {
     // 前のセッションの番号と結果を混ぜないよう、ワーカーにも新しい CONFIGURE を送る。
     // ブラウザの audio_frame は同じページの中では 0 に戻らない（猶予切れの後に同じタブから来た場合など）。
     void maai.reconfigure(this.session_id);
+  }
+
+  /** vap.state の入力の窓（worker_input の from〜audio_frame）がゼロ埋めの範囲にかかっているか。 */
+  private overlapsZeroFill(message: { audio_frame: number; raw: unknown }): boolean {
+    if (this.zeroFilledFrames.length === 0) return false;
+    const input = (message.raw as { worker_input?: { from_audio_frame?: unknown } } | null)?.worker_input;
+    const from = typeof input?.from_audio_frame === 'number' ? input.from_audio_frame : message.audio_frame - ZERO_FILL_VAP_WINDOW_FRAMES;
+    return this.zeroFilledFrames.some((z) => from < z.to && message.audio_frame > z.from);
   }
 
   private recordClient(hello: ClientHello, connection: 'new_session' | 'reattached'): void {
@@ -590,6 +685,7 @@ export class Session {
     this.receivedAudioFrame = Math.max(this.receivedAudioFrame, end);
     this.lastMicDbfs = Math.max(FALLBACK_ENERGY_FLOOR_DBFS, rmsDbfs(frame.mic));
     this.tracker.observeFrame(end, rmsDbfs(frame.sys));
+    this.audioRecorder?.push(frame.audio_frame, frame.mic, frame.sys, this.time.monotonicMs());
     this.stt?.pushAudio(frame.audio_frame, frame.mic);
     if (this.workerReadyAt !== null) this.options.maai?.sendEncodedAudio(data, frame.sample_count);
   }
@@ -693,6 +789,7 @@ export class Session {
       received_at: result.received_at,
     };
     this.transcript = snapshot;
+    this.outcome?.onStt(result);
     this.requestCompletion(snapshot);
     // 判定は非同期（LLM を待たない）。増分で起動し、ターン完了の推定とは条件を共有しない（計画 §4.5）。
     this.initiative?.onSttResult(result);
@@ -763,6 +860,7 @@ export class Session {
           this.tracker.ended(id);
         }
       }
+      this.applyCandidateRecovery(now);
       const previous = this.turnState;
       // 交渉（合図、吸気の完了、DEFERRED）。吸気中は通常の応答も含めて開始を保留する。
       const holdStart =
@@ -771,6 +869,7 @@ export class Session {
           ai_speaking: previous.speaking.phase !== 'silent' || (this.speech?.activePlayback() ?? null) !== null,
           avatar_available: this.link !== null,
           user_speaking: previous.user_speaking,
+          p_now_ai: this.vap === null ? null : readVap(this.vap, vapDirectionSettings(this.options.policy)).p_now_ai,
         }) ?? null;
       const inputs = this.inputs(holdStart);
       let { state, decisions } = this.turnManager.step(previous, inputs, now);
@@ -799,6 +898,7 @@ export class Session {
         }
       }
       for (const decision of decisions) this.dispatch(decision, now);
+      this.outcome?.afterStep({ now, decisions, state: this.turnState, inputs, candidate_id: this.startedCandidate ? (candidate?.choice.candidate?.candidate_id ?? null) : null });
       // 期限と人の発話の有無だけを同期で進める。LLM の結果は待たない。
       this.initiative?.tick(now, this.turnState.user_speaking);
     } catch (error) {
@@ -816,7 +916,10 @@ export class Session {
         return;
       case 'start_speech':
         // 通常の応答を話し始めたら、残っている候補は撤回する（計画 §4.6）。候補を話し始めたときは撤回しない。
-        if (!this.startedCandidate) this.initiative?.onNormalResponseStarted(now);
+        if (!this.startedCandidate) {
+          if (this.negotiation !== null) this.negotiation.onNormalResponseStarted(now);
+          else this.initiative?.onNormalResponseStarted(now);
+        }
         return; // 再生の開始は tick の中で startSpeech が扱う
       case 'interrupt_speech':
         this.speech?.stop(decision.audio_playback_id, decision.reason, {
@@ -846,6 +949,44 @@ export class Session {
 
   /** この tick で始めたのが候補の発話か（dispatch の start_speech で通常応答の撤回をしないため）。 */
   private startedCandidate = false;
+  /** 候補の発話を始めたときの人の発話（1 音も出ないまま失敗したら、通常の応答の経路へ戻すための文）。 */
+  private readonly candidateUserText = new Map<string, string>();
+  private pendingCandidateRecovery: { candidate_id: string; cause: 'speech_failed' | 'speech_no_audio'; audio_playback_id: number } | null = null;
+
+  /** 発声の失敗の後、次の tick の始めに通常の応答の経路へ戻す（tick の途中で状態を書き換えない）。 */
+  private queueCandidateRecovery(candidate_id: string, cause: 'speech_failed' | 'speech_no_audio', audio_playback_id: number): void {
+    this.pendingCandidateRecovery = { candidate_id, cause, audio_playback_id };
+  }
+
+  /**
+   * 1 音も出なかった候補の発話の復帰（docs/initiative_v3_design.md §7）。TurnManager はこの発話の開始で segment を進め、asr_result を
+   * 消している（U-4）。人が待っているなら、その発話の文を asr_result へ戻して L45 の準備を起こす。再試行はしない（候補は WITHDRAWN のまま）。
+   */
+  private applyCandidateRecovery(now: number): void {
+    const pending = this.pendingCandidateRecovery;
+    if (pending === null) return;
+    this.pendingCandidateRecovery = null;
+    const text = this.candidateUserText.get(pending.candidate_id);
+    this.candidateUserText.delete(pending.candidate_id);
+    // D は 1 音も書き込まずに失敗した音声の項目を消す（書き込み済みなら終わりの報告まで残る）。
+    const noAudible = pending.cause === 'speech_no_audio' || this.speech?.stateOf(pending.audio_playback_id) === null;
+    // TurnManager は開始の確認を START_ACK_TIMEOUT_MS まで待つ。1 音も出なかったこの発話の確認は来ないので、この場で待ちを解く。
+    const stale = this.turnState.speaking;
+    if (noAudible && stale.phase === 'starting' && stale.audio_playback_id === pending.audio_playback_id) {
+      this.turnState = { ...this.turnState, speaking: { phase: 'silent' } };
+    }
+    const waiting = text !== undefined && noAudible && !this.turnState.user_speaking && this.turnState.asr_result === null && this.turnState.speaking.phase === 'silent';
+    if (waiting) this.turnState = { ...this.turnState, asr_result: text, last_sent_asr_result: null };
+    this.emitter.emit({
+      event: 'negotiation.decision',
+      stage: 'candidate_audio',
+      candidate_id: present(pending.candidate_id),
+      candidate_version: absent('recovery_after_speech_failure'),
+      candidate_state: this.initiative?.ledger.get(pending.candidate_id)?.state ?? null,
+      outcome: waiting ? 'normal_response_recovery' : 'no_recovery',
+      reasons: [`cause:${pending.cause}`, `at:${Math.round(now)}`, ...(waiting ? [] : [text === undefined ? 'no_user_text' : !noAudible ? 'partly_spoken' : this.turnState.user_speaking ? 'user_speaking' : this.turnState.asr_result !== null ? 'new_user_text' : 'ai_speaking'])],
+    });
+  }
 
   /**
    * E3 の選択。候補を話すなら、候補の音声を準備済みの応答の位置に入れて計算し直した step を返す。それ以外は null
@@ -913,6 +1054,7 @@ export class Session {
       return refused;
     }
     this.startedCandidate = true;
+    if (choice.candidate !== null && choice.user_text !== null) this.candidateUserText.set(choice.candidate.candidate_id, choice.user_text);
     this.startedInSegment.set(audio_playback_id, this.turnState.segment_id);
     return null;
   }
@@ -973,14 +1115,18 @@ export class Session {
   async close(reason: string): Promise<void> {
     if (this.closed) return;
     this.endPlaybackOnBehalf(`session_closed:${reason}`);
+    this.outcome?.close();
     this.closed = true;
     if (this.tickTimer !== null) clearInterval(this.tickTimer);
+    this.negotiation?.finishReactions(this.time.monotonicMs());
     this.initiative?.close();
     this.link = null;
     for (const unsubscribe of this.unsubscribe.splice(0)) unsubscribe();
     this.prefetch?.dispose();
     this.speech?.dispose();
     await Promise.allSettled([this.stt?.close(), this.tts?.close()]);
+    // 音声を閉じてから、結果を manifest に載せてログを閉じる（close は期限つきで、ここで止まらない）。
+    if (this.audioRecorder !== null) await this.describeWithAudio(await this.audioRecorder.close(reason));
     await this.options.log.close();
   }
 }

@@ -32,6 +32,8 @@ export interface NegotiatorSettings {
    * 省略と false は1段判定（v2）で、振る舞いは従来どおり。
    */
   timing_gate?: boolean;
+  /** 合図の後の人の反応を観測する窓（ms、policy の暫定値）。省略は観測しない。 */
+  cue_reaction_window_ms?: number;
 }
 
 /**
@@ -215,6 +217,15 @@ export function negotiate(settings: NegotiatorSettings, previous: NegotiatorStat
   }
   state = { ...state, deferred: state.deferred.filter((d) => inputs.candidates.some((c) => c.candidate_id === d.candidate_id)) };
 
+  // DEFERRED の候補の音声が作れなかった。話せないので状態を残さず閉じ、脱力を解く（発声の失敗の復帰、設計メモ §4）。
+  for (const deferred of [...state.deferred]) {
+    const candidate = inputs.candidates.find((c) => c.candidate_id === deferred.candidate_id);
+    if (candidate?.state !== 'DEFERRED' || candidate.audio !== 'failed') continue;
+    actions.push({ kind: 'audio_abandoned', candidate_id: candidate.candidate_id, candidate_version: candidate.candidate_version, reasons: ['candidate_audio_failed'] });
+    actions.push({ kind: 'release', cue_id: deferred.cue_id, candidate_id: candidate.candidate_id, reason: 'withdrawn' });
+    state = { ...state, deferred: state.deferred.filter((d) => d !== deferred) };
+  }
+
   // 吸気の完了は orchestrator の時計（ブラウザの報告を待たない）。
   const target = cueTarget(state, inputs);
   // 吸気の後に音声を待っている。通常の応答も含めて開始を保留する（待ちは hold_max_ms まで）。
@@ -299,6 +310,67 @@ export function releaseForSpeech(
   };
 }
 
+// ---- 合図の後の人の反応の観測 -----------------------------------------------------
+
+/** 吸気の合図の後の観測。**譲ったと確定する処理ではない**（話し続けた時間と VAP の値を測るだけ）。 */
+export interface CueReaction {
+  cue_id: string;
+  candidate_id: string;
+  candidate_version: number;
+  cue_sent_at: number;
+  window_ms: number;
+  ticks: number;
+  user_speaking_ticks: number;
+  user_speaking_at_cue: boolean;
+  last_user_speaking: boolean;
+  user_stopped_at: number | null;
+  user_started_at: number | null;
+  p_at_cue: number | null;
+  p_last: number | null;
+  p_min: number | null;
+  p_max: number | null;
+  states: CandidateState[];
+}
+
+export function startCueReaction(
+  input: { cue_id: string; candidate_id: string; candidate_version: number; at: number; window_ms: number },
+  tick: { user_speaking: boolean; p_now_ai: number | null; candidate_state: CandidateState | null },
+): CueReaction {
+  const { at, ...identity } = input;
+  return {
+    ...identity,
+    cue_sent_at: at,
+    ticks: 1,
+    user_speaking_ticks: tick.user_speaking ? 1 : 0,
+    user_speaking_at_cue: tick.user_speaking,
+    last_user_speaking: tick.user_speaking,
+    user_stopped_at: null,
+    user_started_at: null,
+    p_at_cue: tick.p_now_ai,
+    p_last: tick.p_now_ai,
+    p_min: tick.p_now_ai,
+    p_max: tick.p_now_ai,
+    states: tick.candidate_state ? [tick.candidate_state] : [],
+  };
+}
+
+export function observeCueReaction(
+  reaction: CueReaction,
+  at: number,
+  tick: { user_speaking: boolean; p_now_ai: number | null; candidate_state: CandidateState | null },
+): CueReaction {
+  const next = { ...reaction, ticks: reaction.ticks + 1, user_speaking_ticks: reaction.user_speaking_ticks + (tick.user_speaking ? 1 : 0), last_user_speaking: tick.user_speaking };
+  if (reaction.user_speaking_at_cue && !tick.user_speaking && reaction.user_stopped_at === null) next.user_stopped_at = at;
+  if (!reaction.user_speaking_at_cue && tick.user_speaking && reaction.user_started_at === null) next.user_started_at = at;
+  if (tick.p_now_ai !== null) {
+    next.p_last = tick.p_now_ai;
+    next.p_min = reaction.p_min === null ? tick.p_now_ai : Math.min(reaction.p_min, tick.p_now_ai);
+    next.p_max = reaction.p_max === null ? tick.p_now_ai : Math.max(reaction.p_max, tick.p_now_ai);
+  }
+  if (tick.candidate_state !== null && reaction.states.at(-1) !== tick.candidate_state) next.states = [...reaction.states, tick.candidate_state];
+  return next;
+}
+
 // ---- E3 の選択 -------------------------------------------------------------------
 
 /**
@@ -354,14 +426,15 @@ export function selectSpeech(settings: NegotiatorSettings, inputs: SelectionInpu
   if (c.state === 'BREATH_INHALE') return { choice: 'wait', reasons: ['inhale_in_progress'], cause: null };
   const question = detectDirectQuestion(inputs.invitation, inputs.user_text);
   if (question !== null) return { choice: 'response', reasons: [`direct_question:${question}`], cause: null };
-  // 二段判定: タイミング段がまだなら候補を話さない（合図の条件と同じ）。
+  // 二段判定: タイミング段がまだなら候補を話さない（合図の条件と同じ）。通常応答を判定待ちにはしない。
   if (settings.timing_gate === true && c.state === 'INTENT_READY' && c.timing == null) {
     return { choice: 'response', reasons: ['timing_not_judged'], cause: null };
   }
-  // WAIT_FOR_TURN_END は合図をしないまま、話し終わり（許可が出たこの時点）の候補に残す。
-  const waitForTurnEnd = settings.timing_gate === true && c.state === 'INTENT_READY' && c.timing === 'WAIT_FOR_TURN_END';
-  const speakable: readonly CandidateState[] =
-    settings.condition === 'initiative_inhale' && !waitForTurnEnd ? ['BREATH_HOLD_OR_READY', 'DEFERRED'] : ['INTENT_READY'];
+  // initiative_inhale の WAIT_FOR_TURN_END は話さない（吸気なしの発話を混ぜない）。通常応答に回し、候補は保留に残す。
+  const waiting = settings.timing_gate === true && c.state === 'INTENT_READY' && c.timing === 'WAIT_FOR_TURN_END';
+  if (waiting && settings.condition === 'initiative_inhale') return { choice: 'response', reasons: ['timing_wait_for_turn_end'], cause: null };
+  // 吸気あり: 吸気の後（BREATH_HOLD_OR_READY、DEFERRED）だけが話せる。声が先に出る経路はない。
+  const speakable: readonly CandidateState[] = settings.condition === 'initiative_inhale' ? ['BREATH_HOLD_OR_READY', 'DEFERRED'] : ['INTENT_READY'];
   if (!speakable.includes(c.state)) {
     return { choice: 'response', reasons: [c.state === 'INTENT_READY' ? 'not_cued' : `state_not_speakable:${c.state}`], cause: null };
   }
@@ -379,7 +452,7 @@ export function selectSpeech(settings: NegotiatorSettings, inputs: SelectionInpu
     reasons: [
       go_ahead ? `invitation:${inputs.invitation.detected ? inputs.invitation.phrase : ''}` : 'natural_yield',
       `from:${c.state}`,
-      ...(waitForTurnEnd ? ['timing_wait_for_turn_end'] : []),
+      ...(waiting ? ['timing_wait_for_turn_end'] : []),
     ],
     cause: go_ahead ? 'invitation' : 'turn_allowed',
   };

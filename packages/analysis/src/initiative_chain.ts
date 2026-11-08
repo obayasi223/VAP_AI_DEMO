@@ -3,6 +3,8 @@
  *
  * 判定1回（initiative の llm.request）ごとに、起動の元になった STT（同じ transcript_revision）をたどる。
  * 測れない段（検証の材料がない、時計が補正されていない）は 0 にせず unmeasured と理由を返す。
+ * 二段判定（initiative.desire／initiative.timing）では生成段を判定1回として数え、タイミング段の LLM は判定に数えない
+ * （結果は outcomes の timing: で出す）。イベントの項目は読むものだけ使うので、未知の項目が増えても動く。
  * `computeLatencyReport`（候補ごとの t_content_evidence からの連鎖）とは別の切り方で、NONE を含む全判定を見る。
  *
  * 段:
@@ -32,7 +34,7 @@ export interface InitiativeChainReport {
   judgements: {
     total: number;
     by_trigger: Record<JudgementTrigger, number>;
-    /** 判定の結果。NONE／NEW／KEEP／REVISE／WITHDRAW は initiative.decision、それ以外は棄却の理由。 */
+    /** 判定の結果。NONE／NEW／KEEP／REVISE／WITHDRAW は initiative.decision か生成段の initiative.desire、timing: はタイミング段、それ以外は棄却の理由。 */
     outcomes: Record<string, number>;
   };
 }
@@ -75,6 +77,9 @@ export function computeInitiativeChain(events: readonly ResearchEvent[]): Initia
   const frameClock = buildFrameClock(events);
   const responses = new Map<string, EventOf<'llm.response'>>();
   const decisions = new Map<string, EventOf<'initiative.decision'>>();
+  const desires = new Map<string, EventOf<'initiative.desire'>>();
+  const timings: EventOf<'initiative.timing'>[] = [];
+  const timingRequests = new Set<string>();
   const stateChanges: EventOf<'candidate.state_changed'>[] = [];
   const firstCue = new Map<string, EventOf<'signal.sent'>>();
   const firstRender = new Map<string, EventOf<'signal.started'>>();
@@ -89,6 +94,13 @@ export function computeInitiativeChain(events: readonly ResearchEvent[]): Initia
         break;
       case 'initiative.decision':
         decisions.set(event.request_id, event);
+        break;
+      case 'initiative.desire':
+        desires.set(event.request_id, event);
+        break;
+      case 'initiative.timing':
+        timings.push(event);
+        if (event.timing_strategy === 'llm') timingRequests.add(event.request_id);
         break;
       case 'initiative.discarded':
         if (!discardedByRevision.has(event.input_transcript_revision)) discardedByRevision.set(event.input_transcript_revision, event.reason);
@@ -127,7 +139,7 @@ export function computeInitiativeChain(events: readonly ResearchEvent[]): Initia
     return found;
   };
 
-  const requests = events.filter((e): e is EventOf<'llm.request'> => e.event === 'llm.request' && e.purpose === 'initiative');
+  const requests = events.filter((e): e is EventOf<'llm.request'> => e.event === 'llm.request' && e.purpose === 'initiative' && !timingRequests.has(e.request_id));
   const by_trigger: Record<JudgementTrigger, number> = { final: 0, interim: 0, unknown: 0 };
   const outcomes: Record<string, number> = {};
 
@@ -139,6 +151,7 @@ export function computeInitiativeChain(events: readonly ResearchEvent[]): Initia
     const decision = decisions.get(request.request_id);
     const outcome =
       decision?.decision ??
+      desires.get(request.request_id)?.desire ??
       (discardedByRevision.has(request.transcript_revision) ? `discarded:${(discardedByRevision.get(request.transcript_revision) as string).split(':').slice(0, 2).join(':')}` : 'no_result');
     outcomes[outcome] = (outcomes[outcome] ?? 0) + 1;
 
@@ -204,6 +217,10 @@ export function computeInitiativeChain(events: readonly ResearchEvent[]): Initia
     if (entry.preparing !== undefined && entry.ready !== undefined) stage('tts_prepare', null).add(entry.preparing, entry.ready);
   }
 
+  for (const timing of timings) {
+    const key = `timing:${timing.timing}`;
+    outcomes[key] = (outcomes[key] ?? 0) + 1;
+  }
   // 主な棄却の件数は outcomes に含まれない理由もあるので、candidate.rejected を別に集める。
   for (const event of events) {
     if (event.event === 'candidate.rejected') {
@@ -254,6 +271,8 @@ export function isInitiativeChainRelevant(event: ResearchEvent): boolean {
     case 'llm.request':
     case 'llm.response':
     case 'initiative.decision':
+    case 'initiative.desire':
+    case 'initiative.timing':
     case 'initiative.discarded':
     case 'candidate.state_changed':
     case 'candidate.rejected':

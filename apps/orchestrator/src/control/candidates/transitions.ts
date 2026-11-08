@@ -35,6 +35,7 @@ const WITHDRAW_CAUSES: readonly TransitionCause[] = [
   'evidence_lost',
   'stale_result',
   'normal_response_started',
+  'audio_unavailable',
   'woz',
 ];
 

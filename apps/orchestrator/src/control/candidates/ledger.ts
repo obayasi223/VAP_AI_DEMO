@@ -12,12 +12,13 @@
  *   版と PCM の一致を確かめる。
  * - モデルの説明文は記録するだけで判定に使わない（追補1）。
  */
-import { absent, present, verified } from '@llm-vap/contracts';
+import { absent, modelOutput, present, verified } from '@llm-vap/contracts';
 import type {
   CandidateCause,
   CandidateRecord,
   CandidateRef,
   CandidateState,
+  ContentWithdrawKind,
   EventEmitter,
   SpeechGenerator,
 } from '@llm-vap/contracts';
@@ -224,7 +225,8 @@ export class CandidateLedger {
     record.received_at = d.received_at;
     const from = record.state;
     // KEEP でも根拠が今も安定テキストにあるかはコードで確かめる。消えていればコード由来で撤回する。
-    if (!evidenceStillStable(record.evidence_span, this.deps.stable())) {
+    // 持ち越した候補は元の根拠が前の segment にあり、今の安定テキストには無いので見ない。
+    if (!record.carried_over && !evidenceStillStable(record.evidence_span, this.deps.stable())) {
       this.withdrawByCode(record, 'evidence_lost', d.received_at);
       return okResult('KEEP', record, from, 'WITHDRAWN');
     }
@@ -251,6 +253,11 @@ export class CandidateLedger {
     record.last_model_revision = d.transcript_revision;
     record.received_at = d.received_at;
     record.updated_at = d.received_at;
+    // 持ち越した候補の REVISE は根拠が今の segment に移る。以後は通常の規則に戻す。
+    if (record.carried_over) {
+      delete record.carried_over;
+      record.segment_id = d.segment_id;
+    }
     this.markApplied(d.transcript_revision);
     // REVISE は状態を変えない（再吸気しない、計画 §4.6）。版だけが進む。
     this.emitModelChange(record, from, 'REVISE', d.request_id);
@@ -269,6 +276,7 @@ export class CandidateLedger {
       input_segments: d.input_segments,
       latest: this.deps.stable(),
       candidate_evidence_span: record.evidence_span,
+      ...(record.carried_over ? { candidate_carried: true } : {}),
     });
     if (!check.ok) return this.rejectModel(d, 'withdraw_evidence_invalid', check.details, { record });
     const from = record.state;
@@ -284,9 +292,10 @@ export class CandidateLedger {
       request_id: d.request_id,
       withdraw_reason: structuredClone(d.withdraw_reason),
       evidence_segment_ids: segment_ids,
+      ...(d.withdraw_kind ? { withdraw_kind: d.withdraw_kind } : {}),
     };
     this.markApplied(d.transcript_revision);
-    this.emitModelChange(record, from, 'WITHDRAW', d.request_id);
+    this.emitModelChange(record, from, 'WITHDRAW', d.request_id, d.withdraw_kind);
     this.deps.speech.discardCandidate(record.candidate_id, 'candidate_withdrawn');
     return { ...okResult('WITHDRAW', record, from, 'WITHDRAWN'), withdraw_evidence_segment_ids: segment_ids };
   }
@@ -452,20 +461,33 @@ export class CandidateLedger {
     this.currentSegment = segment_id;
     if (this.held) this.dropHeld(at, 'segment_changed');
     if (this.deps.settings.candidate_expires_on_segment_change === false) return;
-    for (const record of this.withdrawable()) this.withdrawByCode(record, 'expired', at);
+    // 持ち越した保留の希望は segment をまたいで残す（期限 candidate_expiry_ms は有効）。
+    for (const record of this.withdrawable()) if (!record.carried_over) this.withdrawByCode(record, 'expired', at);
   }
 
-  /** 通常の応答を話し始めた（計画 §4.6「残っている候補は撤回」）。 */
-  onNormalResponseStarted(at: number): void {
+  /**
+   * 通常の応答を話し始めた（計画 §4.6「残っている候補は撤回」）。carry が真を返す候補（タイミング段が WAIT_FOR_TURN_END と判定した
+   * 希望）は撤回せず、持ち越して保留を続ける（戻り値）。後続の会話で内容を再評価し、期限 candidate_expiry_ms は有効のまま。
+   */
+  onNormalResponseStarted(at: number, carry?: (record: LedgerRecord) => boolean): CandidateRef[] {
     if (this.held) this.dropHeld(at, 'normal_response_started');
-    for (const record of this.withdrawable()) this.withdrawByCode(record, 'normal_response_started', at);
+    const carried: CandidateRef[] = [];
+    for (const record of this.withdrawable()) {
+      if (carry?.(record)) {
+        record.carried_over ??= { from_segment_id: this.currentSegment, at };
+        carried.push(refOf(record));
+      } else {
+        this.withdrawByCode(record, 'normal_response_started', at);
+      }
+    }
+    return carried;
   }
 
   /** 安定テキストが書き換わったとき（transcript_view の rewrote_stable）。根拠の消えた候補を撤回する。 */
   sweepEvidence(at: number): void {
     const latest = this.deps.stable();
     for (const record of this.withdrawable()) {
-      if (!evidenceStillStable(record.evidence_span, latest)) this.withdrawByCode(record, 'evidence_lost', at);
+      if (!record.carried_over && !evidenceStillStable(record.evidence_span, latest)) this.withdrawByCode(record, 'evidence_lost', at);
     }
     if (this.held && !evidenceStillStable(this.held.decision.content.evidence_span, latest)) {
       this.dropHeld(at, 'evidence_lost');
@@ -752,6 +774,7 @@ export class CandidateLedger {
     from: CandidateState | null,
     decision: 'NEW' | 'REVISE' | 'WITHDRAW',
     request_id: string,
+    withdraw_kind?: ContentWithdrawKind,
   ): void {
     this.deps.emitter.emit({
       event: 'candidate.state_changed',
@@ -762,6 +785,7 @@ export class CandidateLedger {
       cause_source: 'model_decision',
       decision,
       request_id,
+      ...(withdraw_kind ? { withdraw_kind: modelOutput(withdraw_kind) } : {}),
     });
   }
 }
@@ -788,6 +812,7 @@ function toContract(record: LedgerRecord): CandidateRecord {
     evidence_segment_ids: [...record.evidence_segment_ids],
     decided_at: record.decided_at,
     updated_at: record.updated_at,
+    ...(record.carried_over ? { carried_over: { ...record.carried_over } } : {}),
   };
 }
 

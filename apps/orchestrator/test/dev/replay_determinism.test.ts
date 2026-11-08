@@ -94,6 +94,26 @@ describe('再生の決定性（合成のログ）', () => {
     expect(after(result.replayed.turn_changes)).toEqual(after(result.recorded.turn_changes));
   });
 
+  it('発話の結果: 記録の turn.outcome を読み、同じ方策の再生の分類も同じになる', async () => {
+    const policy = productionJaPolicy();
+    const events = await syntheticLog(policy);
+    const result = replay(prepareLog(events), policy);
+    const labels = (list: typeof result.outcomes.recorded) => list.filter((o) => o.kind === 'ai_utterance').map((o) => o.labels);
+    expect(result.outcomes.recorded.length).toBeGreaterThanOrEqual(2);
+    expect(result.outcomes.note).toBeNull();
+    // 記録は settle の前に打ち切ったので件数は短い（再生はセッションの終わりまで）。
+    const recorded = labels(result.outcomes.recorded);
+    expect(labels(result.outcomes.replayed).slice(0, recorded.length)).toEqual(recorded);
+  });
+
+  it('発話の結果: 記録に turn.outcome がない古いログは記録の入力から算出する', async () => {
+    const policy = productionJaPolicy();
+    const events = (await syntheticLog(policy)).filter((e) => e.event !== 'turn.outcome');
+    const result = replay(prepareLog(events), policy);
+    expect(result.outcomes.recorded.length).toBeGreaterThanOrEqual(2);
+    expect(result.outcomes.note).toContain('算出');
+  });
+
   it('同じ入力と方策なら、何度再生しても同じ結果になる', async () => {
     const policy = productionJaPolicy();
     const log = prepareLog(await syntheticLog(policy));

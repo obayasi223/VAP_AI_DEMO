@@ -12,6 +12,8 @@ export interface PromptCandidate {
   intent_type: string;
   evidence_span: string;
   proposed_utterance: string;
+  /** 前のターンから持ち越した希望（二段判定）。 */
+  carried_over?: { from_segment_id: number; at: number };
 }
 
 export interface PromptInput {

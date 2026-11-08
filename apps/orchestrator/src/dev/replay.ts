@@ -40,7 +40,9 @@ import type {
   TuneSpan,
   TuneStart,
   TuneTurnChange,
+  TuneTurnOutcomes,
   TurnAllowedPayload,
+  TurnOutcomeBody,
   TurnDecision,
   TurnInputs,
   Vap2chState,
@@ -52,6 +54,8 @@ import type { TurnState } from '../control';
 import { SessionHistory, UserUtterances } from '../session/history';
 import { computeMetrics, type MetricInputs } from './metrics';
 import { buildTurnDiagnostic } from './turn_diagnostic';
+import { noResponseOutcome, turnOutcomeSettings } from '../control/turn_outcome';
+import { outcomeRows, recordedTurnOutcomes, replayedTurnOutcomes, type ReplayPlaybackDetail, type ReplayStartDetail } from './turn_outcome_replay';
 
 type Ev<N extends ResearchEvent['event']> = EventOf<N>;
 type SttEv = Ev<'stt.interim'> | Ev<'stt.final'>;
@@ -124,6 +128,12 @@ interface RecordedSpeech {
   spoken_text: string;
   spoken_text_precision: Ev<'speech.ended'>['spoken_text_precision'];
   origin: 'response' | 'candidate';
+  candidate_id: string | null;
+  /** speech.started／ended の started_at／ended_at（再生の報告の時刻）と音声位置。 */
+  playback_started_at: number;
+  playback_ended_at: number;
+  start_frame: number | null;
+  end_frame: number | null;
 }
 
 interface SimPrefetch {
@@ -256,6 +266,11 @@ export function prepareLog(events: ResearchEvent[]): PreparedLog {
           spoken_text: '',
           spoken_text_precision: 'time_proportional',
           origin: e.origin,
+          candidate_id: 'candidate_id' in e ? e.candidate_id : null,
+          playback_started_at: e.started_at,
+          playback_ended_at: e.started_at,
+          start_frame: e.audio_frame,
+          end_frame: null,
         });
         break;
       case 'speech.ended':
@@ -266,6 +281,8 @@ export function prepareLog(events: ResearchEvent[]): PreparedLog {
           row.interrupted = e.event === 'speech.interrupted';
           row.spoken_text = e.spoken_text;
           row.spoken_text_precision = e.spoken_text_precision;
+          row.end_frame = e.audio_frame;
+          row.playback_ended_at = e.event === 'speech.ended' ? e.ended_at : e.interrupted_at;
         }
         if (e.event === 'speech.interrupted') interrupts += 1;
         break;
@@ -444,7 +461,7 @@ function frameAtFactory(vap: VapRow[], lead: number): (t: number) => number {
   };
 }
 
-export function replay(log: PreparedLog, policy: Policy, options: ReplayOptions = {}): Omit<TuneReplayResult, 'initiative'> {
+export function replay(log: PreparedLog, policy: Policy, options: ReplayOptions = {}): Omit<TuneReplayResult, 'initiative'> & { outcomes: TuneTurnOutcomes } {
   const fallbackEnergy = policy.policy_id === 'ja' ? (policy.turn.fallback_energy_silence_dbfs ?? null) : null;
   const tm = createTurnManager(policy, { fallback_energy_silence_threshold: fallbackEnergy });
   const settings = tm.settings;
@@ -511,8 +528,17 @@ export function replay(log: PreparedLog, policy: Policy, options: ReplayOptions 
   const aiSpeech: TuneSpan[] = [];
   const prepares: { t: number; trigger: string; matched_recorded: boolean }[] = [];
   const diagnostics: TuneDiagnosticSample[] = [];
+  const startDetails: ReplayStartDetail[] = [];
+  const playbackDetails: ReplayPlaybackDetail[] = [];
+  const noResponses: TurnOutcomeBody[] = [];
   let interrupts = 0;
   let lastReason: string | null = null;
+  const outcomeSettings = turnOutcomeSettings(policy, settings);
+  let lastAiEndAt: number | null = null;
+  let lastUserVoiceAt: number | null = null;
+  let voicePointer = 0;
+  let latestAllowed: TurnAllowedPayload | null = null;
+  let firedNoResponse: string | null = null;
 
   const keyOf = (e: SttEv) => e.segment_id * 1_000_000 + e.asr_segment_id;
 
@@ -611,6 +637,8 @@ export function replay(log: PreparedLog, policy: Policy, options: ReplayOptions 
   const commitPlayback = (p: SimPlayback) => {
     if (p.committed) return;
     p.committed = true;
+    playbackDetails.push({ id: p.id, begin_at: p.begin_at, end_at: p.end_at, interrupted: p.interrupted, spoken_text: p.rec?.spoken_text ?? null });
+    lastAiEndAt = p.end_at;
     aiSpeech.push({ start: round1(p.begin_at), end: round1(p.end_at), label: `#${p.id}${p.interrupted ? ' 割り込み' : ''}` });
     history.commitAssistantSpoken(
       {
@@ -752,10 +780,39 @@ export function replay(log: PreparedLog, policy: Policy, options: ReplayOptions 
     const inputs = inputsAt(now);
     const { state: next, decisions } = tm.step(state, inputs, now);
     state = next;
+    if (outcomeSettings !== null) {
+      for (const d of decisions) if (d.kind === 'turn_allowed') latestAllowed = d.payload;
+      while (voicePointer <= vapIndex) {
+        const v = log.vap[voicePointer] as VapRow;
+        voicePointer += 1;
+        if (v.vadUser >= outcomeSettings.speaking_threshold) lastUserVoiceAt = v.recv;
+      }
+      const missing = noResponseOutcome(
+        { now, state, latest_allowed: latestAllowed, last_user_voice_at: lastUserVoiceAt, last_ai_end_at: lastAiEndAt, start_blocked_reason: inputs.start_blocked_reason ?? null, fired_key: firedNoResponse },
+        outcomeSettings,
+      );
+      if (missing !== null) {
+        firedNoResponse = missing.key;
+        noResponses.push(missing.body);
+      }
+    }
     for (const d of decisions) {
       if (d.kind === 'start_speech') {
         const payload = decisions.find((x) => x.kind === 'turn_allowed') as Extract<TurnDecision, { kind: 'turn_allowed' }> | undefined;
-        if (payload) starts.push(startOf(now, d.audio_playback_id, payload.payload));
+        if (payload) {
+          starts.push(startOf(now, d.audio_playback_id, payload.payload));
+          const row = vapIndex >= 0 ? (log.vap[vapIndex] as VapRow) : null;
+          startDetails.push({
+            t: now,
+            audio_playback_id: d.audio_playback_id,
+            segment_id: state.segment_id,
+            origin: 'response',
+            frame: inputs.received_audio_frame,
+            payload: payload.payload,
+            vad: row === null ? null : { user: row.state.vad[0], ai: row.state.vad[1] },
+            vap_age_ms: row === null ? null : now - row.recv,
+          });
+        }
       }
       dispatch(d, now);
     }
@@ -803,6 +860,7 @@ export function replay(log: PreparedLog, policy: Policy, options: ReplayOptions 
     .filter((s) => s.ended !== null)
     .map((s) => ({ start: round1(s.started), end: round1(s.ended as number), label: `#${s.id}${s.interrupted ? ' 割り込み' : ''}` }));
   const thr = settings.direction.speaking_threshold ?? 0.5;
+  const outcomes = turnOutcomesFor(log, outcomeSettings, frameAt, startDetails, playbackDetails, noResponses);
   const metricBase: Omit<MetricInputs, 'starts' | 'ai_speech' | 'gaze' | 'interrupts'> = {
     vap: log.vap.map((v) => ({ t: v.t, vad_user: v.vadUser })),
     stt: log.stt.map((e) => ({
@@ -841,6 +899,25 @@ export function replay(log: PreparedLog, policy: Policy, options: ReplayOptions 
     divergences,
     assumptions,
     warnings,
+    outcomes,
+  };
+}
+
+function turnOutcomesFor(
+  log: PreparedLog,
+  settings: ReturnType<typeof turnOutcomeSettings>,
+  frameAt: (t: number) => number,
+  starts: ReplayStartDetail[],
+  playbacks: ReplayPlaybackDetail[],
+  noResponses: TurnOutcomeBody[],
+): TuneTurnOutcomes {
+  if (settings === null) return { recorded: [], replayed: [], note: 'この方策に turn.outcome がないので、発話の結果を分類していない' };
+  const rows = outcomeRows(log, (e) => e.segment_id * 1_000_000 + e.asr_segment_id);
+  const hasRecorded = log.events.some((e) => e.event === 'turn.outcome');
+  return {
+    recorded: recordedTurnOutcomes(log, rows, settings, frameAt),
+    replayed: [...replayedTurnOutcomes(starts, playbacks, rows, settings, frameAt), ...noResponses],
+    note: hasRecorded ? null : '記録に turn.outcome がない古いログなので、記録の側は記録の入力から同じ規則で算出した（no_response は再計算の側だけ）',
   };
 }
 

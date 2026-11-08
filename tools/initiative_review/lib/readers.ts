@@ -300,6 +300,13 @@ export interface SttRecord {
   frame_end: number | null;
 }
 
+export interface OutcomeRecord {
+  audio_playback_id: number;
+  labels: string[] | null;
+  null_reason: string | null;
+  raw: RawEvent;
+}
+
 export interface OtherRecord {
   t_ms: number;
   event: string;
@@ -321,6 +328,7 @@ export interface Collected {
   vapFrames: [number, number][];
   otherFrames: [number, number][];
   others: OtherRecord[];
+  outcomes: OutcomeRecord[];
 }
 
 export function emptyCollected(): Collected {
@@ -336,6 +344,7 @@ export function emptyCollected(): Collected {
     vapFrames: [],
     otherFrames: [],
     others: [],
+    outcomes: [],
   };
 }
 
@@ -560,6 +569,19 @@ function readSpeech(e: RawEvent, c: Collected): void {
   });
 }
 
+/** turn.outcome の ai_utterance（文は持たない）。no_response は特定の発話に属さないので一覧の対象外。 */
+function readOutcome(e: RawEvent, c: Collected): void {
+  const id = num(e.audio_playback_id);
+  if (e.kind !== 'ai_utterance' || id === null) return;
+  const labels = (e.labels ?? {}) as { value?: unknown; null_reason?: unknown };
+  c.outcomes.push({
+    audio_playback_id: id,
+    labels: Array.isArray(labels.value) ? labels.value.map(String) : null,
+    null_reason: typeof labels.null_reason === 'string' ? labels.null_reason : null,
+    raw: e,
+  });
+}
+
 function readLlmRequest(e: RawEvent, c: Collected): void {
   const id = str(e.request_id);
   if (id === null) return;
@@ -653,6 +675,7 @@ export const EVENT_READERS: Record<string, EventReader> = {
   'stt.interim': readStt,
   'stt.final': readStt,
   'vap.state': readVap,
+  'turn.outcome': readOutcome,
 };
 
 export function collect(events: RawEvent[]): Collected {

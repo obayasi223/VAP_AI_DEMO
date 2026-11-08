@@ -6,6 +6,7 @@
  *   GET  /api/sessions?conversation_type=&prompt_version=  セッションの一覧と絞り込みの選択肢
  *   GET  /api/sessions/<id>?conversation_type=&prompt_version=  判定、会話、音声の情報
  *   GET  /api/sessions/<id>/audio/<name>   音声（Range 対応）
+ *   GET  /api/sessions/<id>/audio_timeline?center_sec=&span_sec=&bins=  波形と、同じ時間軸の印（保存した音声があるときだけ）
  *   GET  /api/sessions/<id>/reviewers      評価者の名前
  *   GET  /api/sessions/<id>/reviews/<名前>  評価を読み戻す
  *   PUT  /api/sessions/<id>/reviews/<名前>  {base_revision, items, missed}。revision が合わないと 409
@@ -14,6 +15,7 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { ReviewConflict, ReviewInvalid, ReviewStore } from './reviews';
+import { audioTimeline, loadMarks } from './audio_timeline';
 import { SESSION_ID, eventsStamp, filterItems, filterOptions, listAudioFiles, listSessionDirs, loadSession, sessionMatches } from './session';
 import type { ItemFilter, ReviewSession } from './model';
 
@@ -24,6 +26,7 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  '/audio_timeline.js': { file: 'audio_timeline.js', type: 'text/javascript; charset=utf-8' },
   '/style.css': { file: 'style.css', type: 'text/css; charset=utf-8' },
 };
 const AUDIO_TYPES: Record<string, string> = {
@@ -56,6 +59,7 @@ export class ReviewServer {
   readonly store: ReviewStore;
   private port = 0;
   private readonly cache = new Map<string, { stamp: string; session: ReviewSession }>();
+  private readonly marksCache = new Map<string, { stamp: string; built: ReturnType<typeof loadMarks> }>();
   private readonly log: (message: string) => void;
 
   constructor(private readonly options: ReviewServerOptions) {
@@ -128,6 +132,13 @@ export class ReviewServer {
     if (!SESSION_ID.test(id)) throw new HttpError(400, 'bad session id');
     if (parts.length === 3 && req.method === 'GET') return this.json(res, 200, this.getSession(id, filter));
     if (parts[3] === 'audio' && parts.length === 5 && req.method === 'GET') return this.serveAudio(req, res, id, parts[4] as string);
+    if (parts[3] === 'audio_timeline' && parts.length === 4 && req.method === 'GET') {
+      const number = (name: string, fallback: number) => {
+        const value = Number(url.searchParams.get(name) ?? fallback);
+        return Number.isFinite(value) ? value : fallback;
+      };
+      return this.json(res, 200, this.audioTimeline(id, number('center_sec', 0), number('span_sec', 20), number('bins', 800)));
+    }
     if (parts[3] === 'reviewers' && parts.length === 4 && req.method === 'GET') return this.json(res, 200, this.store.reviewers(id));
     if (parts[3] === 'reviews' && parts.length === 5) {
       const reviewer = decodePart(parts[4] as string);
@@ -172,6 +183,17 @@ export class ReviewServer {
   private listSessions(filter: ItemFilter) {
     const metas = listSessionDirs(this.options.sessions_dir).map((id) => this.session(id).meta);
     return { sessions: metas.filter((m) => sessionMatches(m, filter)), options: filterOptions(metas) };
+  }
+
+  private audioTimeline(id: string, center_sec: number, span_sec: number, bins: number) {
+    const dir = this.sessionDir(id);
+    const stamp = eventsStamp(dir);
+    let cached = this.marksCache.get(id);
+    if (cached === undefined || cached.stamp !== stamp) {
+      cached = { stamp, built: loadMarks(dir) };
+      this.marksCache.set(id, cached);
+    }
+    return audioTimeline(dir, { center_sec, span_sec, bins }, cached.built);
   }
 
   private getSession(id: string, filter: ItemFilter) {

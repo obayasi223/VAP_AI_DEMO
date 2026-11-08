@@ -4,8 +4,8 @@
  *  - none: 判定が NONE だった要求（1要求1件）。見逃しの印の起点になる。
  *  - dropped: 判定がコードに棄てられた要求（stale、ゲート、保留など）。適用されなかったので候補にならないが、見て評価できるようにする。
  */
-import { conversationLabel, fieldsFrom, type Collected, type DecisionRecord, type LlmRecord, type SttRecord } from './readers';
-import type { DecisionStep, Field, InhaleRecord, RateAxis, ReviewItem, SpeechRecord, StableSnapshot, TimelineRow, TranscriptLine } from './model';
+import { conversationLabel, fieldsFrom, num, unwrapValue, type Collected, type DecisionRecord, type LlmRecord, type RawEvent, type SttRecord } from './readers';
+import type { DecisionStep, Field, InhaleRecord, RateAxis, ReviewItem, SpeechOutcome, SpeechRecord, StableSnapshot, TimelineRow, TranscriptLine } from './model';
 
 const FRAMES_PER_MS = 16;
 
@@ -195,15 +195,48 @@ interface ItemShell extends Omit<ReviewItem, 'context_before' | 'context_after' 
 const CONTEXT_BEFORE = 6;
 const CONTEXT_AFTER = 4;
 
+/** turn.outcome の本体から、評価画面の値を文字の項目へ（全部の項目は出さない）。契約が変わっても読めないものは「—」。 */
+function speechOutcome(o: Collected['outcomes'][number]): SpeechOutcome {
+  const raw = o.raw;
+  const start = (raw.start ?? {}) as RawEvent;
+  const observed = (raw.observed ?? {}) as RawEvent;
+  const overlap = (observed.overlap ?? {}) as RawEvent;
+  const continuation = (observed.continuation ?? {}) as RawEvent;
+  const echo = (observed.echo ?? {}) as RawEvent;
+  const text = (v: unknown, unit = ''): string => {
+    const value = unwrapValue(v);
+    if (value === null || value === undefined) return '—';
+    if (typeof value === 'number') return `${Math.round(value * 1000) / 1000}${unit}`;
+    if (typeof value === 'boolean') return value ? 'はい' : 'いいえ';
+    return String(value);
+  };
+  return {
+    labels: o.labels,
+    null_reason: o.null_reason,
+    fields: [
+      { label: '開始の判断', value: `${text(start.decision_source)}（${text(start.reason)}）` },
+      { label: 'VAP', value: `p_now=${text(start.p_now)} p_future=${text(start.p_future)} vad=${text(start.vad_user)} 鮮度=${text(start.vap_freshness)}` },
+      { label: '話し終わりの推定', value: `completion_p=${text(start.completion_p)} 発話の終わりからの間=${text(start.gap_ms, 'ms')}` },
+      { label: '開始の直前の人の声', value: `${text(observed.user_voice_gap_before_ms, 'ms')} 前まで（直前: ${text(observed.user_voiced_just_before)}）` },
+      { label: '開始の後の続き', value: `${text(continuation.continued)}（文 ${text(continuation.chars)} 字）` },
+      { label: '重なり', value: `${text(overlap.overlap_ms, 'ms')}（最初の重なりまで ${text(overlap.first_after_start_ms, 'ms')}、文 ${text(overlap.chars)} 字 ${text(overlap.text_kind)}）` },
+      { label: '再生の長さ', value: `${text(raw.played_ms, 'ms')}（割り込み: ${text(raw.interrupted)}）` },
+      { label: 'エコーの疑い', value: `${text(echo.suspected)}（類似度 ${text(echo.text_similarity)}、重なりの割合 ${text(echo.overlap_ratio)}）` },
+    ],
+  };
+}
+
 export interface AssembleContext {
   session_id: string;
   condition: string | null;
   conversation_type: string;
   default_prompt_version: string | null;
+  /** 保存した音声の対応（session_audio_sync.jsonl）。あれば vap.state の組より優先する。 */
+  audioMap?: FrameMap | null;
 }
 
 export function assemble(c: Collected, ctx: AssembleContext): { items: ReviewItem[]; lines: TranscriptLine[]; hasAudioMap: boolean } {
-  const map = frameMap(c.vapFrames, c.otherFrames);
+  const map = ctx.audioMap ?? frameMap(c.vapFrames, c.otherFrames);
   const lines = buildLines(c, map);
   const shells = new Map<string, ItemShell>();
   const requestToKey = new Map<string, string>();
@@ -355,13 +388,28 @@ export function assemble(c: Collected, ctx: AssembleContext): { items: ReviewIte
     });
     let record: SpeechRecord | undefined = item.speech.find((r) => r.audio_playback_id === s.audio_playback_id);
     if (record === undefined) {
-      record = { audio_playback_id: s.audio_playback_id, candidate_version: s.candidate_version, started_at: null, ended_at: null, spoken_text: null };
+      record = { audio_playback_id: s.audio_playback_id, candidate_version: s.candidate_version, started_at: null, ended_at: null, spoken_text: null, outcome: null };
       item.speech.push(record);
     }
     record.started_at = record.started_at ?? s.started_at;
     if (s.event === 'speech.ended') {
       record.ended_at = s.ended_at;
       record.spoken_text = s.spoken_text;
+    }
+  }
+  // その発話の結果（turn.outcome）を詳細へ。候補の発話の記録と audio_playback_id で対応づける。
+  for (const outcome of c.outcomes) {
+    for (const item of shells.values()) {
+      const record = item.speech.find((r) => r.audio_playback_id === outcome.audio_playback_id);
+      if (record === undefined) continue;
+      record.outcome = speechOutcome(outcome);
+      item.timeline.push({
+        t_ms: num(outcome.raw.t_monotonic_ms) ?? record.ended_at ?? record.started_at ?? 0,
+        event: 'turn.outcome',
+        label: `発話の結果（観測に基づく推定）: ${outcome.labels === null ? `分類なし（${outcome.null_reason ?? '理由なし'}）` : outcome.labels.length === 0 ? 'ラベルなし' : outcome.labels.join('、')}`,
+        detail: null,
+        provenance: 'code',
+      });
     }
   }
   for (const other of c.others) {

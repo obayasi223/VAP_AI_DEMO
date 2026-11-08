@@ -322,8 +322,9 @@ async function main(): Promise<void> {
     await page.close();
     await server.endSession('e2e_done');
 
-    // ---- 3b. 二段判定の WAIT_FOR_TURN_END（台本のときだけ）: 合図なしで話し終わりに話す。方式と種類は URL で選ぶ --------
+    // ---- 3b. 二段判定の WAIT_FOR_TURN_END（台本のときだけ）: 吸気せず候補の文も話さず通常応答へ回す。候補は保留のまま。方式と種類は URL で選ぶ --------
     let session3: Session | null = null;
+    let session4: Session | null = null;
     if (!REAL) {
       env.SCRIPTED_INITIATIVE = 'wait_on_input';
       page = await openParticipant(browser, '&condition=initiative_inhale&conversation_kind=companion&timing_strategy=llm');
@@ -334,18 +335,41 @@ async function main(): Promise<void> {
         return s !== null && s !== session2 ? s : null;
       }, 30_000);
       check('開始画面の会話の種類の選択が ?conversation_kind= の値', pickedKind === 'companion', { pickedKind });
-      const waited = session3
-        ? await waitFor('candidate speech without cue', () => session3!.history.snapshot().some((h) => h.role === 'assistant' && h.origin.kind === 'candidate') || null, 45_000, 100)
+      const answered = session3
+        ? await waitFor('normal response without cue', () => session3!.history.snapshot().some((h) => h.role === 'assistant' && h.origin.kind === 'response') || null, 45_000, 100)
         : null;
       await sleep(3000);
       const breath3 = await page.evaluate(() => window.__participant!.controller.record.breathCommands);
-      results.session3 = session3 ? { candidate_spoken: waited !== null, breath: breath3 } : null;
+      results.session3 = session3
+        ? {
+            normal_response: answered !== null,
+            candidate_spoken: session3.history.snapshot().some((h) => h.role === 'assistant' && h.origin.kind === 'candidate'),
+            breath: breath3,
+          }
+        : null;
+      await page.close();
+      await server.endSession('e2e_done');
+
+      // ---- 3c. immediate（すぐ申し出る）: タイミング段の LLM を呼ばず、吸気で提示してから許可で発声する --------
+      env.SCRIPTED_INITIATIVE = 'new_on_input';
+      page = await openParticipant(browser, '&condition=initiative_inhale&conversation_kind=joint_thinking&timing_strategy=immediate');
+      await page.click('#start');
+      session4 = await waitFor('fourth session', () => {
+        const s = server.current();
+        return s !== null && s !== session3 ? s : null;
+      }, 30_000);
+      const spoke4 = session4
+        ? await waitFor('immediate candidate speech', () => session4!.history.snapshot().some((h) => h.role === 'assistant' && h.origin.kind === 'candidate') || null, 45_000, 100)
+        : null;
+      await sleep(3000);
+      const breath4 = await page.evaluate(() => window.__participant!.controller.record.breathCommands);
+      results.session4 = session4 ? { candidate_spoken: spoke4 !== null, breath: breath4 } : null;
       await page.close();
       await server.endSession('e2e_done');
     }
 
     // ---- 4. ログの検査 -----------------------------------------------------------------
-    for (const [label, session] of [['session1', session1], ['session2', session2], ['session3', session3]] as [string, Session | null][]) {
+    for (const [label, session] of [['session1', session1], ['session2', session2], ['session3', session3], ['session4', session4]] as [string, Session | null][]) {
       if (!session) continue;
       const dir = path.join(config.sessions_dir, session.session_id);
       const report = await checkLog(dir);
@@ -373,7 +397,11 @@ async function main(): Promise<void> {
     }
     if (session3) {
       const dir3 = path.join(config.sessions_dir, session3.session_id);
-      analyseWaitForTurnEnd(readEvents(path.join(dir3, 'events.jsonl')), JSON.parse(readFileSync(path.join(dir3, 'manifest.json'), 'utf8')) as Record<string, unknown>, results.session3 as { breath: unknown[] } | null);
+      analyseWaitForTurnEnd(readEvents(path.join(dir3, 'events.jsonl')), JSON.parse(readFileSync(path.join(dir3, 'manifest.json'), 'utf8')) as Record<string, unknown>, results.session3 as { normal_response: boolean; candidate_spoken: boolean; breath: unknown[] } | null);
+    }
+    if (session4) {
+      const dir4 = path.join(config.sessions_dir, session4.session_id);
+      analyseImmediate(readEvents(path.join(dir4, 'events.jsonl')), JSON.parse(readFileSync(path.join(dir4, 'manifest.json'), 'utf8')) as Record<string, unknown>);
     }
   } finally {
     await browser?.close().catch(() => undefined);
@@ -408,26 +436,52 @@ function analyseOfferNow(events: ResearchEvent[]): void {
   );
 }
 
-/** 二段判定で WAIT_FOR_TURN_END のとき: 合図なしで話し終わりに候補を話し、種類と方式が manifest に残る（台本）。 */
-function analyseWaitForTurnEnd(events: ResearchEvent[], manifest: Record<string, unknown>, session3: { breath: unknown[] } | null): void {
+/** 二段判定で WAIT_FOR_TURN_END のとき: 吸気せず候補の文も話さず通常応答へ回し、候補は保留のまま。種類と方式が manifest に残る（台本）。 */
+function analyseWaitForTurnEnd(events: ResearchEvent[], manifest: Record<string, unknown>, session3: { normal_response: boolean; candidate_spoken: boolean; breath: unknown[] } | null): void {
   const states = ofType(events, 'candidate.state_changed');
-  const spoken = states.find((e) => e.to === 'SPOKEN');
-  const id = spoken?.candidate_id;
+  const id = states[0]?.candidate_id;
   const path = id ? states.filter((e) => e.candidate_id === id).map((e) => e.to) : [];
   const timing = ofType(events, 'initiative.timing').filter((e) => e.candidate_id === id);
   const signals = ofType(events, 'signal.sent').filter((e) => e.candidate_id === id);
-  const selection = ofType(events, 'negotiation.decision').find((e) => e.stage === 'speech_selection' && e.outcome === 'candidate' && e.candidate_id.value === id);
-  results.wait_for_turn_end = { path, timing: timing.map((e) => e.timing), signals: signals.length, reasons: selection?.reasons ?? null, breath: session3?.breath ?? null };
-  check('二段判定 WAIT_FOR_TURN_END: 候補は INTENT_READY → SPEAKING → SPOKEN（吸気を経ない）', path.join('>') === 'INTENT_READY>SPEAKING>SPOKEN', path);
+  const notOffered = ofType(events, 'initiative.not_offered').filter((e) => e.candidate_id === id);
+  const material = ofType(events, 'initiative.response_material').filter((e) => e.candidate_id === id);
+  const selection = ofType(events, 'negotiation.decision').find((e) => e.stage === 'speech_selection' && e.reasons.includes('timing_wait_for_turn_end'));
+  results.wait_for_turn_end = { path, timing: timing.map((e) => e.timing), signals: signals.length, not_offered: notOffered.length, material: material.length, outcome: selection?.outcome ?? null, breath: session3?.breath ?? null };
+  check('二段判定 WAIT_FOR_TURN_END: 候補を話さず通常応答が出る', session3?.normal_response === true && session3.candidate_spoken === false, session3);
+  check('二段判定 WAIT_FOR_TURN_END: 候補は吸気も発声も経ない（SPEAKING に入らない）', path[0] === 'INTENT_READY' && !path.includes('BREATH_INHALE') && !path.includes('SPEAKING'), path);
   check('二段判定 WAIT_FOR_TURN_END: タイミング段の判定はすべて WAIT_FOR_TURN_END', timing.length >= 1 && timing.every((e) => e.timing === 'WAIT_FOR_TURN_END'), timing.map((e) => e.timing));
   check('二段判定 WAIT_FOR_TURN_END: 合図（signal.sent）もブラウザの呼吸の指示もない', signals.length === 0 && (session3?.breath.length ?? 1) === 0, results.wait_for_turn_end);
-  check('二段判定 WAIT_FOR_TURN_END: 発話の選択の理由に残る', selection?.reasons.includes('timing_wait_for_turn_end') === true, selection?.reasons);
+  check('二段判定 WAIT_FOR_TURN_END: 発話の選択は通常応答で、理由に残る', selection?.outcome === 'response', selection?.reasons);
+  check('二段判定 WAIT_FOR_TURN_END: 通常応答の開始で候補を持ち越した記録（initiative.not_offered）がある', notOffered.length === 1, results.wait_for_turn_end);
+  // 材料は準備の時点で手元にある判定だけを使う（応答を待たせない）。WAIT の判定の後に準備した応答があったときだけ、渡した記録を求める。
+  const verdictAt = timing[0]?.t_monotonic_ms ?? Infinity;
+  const startedAt = notOffered[0]?.t_monotonic_ms ?? -Infinity;
+  const preparedAfterVerdict = ofType(events, 'llm.request').filter((e) => e.purpose === 'prefetch' && e.t_monotonic_ms > verdictAt && e.t_monotonic_ms < startedAt).length;
+  check('二段判定 WAIT_FOR_TURN_END: WAIT の判定の後に準備した応答があれば、材料として渡した記録がある', preparedAfterVerdict === 0 || material.length >= 1, { prepared_after_verdict: preparedAfterVerdict, material: material.length });
   const initiative = (manifest.initiative ?? {}) as Record<string, unknown>;
   check(
     'manifest に会話の種類（client）、方式、版が残る',
-    initiative.conversation_kind === 'companion' && initiative.conversation_kind_source === 'client' && initiative.timing_strategy === 'llm' && initiative.desire_prompt_version === 'initiative-desire-ja-v1',
+    initiative.conversation_kind === 'companion' && initiative.conversation_kind_source === 'client' && initiative.timing_strategy === 'llm' && initiative.desire_prompt_version === 'initiative-desire-ja-v2',
     initiative,
   );
+}
+
+/** immediate のとき: タイミング段の LLM を呼ばず、吸気 → 発声の順で話し、合図への反応が cue ごとに残る（台本）。 */
+function analyseImmediate(events: ResearchEvent[], manifest: Record<string, unknown>): void {
+  const states = ofType(events, 'candidate.state_changed');
+  const spoken = states.find((e) => e.to === 'SPOKEN' || e.to === 'SPEAKING');
+  const id = spoken?.candidate_id;
+  const path = id ? states.filter((e) => e.candidate_id === id).map((e) => e.to) : [];
+  const timing = ofType(events, 'initiative.timing').filter((e) => e.candidate_id === id);
+  const cue = ofType(events, 'signal.sent').find((e) => e.candidate_id === id && e.phase === 'inhale');
+  const speaking = states.find((e) => e.candidate_id === id && e.to === 'SPEAKING');
+  const reaction = ofType(events, 'negotiation.cue_reaction').filter((e) => e.candidate_id === id);
+  results.immediate = { path, timing: timing.map((e) => [e.timing_strategy, e.timing]), cue_sent_at: cue?.sent_at ?? null, speaking_at: speaking?.t_monotonic_ms ?? null, reactions: reaction.map((e) => e.ended_by) };
+  check('immediate: タイミング段は LLM を呼ばず OFFER_NOW 相当', timing.length >= 1 && timing.every((e) => e.timing_strategy === 'immediate' && e.timing === 'OFFER_NOW' && e.model_call === false), timing.map((e) => e.timing));
+  check('immediate: 候補は吸気を経て話す（INTENT_READY → BREATH_INHALE → … → SPEAKING）', path[0] === 'INTENT_READY' && path[1] === 'BREATH_INHALE' && path.includes('SPEAKING'), path);
+  check('immediate: 吸気の合図が発声より先', cue !== undefined && speaking !== undefined && cue.t_monotonic_ms < speaking.t_monotonic_ms, results.immediate);
+  check('immediate: 合図の後の人の反応が記録される', reaction.length === 1, reaction.map((e) => e.ended_by));
+  check('immediate: manifest の方式', ((manifest.initiative ?? {}) as Record<string, unknown>).timing_strategy === 'immediate', manifest.initiative);
 }
 
 /** 吸気あり（initiative_inhale）のセッション: 合図 → 吸気 → 保留 → 候補の発話 → 話し終わり、が JSONL とブラウザの記録に残る。 */

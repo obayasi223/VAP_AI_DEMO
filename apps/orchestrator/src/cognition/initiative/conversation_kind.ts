@@ -1,7 +1,7 @@
 /**
- * 会話の種類（共同思考、コンパニオン。docs/initiative_v3_design.md）。
- * config/conversation_kind.*.ja.json の形。persona の項目に、段ごとの観点を足したもの。
- * 観点と意図の種類の例はどれも暫定の出発点で、特定の議題の語を入れない。
+ * 会話の種類（docs/initiative_v3_design.md）。config/conversation_kind.<id>.ja.json の形で、<id> がそのまま種類の ID。
+ * 種類を増やすのはファイルを足すだけで、コードの変更は要らない。persona の項目に、段ごとの観点と判定の条件を足したもの。
+ * 生成の条件（desire_lens）とタイミングの条件（timing_lens）は別々に編集する。どれも暫定の出発点で、特定の議題の語を入れない。
  */
 import { ConversationKind } from '@llm-vap/contracts';
 import { parsePersona } from './persona';
@@ -14,9 +14,13 @@ export interface ConversationKindProfile extends InitiativePersona {
   desire_lens: {
     viewpoints: string[];
     intent_type_examples: string[];
+    /** 生成の条件（判定の基準）。プロンプトの本体ではなくここで編集する。 */
+    conditions: string[];
   };
   timing_lens: {
     viewpoints: string[];
+    /** タイミングの条件。生成の条件とは別に編集する。 */
+    conditions: string[];
   };
 }
 
@@ -33,9 +37,11 @@ export function parseConversationKindProfile(raw: unknown): ConversationKindProf
     !isText(o.provisional_note) ||
     !isTexts(o.desire_lens?.viewpoints) ||
     !isTexts(o.desire_lens?.intent_type_examples) ||
-    !isTexts(o.timing_lens?.viewpoints)
+    !isTexts(o.desire_lens?.conditions) ||
+    !isTexts(o.timing_lens?.viewpoints) ||
+    !isTexts(o.timing_lens?.conditions)
   ) {
-    throw new Error('conversation_kind: conversation_kind, profile_version, provisional_note, desire_lens, timing_lens are required');
+    throw new Error('conversation_kind: conversation_kind, profile_version, provisional_note, desire_lens (viewpoints, intent_type_examples, conditions), timing_lens (viewpoints, conditions) are required');
   }
   return { ...persona, ...(o as ConversationKindProfile), conversation_kind: kind.data };
 }

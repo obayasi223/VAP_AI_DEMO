@@ -136,6 +136,8 @@ export const InitiativeNegotiation = z.strictObject({
    * null は max_result_age_ms と同じ値。
    */
   cue_max_judgement_age_ms: NonNegativeMs.nullable(),
+  /** 合図の後の人の反応を観測する窓（negotiation.cue_reaction）。【暫定、未校正】省略は記録しない。 */
+  cue_reaction_window_ms: NonNegativeMs.optional(),
 });
 export type InitiativeNegotiation = z.infer<typeof InitiativeNegotiation>;
 
@@ -154,6 +156,11 @@ export const InitiativeStaged = z.strictObject({
     max_turns: z.number().int().min(0),
     max_chars_per_turn: z.number().int().min(1),
   }),
+  /**
+   * REVISE の前後の proposed_utterance がこれ以上似ていて intent_type が同じなら、作り直さず維持として扱う（文字 2-gram のコサイン）。
+   * 【暫定、未校正】省略は比較しない（すべて REVISE として適用）。
+   */
+  revise_min_utterance_similarity: Probability.optional(),
 });
 export type InitiativeStaged = z.infer<typeof InitiativeStaged>;
 
@@ -207,6 +214,32 @@ export const VapUnavailable = z.strictObject({
 });
 export type VapUnavailable = z.infer<typeof VapUnavailable>;
 
+/**
+ * AI の発話の結果の分類（観測だけ。判断には使わない）。原著にない。値はどれも暫定で根拠なし（docs/known_gaps.md）。
+ * 省略は記録しない。
+ */
+export const TurnOutcomeSettings = z.strictObject({
+  /** 開始の後に同じ発話の続きが来たかを見る窓（/tune の発話の途中での開始と同じ 1500ms）。 */
+  continuation_window_ms: NonNegativeMs,
+  /** 再生の終わりから、後ろの ASR が届くのを待って分類するまでの長さ。 */
+  settle_ms: NonNegativeMs,
+  /** 開始の何 ms 前まで人の声があれば「直前まで話していた」とするか。 */
+  user_just_before_ms: NonNegativeMs,
+  /** 発話の続きの始まりが開始からこの長さ以内なら suspected_premature_start にする。 */
+  premature_onset_max_ms: NonNegativeMs,
+  /** 重なりとみなす人の声の最短の合計。 */
+  overlap_min_ms: NonNegativeMs,
+  /** 再生の長さがこれより短く割り込まれたら ai_interrupted_early。 */
+  interrupted_early_max_ms: NonNegativeMs,
+  /** 人の声と ASR の更新が止まってから、AI が話し始めないまま経過したら no_response_after_user_yield。 */
+  no_response_wait_ms: NonNegativeMs,
+  /** ASR の文と AI の発話文の類似度がこれ以上なら回り込みの疑い。 */
+  echo_text_similarity: Probability,
+  /** 再生区間に占める人の声の割合がこれ以上なら回り込みの疑い（類似度の条件と両方）。 */
+  echo_overlap_ratio: Probability,
+});
+export type TurnOutcomeSettings = z.infer<typeof TurnOutcomeSettings>;
+
 export const PolicyJa = z.strictObject({
   $schema: z.string().optional(),
   policy_id: z.literal('ja'),
@@ -238,6 +271,8 @@ export const PolicyJa = z.strictObject({
     after_ai_speech: AfterAiSpeech.optional(),
     /** VAP が使えないときの安全側の開始と割り込み。省略は今までどおり。 */
     vap_unavailable: VapUnavailable.optional(),
+    /** AI の発話の結果の分類（観測だけ）。省略は記録しない。 */
+    outcome: TurnOutcomeSettings.optional(),
   }),
   gaze: z.strictObject({
     /** 原著に数値の閾値はない（計画 §4.2）。 */

@@ -13,7 +13,7 @@
  * （stable_interim）、判定の LLM は入力の最後の区間から根拠を抜き出した NEW（候補があれば KEEP）を返す。
  * 合図から発話までの配線を通すためのもので、発話希望の判断ではない。
  * 二段判定の要求（response_json_schema で見分ける）には生成段とタイミング段の形で返す（scriptedStagedReply）。
- * wait_on_input はタイミング段だけ WAIT_FOR_TURN_END を返す。
+ * 生成段は未解決の希望があれば KEEP（内容の再評価の経路を通す）、なければ NEW。wait_on_input はタイミング段だけ WAIT_FOR_TURN_END を返す。
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -551,6 +551,10 @@ const SCRIPTED_DESIRE_NONE = {
   evidence_span: '',
   evidence_segment_ids: [],
   prior_turn_evidence_span: '',
+  withdraw_kind: '',
+  withdraw_reason: '',
+  withdraw_evidence_span: '',
+  withdraw_evidence_segment_ids: [],
 };
 
 function schemaHas(request: LlmRequest, key: string): boolean {
@@ -560,7 +564,7 @@ function schemaHas(request: LlmRequest, key: string): boolean {
 
 /**
  * 二段判定の台本の返答（判断ではない）。要求が二段の形でなければ null。
- * 生成段: 候補があるか none なら NONE、なければ最後の区間の先頭 8 文字を根拠にした NEW。
+ * 生成段: 候補があれば KEEP、none なら NONE、なければ最後の区間の先頭 8 文字を根拠にした NEW。
  * タイミング段: 入力の候補へ OFFER_NOW（wait_on_input は WAIT_FOR_TURN_END）。
  */
 export function scriptedStagedReply(request: LlmRequest, mode: ScriptedInitiativeMode): string | null {
@@ -573,14 +577,12 @@ export function scriptedStagedReply(request: LlmRequest, mode: ScriptedInitiativ
       cost_of_waiting: '',
       timing: mode === 'wait_on_input' ? 'WAIT_FOR_TURN_END' : 'OFFER_NOW',
       target_candidate_id: candidate?.[1] ?? '',
-      withdraw_reason: '',
-      withdraw_evidence_span: '',
-      withdraw_evidence_segment_ids: [],
     });
   }
   if (!schemaHas(request, 'desire')) return null;
   const last = [...text.matchAll(/^#(\d+)（[^）]*）: (.+)$/gmu)].at(-1);
-  if (mode === 'none' || candidate || !last || [...(last[2] as string)].length < 8) return JSON.stringify(SCRIPTED_DESIRE_NONE);
+  if (candidate && mode !== 'none') return JSON.stringify({ ...SCRIPTED_DESIRE_NONE, desire: 'KEEP', target_candidate_id: candidate[1] });
+  if (mode === 'none' || !last || [...(last[2] as string)].length < 8) return JSON.stringify(SCRIPTED_DESIRE_NONE);
   return JSON.stringify({
     ...SCRIPTED_DESIRE_NONE,
     desire: 'NEW',

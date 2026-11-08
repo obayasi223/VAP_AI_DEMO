@@ -4,12 +4,14 @@
  * 準備吸気の単体調整ページ（レーン H2、計画 §4.7 の /lab/breath 相当）。参加者には見せない。
  * スライダで通常呼吸と準備吸気のパラメータを変え、「吸気」「脱力」「発話開始」で確かめる。
  * 発話開始は模擬の音量包絡で口を動かす（音は鳴らさない、実音声ではない）。
+ * 「一連の動作」は台本（motion_sequences.ts）を時刻どおりに当て、局面の実時刻を時刻つきで出す（録画や連続画像で比較するため）。
  * クエリ: ?model=/models/xxx.vrm、?framing=face。実ブラウザ確認は window.__breathDev を使う。
  * 値はすべて暫定。自然さは録画で利用者が判断する。
  */
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Avatar, AvatarModelInfo, AvatarTelemetry, BreathPhaseEvent, Framing, NormalBreathParams, PrepBreathParams } from '../../../src/avatar';
 import { DEFAULT_INHALE_MS, DEFAULT_NORMAL_BREATH, DEFAULT_PREP_BREATH } from '../../../src/avatar/breath';
+import { MOTION_SEQUENCES, applyMotionStep, type MotionSequence, type MotionStep, type SequenceTarget } from '../../../src/avatar/motion_sequences';
 
 const DEFAULT_MODEL = '/models/Sendagaya_Shino.vrm';
 const FEED_MS = 20;
@@ -20,6 +22,9 @@ interface BreathDevHandle {
   events: BreathPhaseEvent[];
   /** 模擬の発話の音量を流す（ms）。release('speech_started') は呼ばない。 */
   speak(durationMs: number): void;
+  sequences: readonly MotionSequence[];
+  /** 台本を実時間で再生する（今の動作は止める）。 */
+  playSequence(id: string): void;
 }
 
 declare global {
@@ -57,6 +62,7 @@ const PREP_SLIDERS: { key: NumericKeys<PrepBreathParams>; label: string; min: nu
   { key: 'shortMouth', label: '短い準備の口', min: 0, max: 1, step: 0.05 },
   { key: 'postSuppressMs', label: '脱力後の待機の抑制（ms）', min: 0, max: 3000, step: 50 },
   { key: 'idleDuringPrep', label: '吸気中の待機の揺れ', min: 0, max: 1, step: 0.05 },
+  { key: 'idleSuppressMs', label: '待機の揺れを抑える時定数（ms）', min: 40, max: 800, step: 10 },
 ];
 
 const NORMAL_SLIDERS: { key: NumericKeys<NormalBreathParams>; label: string; min: number; max: number; step: number }[] = [
@@ -74,6 +80,8 @@ export default function DevBreathPage() {
   const eventsRef = useRef<BreathPhaseEvent[]>([]);
   const speechUntilRef = useRef(0);
   const cueCounter = useRef(0);
+  const sequenceTimersRef = useRef<number[]>([]);
+  const sequenceStartRef = useRef<number | null>(null);
 
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [framing, setFraming] = useState<Framing>('bust');
@@ -88,6 +96,8 @@ export default function DevBreathPage() {
   const [saccades, setSaccades] = useState(true);
   const [autoBlink, setAutoBlink] = useState(true);
   const [log, setLog] = useState<string[]>([]);
+  const [activeSequence, setActiveSequence] = useState<MotionSequence | null>(null);
+  const [timeline, setTimeline] = useState<string[]>([]);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -115,6 +125,8 @@ export default function DevBreathPage() {
           },
           onBreathPhase: (event) => {
             eventsRef.current.push(event);
+            const start = sequenceStartRef.current;
+            if (start !== null) appendTimeline(`t=${(event.nowMs - start).toFixed(0).padStart(5)}ms  ${event.phase}${event.kind ? `[${event.kind}]` : ''}${event.cause ? `（${event.cause}）` : ''}`);
             setLog((prev) => [...prev.slice(-11), `${event.nowMs.toFixed(0)} ms  ${event.phase}${event.kind ? `[${event.kind}]` : ''}${event.cause ? `（${event.cause}）` : ''}${event.cueId ? `  ${event.cueId}` : ''}`]);
           },
         });
@@ -176,11 +188,51 @@ export default function DevBreathPage() {
       speak: (durationMs) => {
         speechUntilRef.current = performance.now() + durationMs;
       },
+      sequences: MOTION_SEQUENCES,
+      playSequence: (id) => {
+        const sequence = MOTION_SEQUENCES.find((s) => s.id === id);
+        if (sequence) playSequence(sequence);
+      },
     };
     return () => {
       delete window.__breathDev;
     };
   }, []);
+
+  const appendTimeline = (line: string) => setTimeline((prev) => [...prev, line]);
+
+  /** 台本の再生。時刻は吸気の開始（最初の手）からの ms。今の動作が残っていたら先に聞き手へ戻してから始める。 */
+  const playSequence = (sequence: MotionSequence) => {
+    const current = avatarRef.current;
+    if (!current) return;
+    for (const timer of sequenceTimersRef.current) window.clearTimeout(timer);
+    sequenceTimersRef.current = [];
+    speechUntilRef.current = 0;
+    const startDelay = current.breath.phase() === 'idle' ? 0 : 1500;
+    if (startDelay > 0) current.breath.release('withdrawn');
+    setActiveSequence(sequence);
+    setTimeline([`${sequence.label}: ${sequence.note}（全体 ${sequence.totalMs}ms）`]);
+    const target: SequenceTarget = {
+      breath: current.breath,
+      speak: (active) => {
+        speechUntilRef.current = active ? performance.now() + 60000 : 0;
+      },
+    };
+    const run = (step: MotionStep) => {
+      if (sequenceStartRef.current === null) sequenceStartRef.current = performance.now();
+      appendTimeline(`t=${step.atMs.toString().padStart(5)}ms  ▶ ${step.do}`);
+      applyMotionStep(target, step);
+    };
+    sequenceStartRef.current = null;
+    for (const step of [...sequence.steps].sort((a, b) => a.atMs - b.atMs)) {
+      sequenceTimersRef.current.push(window.setTimeout(() => run(step), startDelay + step.atMs));
+    }
+    sequenceTimersRef.current.push(
+      window.setTimeout(() => {
+        setActiveSequence(null);
+      }, startDelay + sequence.totalMs),
+    );
+  };
 
   const avatar = () => avatarRef.current;
   const inhale = () => {
@@ -244,6 +296,21 @@ export default function DevBreathPage() {
             種類: {b?.kind ?? '-'} / 戻り方: {b?.releaseKind ?? '-'} / 直近の脱力: {b?.lastReleaseCause ?? '-'} / 無視: {b?.ignoredStarts ?? 0}
           </p>
           <pre style={styles.log}>{log.join('\n')}</pre>
+        </fieldset>
+
+        <fieldset style={styles.group}>
+          <legend>一連の動作の再生（値はすべて暫定。自然さの判断は録画で行う）</legend>
+          <div style={styles.buttons}>
+            {MOTION_SEQUENCES.map((sequence) => (
+              <button key={sequence.id} type="button" onClick={() => playSequence(sequence)} data-testid={`sequence-${sequence.id}`}>
+                {sequence.label}
+              </button>
+            ))}
+          </div>
+          <pre style={styles.log} data-testid="timeline">
+            {activeSequence ? `再生中: ${activeSequence.label}\n` : ''}
+            {timeline.join('\n')}
+          </pre>
         </fieldset>
 
         <fieldset style={styles.group}>

@@ -502,6 +502,12 @@ describe('ブラウザの描画の報告', () => {
     expect(rig.events.ofType('signal.started')).toMatchObject([{ candidate_id: 'c_0001', visible: true, phase: 'inhale' }]);
     expect(rig.session.candidates?.getRecord('c_0001')?.timeline.cue_at).not.toBeNull();
     expect(rig.session.counters.signal_reports_ignored).toBe(1);
+    // Node の指示なしで始まる局面（保持 ready）も、その候補の合図に結びつけて記録する。
+    rig.browser({ type: 'signal.report', candidate_id: 'c_0001', phase: 'ready', state: 'started', visible: true, client_t_ms: { value: t + 700 } });
+    rig.browser({ type: 'signal.report', candidate_id: 'c_0001', phase: 'ready', state: 'ended', visible: true, client_t_ms: { value: t + 900 } });
+    expect(rig.events.ofType('signal.started').at(-1)).toMatchObject({ phase: 'ready', parameters: { reported_phase: 'ready', report_origin: 'browser_without_command' } });
+    expect(rig.events.ofType('signal.ended').at(-1)).toMatchObject({ phase: 'ready', visible: true });
+    expect(rig.session.counters.signal_reports_ignored).toBe(1);
   });
 });
 
@@ -561,8 +567,8 @@ describe('修正2: 合図と TTS の準備を同時に始める（音声の完�
     const sent = rig.events.ofType('signal.sent')[0]!.sent_at;
     // 吸気 700ms ＋ 準備姿勢 800ms のあいだ TTS は一度も出さない。
     while (rig.time.monotonicMs() < sent + 700 + 800 + 60) await rig.step(YIELD);
-    expect(states(rig).at(-1)).toBe('BREATH_HOLD_OR_READY->WITHDRAWN:expired');
-    expect(discarded(rig)).toEqual(['c_0001@1:expired']);
+    expect(states(rig).at(-1)).toBe('BREATH_HOLD_OR_READY->WITHDRAWN:audio_unavailable');
+    expect(discarded(rig)).toEqual(['c_0001@1:audio_unavailable']);
     expect(msgs(rig, 'breath.release')).toEqual([{ type: 'breath.release', cue_id: 'cue_0001', candidate_id: 'c_0001', reason: 'withdrawn' }]);
     const abandoned = rig.events.ofType('negotiation.decision').find((e) => e.outcome === 'audio_abandoned');
     expect(abandoned?.reasons[0]).toMatch(/^audio_not_ready_by_deadline:hold_ms=/);

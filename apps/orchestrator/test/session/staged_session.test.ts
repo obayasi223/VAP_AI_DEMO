@@ -1,6 +1,6 @@
 /**
  * 二段判定（生成段とタイミング段）をセッションと交渉へつないだ結合試験。LLM、TTS、STT は台本、VAP は偽の値。
- * 配線だけを見る（モデルの判断の良し悪しは何も試していない）。OFFER_NOW で合図、WAIT_FOR_TURN_END は合図なしで話し終わりの候補、
+ * 配線だけを見る（モデルの判断の良し悪しは何も試していない）。OFFER_NOW で合図、WAIT_FOR_TURN_END は合図なしで通常応答へ回す（候補の文は話さない）、
  * 未判定は合図なし、v2 は従来どおり、AI の開始の後の final で判定を起動しない、MaAI の文脈の捨て直しで助走に戻る。
  */
 import { afterEach, describe, expect, it } from 'vitest';
@@ -111,21 +111,22 @@ describe('タイミング段の判定と合図', () => {
     expect(rig.link.of('breath.cue')).toHaveLength(1);
   });
 
-  it('WAIT_FOR_TURN_END: 合図はせず（吸気も準備動作もなし）、話し終わりの許可で候補を話す', async () => {
+  it('WAIT_FOR_TURN_END: 合図せず（吸気も準備動作もなし）、候補の文を話さず通常応答へ回す。候補は保留のまま', async () => {
     rig = await setup('initiative_inhale', staged(timing('WAIT_FOR_TURN_END')));
     await speakMidway(rig);
     await rig.steps(10, SPEAKING);
     expect(rig.link.of('breath.cue')).toHaveLength(0);
     expect(rig.events.ofType('signal.sent')).toHaveLength(0);
     expect(gate(rig).at(-1)).toMatchObject({ outcome: 'blocked', reasons: expect.arrayContaining(['timing_wait_for_turn_end']) });
-    expect(await untilCandidate(rig)).not.toBeNull();
+    await untilCandidate(rig, 100);
+    expect(candidateBegin(rig)).toBeNull();
     expect(rig.link.of('breath.cue')).toHaveLength(0);
     expect(rig.link.of('breath.prepare')).toHaveLength(0);
     expect(rig.events.ofType('negotiation.decision').filter((e) => e.stage === 'speech_selection').at(-1)).toMatchObject({
-      outcome: 'candidate',
-      reasons: ['natural_yield', 'from:INTENT_READY', 'timing_wait_for_turn_end'],
+      outcome: 'response',
+      reasons: ['timing_wait_for_turn_end'],
     });
-    expect(rig.events.ofType('candidate.state_changed').map((e) => e.to)).toEqual(['INTENT_READY', 'SPEAKING']);
+    expect(rig.events.ofType('candidate.state_changed').map((e) => e.to)).toEqual(['INTENT_READY']);
   });
 
   it('immediate: LLM を呼ばずに OFFER_NOW 相当で合図し、タイミング段の記録は model_call=false', async () => {

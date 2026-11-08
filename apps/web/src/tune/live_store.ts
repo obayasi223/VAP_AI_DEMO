@@ -3,7 +3,7 @@
  * イベント（ResearchEvent）と、調整画面だけに下る制御メッセージ（NodeToTune: research.policy、research.turn_diagnostic）を受ける。
  * 届いた値は契約で検証し、不合格は数える。セッションが変わったら作り直す。
  */
-import { NodeToTune, ResearchEvent, type Policy, type PolicyOverrideInfo, type TurnDiagnosticBody } from '@llm-vap/contracts';
+import { NodeToTune, ResearchEvent, type Policy, type PolicyOverrideInfo, type TurnDiagnosticBody, type TurnOutcomeBody } from '@llm-vap/contracts';
 import type { FeedConnection, FeedSink } from '../research/feed';
 import { InitiativeFlow, type FlowRow } from './initiative_flow';
 
@@ -40,6 +40,8 @@ export interface LiveSnapshot {
   stt: { t: number; final: boolean }[];
   gaze: { t: number; target: string }[];
   initiative: FlowRow[];
+  /** AI の発話の結果（turn.outcome）。観測に基づく推定。 */
+  outcomes: TurnOutcomeBody[];
 }
 
 export const LIVE_WINDOW_MS = 30_000;
@@ -63,6 +65,7 @@ export class TuneLiveStore implements FeedSink {
   private turnChanges: LiveSnapshot['turn_changes'] = [];
   private stt: LiveSnapshot['stt'] = [];
   private gaze: LiveSnapshot['gaze'] = [];
+  private outcomes: TurnOutcomeBody[] = [];
   private flow = new InitiativeFlow();
 
   connection(state: FeedConnection, detail: string | null): void {
@@ -84,6 +87,7 @@ export class TuneLiveStore implements FeedSink {
     this.turnChanges = [];
     this.stt = [];
     this.gaze = [];
+    this.outcomes = [];
     this.flow = new InitiativeFlow();
     this.latest = null;
     this.origin = null;
@@ -154,6 +158,12 @@ export class TuneLiveStore implements FeedSink {
       case 'gaze.decision':
         this.gaze.push({ t, target: e.target });
         break;
+      case 'turn.outcome': {
+        const { schema_version: _s, t_monotonic_ms: _t, wall_clock: _w, session_id: _id, condition: _c, time_basis: _b, ...body } = e;
+        this.outcomes.push(body as TurnOutcomeBody);
+        if (this.outcomes.length > 200) this.outcomes.shift();
+        break;
+      }
       default:
         break;
     }
@@ -201,6 +211,7 @@ export class TuneLiveStore implements FeedSink {
       stt: this.stt.slice(),
       gaze: this.gaze.slice(),
       initiative: this.flow.list(),
+      outcomes: this.outcomes.slice(),
     };
   }
 }

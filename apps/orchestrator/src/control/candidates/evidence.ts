@@ -42,6 +42,7 @@ export function verifyWithdrawEvidence(input: {
   input_segments: readonly AsrSegmentSnapshot[];
   latest: readonly AsrSegmentSnapshot[];
   candidate_evidence_span: string;
+  candidate_carried?: boolean;
 }): EvidenceResult {
   const base = checkWithdrawEvidence({
     span: input.span,
@@ -49,6 +50,7 @@ export function verifyWithdrawEvidence(input: {
     input: input.input_segments,
     latest: input.latest,
     candidate_evidence_span: input.candidate_evidence_span,
+    ...(input.candidate_carried ? { candidate_carried: true } : {}),
   });
   const details = base.ok ? [] : [...base.reasons];
   if (idsMissingFromLatest(input.segment_ids, input.latest)) details.push('evidence_segment_id_not_in_latest');

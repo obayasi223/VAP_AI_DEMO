@@ -6,7 +6,8 @@
  *  - FlowTable: 発話希望の流れ。実測の時刻と LLM 生成の欄を分ける。数値の「話したい度合い」は出さない。
  *  - MetricsTable: 記録と再計算の指標を並べる。
  */
-import type { TuneMetricSet, TurnDiagnosticBody } from '@llm-vap/contracts';
+import { summarizeTurnOutcomes, turnOutcomeRows } from '@llm-vap/analysis';
+import type { TuneMetricSet, TurnDiagnosticBody, TurnOutcomeBody } from '@llm-vap/contracts';
 import type { FlowRow } from './initiative_flow';
 import { quantile } from './chart_spec';
 import styles from './tune.module.css';
@@ -206,5 +207,61 @@ export function MetricsTable({ recorded, replayed }: { recorded: TuneMetricSet; 
         ))}
       </tbody>
     </table>
+  );
+}
+
+/** 開始の一覧の1件の表示（観測に基づく推定のラベル）。 */
+export function outcomeText(outcome: TurnOutcomeBody): string {
+  if (outcome.labels.value === null) return `分類なし（${outcome.labels.null_reason}）`;
+  return outcome.labels.value.length === 0 ? 'ラベルなし' : outcome.labels.value.join(' ');
+}
+
+const OUTCOME_DEFS: [string, string][] = [
+  ['suspected_premature_start', '開始の直前まで人の声があり、開始の直後に同じ発話の続きが来た（疑い）'],
+  ['user_continued_after_start', '開始より後の音声で ASR の文が伸びた（発話の途中での開始と同じ定義、相槌だけは除く）'],
+  ['user_overlap', 'AI の発話中に人の声と内容のある文が重なった'],
+  ['backchannel_overlap', 'AI の発話中の人の声が相槌だけ（別に数える）'],
+  ['overlap_without_asr', '人の声（vad）は重なったが文にならなかった'],
+  ['ai_interrupted_early', 'AI の発話が短いうちに止められた'],
+  ['spoke_twice', '前の AI の発話から人の声がないまま話し始めた'],
+  ['no_response_after_user_yield', '人が話し終えた後、待っても AI が話し始めなかった'],
+];
+
+/** 分類の件数を記録と再計算で並べる。中央値の値は参考。ラベルは推定で、確定した失敗ではない。 */
+export function OutcomeMetricsTable({ recorded, replayed, note }: { recorded: TurnOutcomeBody[]; replayed: TurnOutcomeBody[]; note: string | null }) {
+  const a = summarizeTurnOutcomes(turnOutcomeRows(recorded));
+  const b = summarizeTurnOutcomes(turnOutcomeRows(replayed));
+  const count = (s: typeof a, key: string) => String(s.by_label[key] ?? 0);
+  const rows = OUTCOME_DEFS.map(([key, def]) => ({ key, def, a: count(a, key), b: count(b, key) }));
+  return (
+    <div>
+      {note ? <p className={styles.muted}>{note}</p> : null}
+      <table className={styles.table} data-testid="outcome-metrics-table">
+        <thead>
+          <tr>
+            <th>ラベル</th>
+            <th>記録</th>
+            <th>再計算</th>
+            <th>定義（暫定の閾値、turn.outcome）</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.key}>
+              <td className={styles.path}>{r.key}</td>
+              <td className={styles.num}>{r.a}</td>
+              <td className={styles.num} style={r.a !== r.b ? { fontWeight: 700 } : undefined}>
+                {r.b}
+              </td>
+              <td className={styles.muted}>{r.def}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className={styles.muted}>
+        発話 記録 {a.ai_utterances}（分類なし {a.unsettled}）／再計算 {b.ai_utterances}（分類なし {b.unsettled}）。重なり（ms）の中央値: 記録 {a.medians.overlap_ms.median ?? '—'}、再計算{' '}
+        {b.medians.overlap_ms.median ?? '—'}
+      </p>
+    </div>
   );
 }

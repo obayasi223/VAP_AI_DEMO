@@ -321,6 +321,61 @@
             "ai_reference_missing_ms"
           ],
           "additionalProperties": false
+        },
+        "outcome": {
+          "type": "object",
+          "properties": {
+            "continuation_window_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "settle_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "user_just_before_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "premature_onset_max_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "overlap_min_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "interrupted_early_max_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "no_response_wait_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "echo_text_similarity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "echo_overlap_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "continuation_window_ms",
+            "settle_ms",
+            "user_just_before_ms",
+            "premature_onset_max_ms",
+            "overlap_min_ms",
+            "interrupted_early_max_ms",
+            "no_response_wait_ms",
+            "echo_text_similarity",
+            "echo_overlap_ratio"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -648,6 +703,10 @@
                   "type": "null"
                 }
               ]
+            },
+            "cue_reaction_window_ms": {
+              "type": "number",
+              "minimum": 0
             }
           },
           "required": [
@@ -671,10 +730,7 @@
             },
             "conversation_kind": {
               "type": "string",
-              "enum": [
-                "joint_thinking",
-                "companion"
-              ]
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
             },
             "desire_prompt_version": {
               "type": "string",
@@ -703,6 +759,11 @@
                 "max_chars_per_turn"
               ],
               "additionalProperties": false
+            },
+            "revise_min_utterance_similarity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
             }
           },
           "required": [

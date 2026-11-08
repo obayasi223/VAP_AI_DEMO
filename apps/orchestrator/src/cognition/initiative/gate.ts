@@ -90,12 +90,15 @@ export function checkTarget(
 
 export interface WithdrawCheckInput extends EvidenceCheckInput {
   candidate_evidence_span: string;
+  /** 通常応答を越えて持ち越した希望。元の根拠は前の segment にあり、今の入力は全部その後ろなので位置を見ない。 */
+  candidate_carried?: boolean;
 }
 
 /** 撤回の根拠は、候補の根拠より後ろの発話であること（追補2の「後続発話区間」）。 */
 export function checkWithdrawEvidence(check: WithdrawCheckInput): GateResult<{ segment_ids: number[] }> {
   const base = checkEvidence(check);
   if (!base.ok) return base;
+  if (check.candidate_carried) return base;
   const all = joined(check.input);
   const candidate = normalizeForMatch(check.candidate_evidence_span);
   const start = candidate.length > 0 ? all.indexOf(candidate) : -1;

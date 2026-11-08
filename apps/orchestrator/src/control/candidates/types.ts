@@ -10,6 +10,7 @@ import type {
   CandidateRef,
   CandidateRejectReason,
   CandidateState,
+  ContentWithdrawKind,
   MaybeModelOutput,
   ModelOutput,
   SpeechStartRefusal,
@@ -60,6 +61,8 @@ export type ModelDecision =
       withdraw_evidence_span: string;
       withdraw_evidence_segment_ids: readonly number[];
       withdraw_reason: MaybeModelOutput<string>;
+      /** 内容の撤回の分類（二段判定の生成段）。1段判定（v2）は持たない。 */
+      withdraw_kind?: ContentWithdrawKind;
     } & DecisionMeta);
 
 /**
@@ -116,6 +119,7 @@ export type WithdrawRecord =
       request_id: string;
       withdraw_reason: MaybeModelOutput<string>;
       evidence_segment_ids: Verified<number[]>;
+      withdraw_kind?: ContentWithdrawKind;
     }
   | { source: 'code'; cause: CandidateCause };
 

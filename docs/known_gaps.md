@@ -141,6 +141,7 @@
 | 判定の失敗の後 | 失敗した要求の入力は判定済みにしない。待ち（2秒から倍、上限30秒）が明けたら、新しい増分がなくても J の tick（`poll`）で同じ入力から判定し直す | 失敗した入力が判定済みになると、話が止まった後は二度と判定されなかった |
 | 撤回の根拠の位置 | 候補の根拠が入力に見つからなければ、撤回の根拠が後ろかを確かめられないので撤回を棄却する（`candidate_evidence_not_in_input`） | 入力の上限で落ちた区間の候補を、前の発話で撤回させないため |
 | 区間（`segment_id`）をまたいで届いた判定 | `segment_id` は TurnManager が AI の発話を開始する tick（L80）でだけ進む。つまり「区間が変わった」は「AI が話し始めた」と同じ。LLM の往復（実測の中央値 1.3 秒、§11 の遅延の表）の間に区間が変わるのは普通に起きる。**区間が変わっただけでは捨てない:** `NONE` は記録するだけで `candidate.rejected` に数えない（`initiative.decision` の `NONE` になる）。`NEW`／`REVISE`／`KEEP` は、入力の後に AI が話し始めていれば棄却し、`candidate.rejected` の `reason=stale_segment` の `details` の先頭に `ai_started_speaking`（と区間、開始の時刻）を残す。**NEW** はこの条件で棄却するので、実セッションでは区間をまたいだ NEW は候補にならない（§4.6「通常応答を話し始めたら残っている候補は撤回」と同じ扱い）。区間が判定の側で進んだだけの経路（リプレイ）は、根拠の照合と新規の安定文字数（`max_new_stable_chars_since_input` を区間をまたいで数え直す。`details` の先頭が `too_many_new_stable_chars`）を見て受理する。経過時間（`max_result_age_ms`）は G のゲートが先に見る（`stale_result_too_old`）。`WITHDRAW` は候補を減らすだけなので区間をまたいでも適用する（ただし AI の開始で候補はすでに撤回されていることが多く、その場合は `state_not_applicable`）。順序（`transcript_revision`）の検査は `NEW`／`KEEP`／`REVISE`／`WITHDRAW` に残す | `s20261108T045055-ca6e12` の破棄 4 件は全部 `NONE` で、3 件は `stt.final` の到着が AI の発話開始より 0.4〜0.9 秒遅く、要求を送った時点で AI はもう話していた。1 件は interim で送った要求が往復の間に追い越された。`NONE` が棄却に数えられていたのは計測の誤りとして直した。残る問題: AI の開始の後に届く final の判定は LLM の呼び出しの無駄（G の側で起動を止められるが、この節の作業では `cognition/initiative/` を変えていない）。`candidate_expires_on_segment_change` が `false` のときだけ KEEP／REVISE が届く |
+| 保留中の希望の更新（二段判定） | 生成段が増分ごとに内容を再評価（`KEEP`／`REVISE`／`WITHDRAW`）。撤回には分類 `withdraw_kind` が必須。`REVISE` は内容が実質同じなら維持として扱う（`revise_suppressed`）。タイミング段は `OFFER_NOW`／`WAIT_FOR_TURN_END` だけで、撤回しない。`docs/initiative_v3_design.md` §1 | 分類と抑制の基準（`revise_min_utterance_similarity` 0.8）は未検証の暫定値 |
 | プロバイダの状態の名前 | 判定用の Gemini は `provider.status` を `gemini:initiative` で出す（応答用は `gemini`）。要求の上限の報告は `initiative_monitor` の行。`cost.usage` と `llm.*` の `provider` は両方とも `gemini` のままで、用途は `purpose`（`initiative`）で分ける | 研究者画面の行は provider 名で引くので、同じ名前だと取り違える。`packages/analysis` の単価の照合は `provider` で引くので `cost.usage` の名前は変えない |
 
 ## 10. 実機の対話で見つかった開始の早さ（ja、原著にない追加）
@@ -216,7 +217,7 @@
 | `DEFERRED` | 吸気の後 `hold_max_ms` を過ぎても人が話していれば `DEFERRED` へ移り `breath.release`（`deferred`）。人が黙っていれば保持を続ける（許可か期限まで）。`DEFERRED` から再吸気しない | 人が黙っていて許可が出ないとき、Node 側の保持は期限（15 秒）まで続くが、アバターは自分の上限（`HOLD_MAX_MS`=1500）で自動で脱力する。見た目と状態がずれる |
 | 候補と通常応答の選択 | 許可が出た tick で: 直前の発話が直接の質問（招待の種類 `direct_question`、または「ですか」「かな」「なんですか」「どう」で終わる）なら通常応答。そうでなく候補が話せる状態で、音声が準備済みで、判定が古くなければ候補（招待「どうぞ」なら原因 `invitation`、ほかは `turn_allowed`）。理由は `negotiation.decision`（stage `speech_selection`） | 計画の「応答または両者の統合」の統合はしていない（応答だけ）。直接の質問の判定は語尾の規則で、誤認しうる |
 | 候補の話し方 | `proposed_utterance` をそのまま TTS に渡して話す。履歴には AI の発話（`origin: candidate`）として残る | 判定の時点の文なので、話す時点の文脈では不自然になりうる（言い換えはしていない）。直前の通常応答の準備は使わない |
-| 撤回 | 通常応答を話し始めたら撤回（E2a）。期限 `candidate_expiry_ms` でも撤回。どちらも合図中なら `breath.release`（`withdrawn`）。未再生の PCM は E2a の `discardCandidate` が棄てる | 破棄は JSONL のイベントにしていない（`negotiation_wiring` の `discardedAudio` とプロバイダの取り消しだけ）。後から破棄を確かめるには `candidate.state_changed` と `speech.*` の欠けから推すしかない |
+| 撤回 | 通常応答を話し始めたら撤回（E2a）。ただし `initiative_inhale` で二段判定の `WAIT_FOR_TURN_END` の候補は撤回せず持ち越し、後続の会話で再評価する（`initiative.not_offered`、`docs/initiative_v3_design.md` §2）。期限 `candidate_expiry_ms` でも撤回。どちらも合図中なら `breath.release`（`withdrawn`）。未再生の PCM は E2a の `discardCandidate` が棄てる | 破棄は JSONL のイベントにしていない（`negotiation_wiring` の `discardedAudio` とプロバイダの取り消しだけ）。後から破棄を確かめるには `candidate.state_changed` と `speech.*` の欠けから推すしかない |
 | `REVISE` | 再吸気しない。古い版の PCM は棄て、新しい版の文で音声を作り直す | 作り直しの間に許可が出ると、候補の音声がないので通常応答が勝つことがある |
 | 二つ目の `NEW` | 活動中の候補があれば E2a が棄却（`active_candidate_exists`） | 波2のまま |
 
@@ -291,4 +292,56 @@
 - すべての条件はエネルギーの閾値（-45 dBFS）に依存し、閾値は未校正。**実機のログにマイクのエネルギーの連続した記録がない**（`turn.allowed` に `fallback_energy` の値が残るのは縮退中の判断のときだけで、既存の2セッションでは各1点、どちらも -40.8 dBFS。声か環境音かは不明で、閾値の -45 より大きい）。環境音が閾値を超える環境では、エネルギーが「声あり」のままで fallback の開始が永久に許可されない（助走の 10 秒は VAP の回復で解ける）。声の裏付けはこの場合に常に真になる。
 - エコー（ヘッドセットなし）で AI の声がマイクに入ると、エネルギーと ASR の両方が「人の声」に見えるので、割り込みと開始の両方が誤る。エコーの抑制は作らない（利用者の判断）。
 - 小さい声がエネルギーの閾値を下回る利用者では、声の裏付けがなく開始しない（VAP が回復すれば通常に戻る）。
-- MaAI の `process_failed_reset` のあとは助走に戻す（session.ts の `onError`、`vap_worker_started_at` を更新）。ゼロ埋めの区間（`FRAMES_DROPPED`）の後の VAP は fresh のまま使う。
+- MaAI の `process_failed_reset` のあとは助走に戻す（session.ts の `onError`、`vap_worker_started_at` を更新）。ゼロ埋めの区間（`FRAMES_DROPPED`）の入力の窓にかかる VAP は値として使わない（session.ts の `overlapsZeroFill`、§14）。続けば鮮度が切れて `stale`（`arrival_lag`）になる。短ければ直前の値のまま fresh を保つ。区間の中の 20 秒の文脈に残るゼロの影響は見ていない。
+
+## 13. 会話の音声の保存と同意（他者の音声はまだ保存しない）
+
+`SAVE_SESSION_AUDIO=1` のときだけ、マイクと AI の音声を `sessions/<id>/session_audio.wav` に保存する（既定は保存しない。`docs/runbook.md` の 9）。研究者本人の自己実験で、音声、イベントログ、吸気のタイミングを照合するための機能である。
+
+**他者の音声を保存する前に、同意の手順が要る。** 参加者実験の同意の取得、保存の方法（保存先、保存期間、消去、外部への持ち出しの扱い）は別途整備する。それまでは他の人の声を保存しない。保存の有無は `manifest.json` の `session_audio` と起動ログに残るが、これは同意の記録の代わりにはならない。
+
+**限界:**
+
+- 音声の位置と時刻の対応は、受信の時刻の下側包絡（1 秒の窓の中で最も遅れの小さい枠）で取っている。ブラウザから Node までの遅れの一定分は測れず、対応に残る。1 秒を超えて遅れが続くと、その区間の対応はその分だけ遅れる。
+- 書き込みが上限（64MiB、約 17 分）まで遅れると、その分は無音に置き換わる（`gap` の `queue_overflow`）。
+- `sync` の書き込みに失敗すると `session_audio.sync_file_errors` に残り、評価画面は `vap.state` の組に戻る。
+- 起動ログはセッションの開始時に出す（orchestrator のプロセスの起動時ではない）。
+
+## 14. 発話の失敗の記録（`turn.outcome`、観測だけ）
+
+VAP が正常に動いているのに開始が外れた場合（発話の途中の開始、重なり、連続発話、話すべき間の沈黙）を、会話ごとに一覧で振り返るための記録。**開始の判断には使わない。** 実装は `apps/orchestrator/src/control/turn_outcome.ts`（純粋な関数）、配線は `session/turn_outcome_wiring.ts`（実行中）と `dev/turn_outcome_replay.ts`（録音）。`turn_manager.ts` は変えていない。
+
+**ラベルはどれも観測に基づく推定で、会話の失敗を確定するものではない。** 値（`config/policy.ja.json` の `turn.outcome`）は【暫定、根拠なし。実データは1会話（ヘッドセットあり）＋ヘッドセットなしの1会話だけ】。
+
+| ラベル | 条件 |
+|---|---|
+| `suspected_premature_start` | 開始の直前まで人の声があり（`user_just_before_ms`＝最後の声から開始まで 1500ms 以内）、開始より後の音声で ASR の文が伸び（内容のある文）、続きの始まりが開始から `premature_onset_max_ms`（800ms）以内 |
+| `user_continued_after_start` | 開始より後の音声で ASR の文が伸びた（`/tune` の「発話の途中での開始」と同じ定義、窓 `continuation_window_ms`＝1500ms）。文が相槌だけのときは付けない |
+| `user_overlap` | AI の再生中の人の声（`vad[0]≥speaking_threshold`）が `overlap_min_ms`（240ms）以上で、ASR に内容のある文が出た |
+| `backchannel_overlap` | 再生中の文が相槌の語句だけ（`after_ai_speech.backchannel_phrases` と同じ判定。短い断片の判定は使わない）。vad の長さが足りなくても文で数える |
+| `overlap_without_asr` | 再生中の vad の重なりが 240ms 以上で、ASR の文がない（雑音の可能性） |
+| `ai_interrupted_early` | 割り込みで止まり、再生の長さが `interrupted_early_max_ms`（2000ms）未満 |
+| `spoke_twice` | 前の AI の発話の終わりから開始まで、人の声（`vad[0]`）が一度もなかった（`/tune` の連続発話と同じ定義） |
+| `no_response_after_user_yield` | 人の声と ASR の更新が止まってから `no_response_wait_ms`（4000ms）経っても AI が話し始めない（`kind='no_response'`）。今の文が対象にしない断片のときと、開始を止める理由（吸気の保留など）があるときは数えない |
+
+**分類しない場合**（`labels.value` が null、`null_reason` に理由）: `echo_suspected`（下）、`speech_failed:*`、`no_audio_played`、`playback_ended_abnormally`（ブラウザの報告が来なかった、代行で閉じた）、`session_closed_before_settle`、`session_closed_during_speech`、`speech_end_not_recorded`、`replay_session_ended_during_speech`。
+
+**エコーの扱い**: `echo_suspected` は、再生区間の ASR の文が AI の発話文に似ていて（`charNgramCosine ≥ echo_text_similarity`＝0.6）、かつ再生区間の人の声の割合が高い（`≥ echo_overlap_ratio`＝0.7）とき。分類せず印だけ残す（エコーの抑制は作っていない）。実ログ: ヘッドセットなしの `s20261108T044950-631c07` は 6 発話すべてで類似度 0.83〜1.00、割合 0.79〜0.91。ヘッドセットありの `s20261108T045055-ca6e12` は文の重なりのある発話で類似度 0、割合 ≤0.06。閾値はこの2例だけの間に置いただけで、根拠にならない。
+
+**確定の時刻**: 再生の終わりから `settle_ms`（1000ms）待って ASR の遅れを受けてから分類する。`continuation_window_ms` の窓は開始から測る。
+
+**実ログの一覧**（`s20261108T045055-ca6e12`、`npx tsx tools/latency_report/turn_outcomes.ts sessions/<id>`。記録に `turn.outcome` のないログは記録の入力から同じ規則で算出。文は出力しない）:
+
+| 開始（ログの秒） | 判断の元 | p_now | 間 | 結果 | 備考 |
+|---|---|---|---|---|---|
+| 11.12 | vap | 0.88 | 564ms | ラベルなし | |
+| 33.08 | vap | 0.71 | 590ms | ラベルなし | |
+| 50.26 | completion_timeout | 0.66 | 504ms | `suspected_premature_start` `user_continued_after_start` `user_overlap` | §10 の「発話の途中の開始」（直後に人が「で」と続けた、声の重なり 400ms） |
+| 58.07 | completion_timeout | 0.05 | 7105ms | `spoke_twice` | §10 の連続発話 |
+| 67.60 | completion_timeout | 0.26 | 627ms | ラベルなし | |
+
+**再生との比較（/tune）**: 録音の再生の指標の表に、ラベルごとの件数を記録と再計算で並べた（`outcome-metrics`）。**再生は反実仮想**で、開始が変わっても人の声と ASR は記録のままなので、再計算の側の件数は確定した失敗の数ではない（画面の注意書きにも書いた）。
+
+**限界**: 分類は機械的なルールで、人の評価（G）の代わりにならない。`vad[0]` は AI の声の回り込みでも上がる（エコーの疑いで止めるのはヘッドセットなしの典型だけ）。`suspected_premature_start` は「開始の直後の続き」を見るだけで、AI の開始が人の発話を実際に妨げたかは分からない（人が気にせず続けた場合も入る）。`user_just_before_ms` は応答性の高い開始（間が 600ms 程度）の大半で真になり、続きの文がなければ何も付かない。`no_response` は「話すべきだった」の判断をしていない（`wait_state` で方策の不許可か音声の準備待ちかだけ分かる）。`hri2025` は `turn` 節がないので同じ暫定値で観測する（相槌の判定はできない）。
+
+**値を変える案**（§10 の基準に照らした案。**実データが1会話なので変えていない**）: `50.26` の開始は `start_guard.min_gap_ms`（900ms）の導入で再生では起きなくなった。`58.07` の連続発話は §10 の `after_ai_speech` で解消した。今の値で出ている開始（`--replay`）は 4 件中ラベルなし。数会話たまったら `suspected_premature_start` の件数で `min_gap_ms` の増減（900ms 付近）と `completion_timeout_low_p_min_ms` の増減を比べ、`no_response_after_user_yield` と合わせて「慎重にしすぎない」方向も見る。

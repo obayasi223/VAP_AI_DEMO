@@ -23,10 +23,29 @@ export interface ResponsePrompt {
 
 export type ResponsePromptBuilder = (request: PrepareRequest) => ResponsePrompt;
 
+/** 保留中の発話希望を通常応答の材料として渡すプロンプトの版（negotiation_wiring が initiative.response_material に残す）。 */
+export const PENDING_MATERIAL_PROMPT_VERSION = 'pending_material_v1';
+
+/** 通常応答の材料（保留中の発話希望の内容）。準備の時点で手元にあるものだけ。応答を待たせない。 */
+export interface PendingResponseMaterial {
+  intent_type: string;
+  proposed_utterance: string;
+}
+
+function pendingMaterialInstruction(material: PendingResponseMaterial): string {
+  return [
+    '次は、あなたが相手の話を聞いている間に言いたいと思って保留していた内容です。',
+    '今の返答に自然に活かせるときだけ使ってください。合わなければ、使わずに無視してください（必ず言う必要はありません）。',
+    `言いたかった内容（種別 ${material.intent_type}）: ${material.proposed_utterance}`,
+  ].join('');
+}
+
 export function createResponsePromptBuilder(options: {
   history: ConversationHistoryReader;
   system?: string;
   max_entries?: number;
+  /** 通常応答の材料。null は渡すものがない。 */
+  pending_material?: (request: PrepareRequest) => PendingResponseMaterial | null;
 }): ResponsePromptBuilder {
   const system = options.system ?? DEFAULT_RESPONSE_SYSTEM;
   const maxEntries = options.max_entries ?? 20;
@@ -35,8 +54,9 @@ export function createResponsePromptBuilder(options: {
       .snapshot()
       .filter((entry) => !(entry.role === 'user' && entry.segment_id === request.segment_id))
       .slice(-maxEntries);
+    const material = options.pending_material?.(request) ?? null;
     return {
-      system,
+      system: material ? `${system}\n\n${pendingMaterialInstruction(material)}` : system,
       messages: [
         ...earlier.map((entry): LlmMessage => ({ role: entry.role, text: entry.text })),
         { role: 'user', text: request.text },

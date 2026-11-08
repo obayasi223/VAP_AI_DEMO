@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { assemble } from './assemble';
+import { SESSION_AUDIO_FILE, readAudioSync, syncFrameMap } from './audio_timeline';
 import type { ItemFilter, ReviewItem, ReviewSession, SessionMeta } from './model';
 import { collect, conversationLabel, parseJsonl, str } from './readers';
 
@@ -49,7 +50,10 @@ function manifestHasKind(manifest: Manifest): boolean {
 
 export function listAudioFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((name) => AUDIO_EXTENSIONS.has(path.extname(name).toLowerCase()));
+  // 保存した音声を先頭に（画面は先頭のファイルを開く。時刻の対応があるのはこのファイルだけ）。
+  return readdirSync(dir)
+    .filter((name) => AUDIO_EXTENSIONS.has(path.extname(name).toLowerCase()))
+    .sort((a, b) => Number(b === SESSION_AUDIO_FILE) - Number(a === SESSION_AUDIO_FILE));
 }
 
 export function loadSession(dir: string): ReviewSession {
@@ -71,7 +75,18 @@ export function loadSession(dir: string): ReviewSession {
   if (kinds.length === 1 && manifestHasKind(manifest) && kinds[0] !== fromManifest.conversation_type) {
     warnings.push(`manifest の会話の種類（${fromManifest.conversation_type}）と判定の記録（${kinds[0] as string}）が違います。判定の記録を使います。`);
   }
-  const { items, lines, hasAudioMap } = assemble(collected, { session_id, condition, conversation_type, default_prompt_version });
+  const audioSync = readAudioSync(dir);
+  if (audioSync !== null && audioSync.gaps.length > 0) {
+    const seconds = audioSync.gaps.reduce((sum, gap) => sum + gap.frames, 0) / 16000;
+    warnings.push(`音声に欠落が ${audioSync.gaps.length} か所あります（合計 ${seconds.toFixed(2)} 秒）。`);
+  }
+  const { items, lines, hasAudioMap } = assemble(collected, {
+    session_id,
+    condition,
+    conversation_type,
+    default_prompt_version,
+    audioMap: audioSync === null ? null : syncFrameMap(audioSync),
+  });
   const prompt_versions = [...new Set([...items.flatMap((i) => i.prompt_versions), ...(default_prompt_version === null ? [] : [default_prompt_version])])];
   const meta: SessionMeta = {
     session_id,
