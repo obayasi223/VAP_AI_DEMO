@@ -186,6 +186,13 @@ describe('checkLog', () => {
       expect((await checkLog(paths.dir)).acceptance_evidence.reasons).toEqual(['条件 initiative_no_cue で交渉が動いていない（manifest に記録なし）']);
     });
 
+    it('initiative_no_cue に signal.* があれば失敗にする（影の合図は提示しない）', async () => {
+      const signal = envelope({ event: 'signal.sent', candidate_id: 'c_0001', phase: 'inhale', parameters: {}, sent_at: 100 }, 100);
+      const paths = await session([statusEvent(1), signal], { ...PRODUCTION_MANIFEST, condition: 'initiative_no_cue', initiative: initiative('negotiation:initiative_no_cue') });
+      const report = await checkLog(paths.dir);
+      expect(report.failures.some((f) => f.includes('initiative_no_cue なのに合図の提示の記録がある'))).toBe(true);
+    });
+
     it('交渉が動いていれば証拠に数える。reactive は交渉の有無を問わない', async () => {
       const paths = await session(undefined, { ...PRODUCTION_MANIFEST, condition: 'initiative_inhale', initiative: initiative('negotiation:initiative_inhale') });
       expect((await checkLog(paths.dir)).acceptance_evidence.eligible).toBe(true);

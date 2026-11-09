@@ -218,8 +218,13 @@ const CODE_CAUSE_LABEL: Record<string, string> = {
   woz: '実験者の操作',
 };
 
+/** 影の合図（initiative_no_cue）の候補か。BREATH_* の状態は提示を意味しないので、ゲートの outcome で読む。 */
+function isShadowCue(negotiations: Collected['negotiations'], candidate_id: string): boolean {
+  return negotiations.some((n) => n.candidate_id === candidate_id && n.stage === 'signal_gate' && n.outcome === 'shadow_cue');
+}
+
 /** 候補の状態の列から、吸気の後の結末を読む。延期と内容の撤回を別の項目にする（延期の後に撤回されることもあるため）。 */
-function afterCueOf(states: Collected['states'], vocalCues: Collected['vocalCues']): AfterCueView | null {
+function afterCueOf(states: Collected['states'], vocalCues: Collected['vocalCues'], shadow: boolean): AfterCueView | null {
   const cue = states.find((s) => s.to === 'BREATH_INHALE');
   if (cue === undefined) return null;
   const deferredState = states.find((s) => s.to === 'DEFERRED');
@@ -266,6 +271,7 @@ function afterCueOf(states: Collected['states'], vocalCues: Collected['vocalCues
           ended_by: voiced.ended_by,
         };
   return {
+    cue_presented: !shadow,
     deferred: deferredState !== undefined,
     deferred_at: deferredState?.t_ms ?? null,
     revisions,
@@ -274,7 +280,7 @@ function afterCueOf(states: Collected['states'], vocalCues: Collected['vocalCues
     withdraw_kind: withdrawn?.withdraw_kind ?? null,
     code_cause: withdrawn?.code_cause ?? null,
     vocal_cue,
-    label: ['吸気', ...(deferredState ? ['延期'] : []), ...(voiced ? [`声「${voiced.phrase}」`] : []), ...(revisions > 0 ? [`内容の更新 ×${revisions}`] : []), endingLabel].join(' → '),
+    label: [shadow ? '吸気の期間（提示なし）' : '吸気', ...(deferredState ? ['延期'] : []), ...(voiced ? [`声「${voiced.phrase}」`] : []), ...(revisions > 0 ? [`内容の更新 ×${revisions}`] : []), endingLabel].join(' → '),
   };
 }
 
@@ -424,7 +430,7 @@ export function assemble(c: Collected, ctx: AssembleContext): { items: ReviewIte
     item.timeline.push({
       t_ms: s.t_ms,
       event: 'candidate.state_changed',
-      label: `${s.from ?? '（登録）'} → ${s.to}`,
+      label: `${s.from ?? '（登録）'} → ${s.to}${isShadowCue(c.negotiations, s.candidate_id) && s.to.startsWith('BREATH_') ? '（提示なし）' : ''}`,
       detail: s.cause,
       provenance: s.provenance,
     });
@@ -581,7 +587,7 @@ export function assemble(c: Collected, ctx: AssembleContext): { items: ReviewIte
         prompt_versions: versions,
         headline: headlineOf(item.decisions) + (item.final_state === null ? '' : `（${item.final_state}）`),
         timeline: item.timeline.sort((a, b) => a.t_ms - b.t_ms),
-        after_cue: item.candidate_id === null ? null : afterCueOf(c.states.filter((s) => s.candidate_id === item.candidate_id), c.vocalCues.filter((v) => v.candidate_id === item.candidate_id)),
+        after_cue: item.candidate_id === null ? null : afterCueOf(c.states.filter((s) => s.candidate_id === item.candidate_id), c.vocalCues.filter((v) => v.candidate_id === item.candidate_id), isShadowCue(c.negotiations, item.candidate_id)),
         context_before: before.map((l) => l.id),
         context_after: after.map((l) => l.id),
         audio_sec: map.secondsAtT(item.anchor_t_ms),

@@ -14,7 +14,8 @@
  *   advance_segment → 候補の期限、通常応答の開始 → 残っている候補の撤回、候補の発話の終わり → finishSpeech
  *
  *   波3の交渉（negotiation_wiring.ts、判断は control/negotiator.ts）。研究条件はセッションごと（options.condition）:
- *     tick の始め → 候補の先行音声の準備、合図のゲート（initiative_inhale のときだけ吸気の合図 breath.cue）、
+ *     tick の始め → 候補の先行音声の準備、合図のゲート（initiative_inhale は吸気の合図 breath.cue、initiative_no_cue は
+ *       同じ制御で何も提示しない影の合図）、
  *       吸気の完了（orchestrator の時計）、DEFERRED、合図の解除。吸気中は通常の応答も含めて開始を保留する
  *       （TurnInputs.start_blocked_reason）。
  *     step の後 → 許可が出ていれば候補と通常の応答のどちらを話すか（E3）。候補なら、同じ tick を前の状態から
@@ -382,11 +383,17 @@ export class Session {
         vocal_cue_requested: initiative?.choice?.vocal_cue ?? 'none',
         vocal_cue_source: initiative?.choice?.vocal_cue_source ?? null,
         vocal_cue_reason: this.vocalCueReason,
-        // 波3: reactive は記録だけ。initiative_no_cue は合図なしで発話、initiative_inhale は吸気の合図の後に発話。
+        // 波3: reactive は記録だけ。initiative_inhale と initiative_no_cue は同じ制御で、違いは合図の提示だけ。
         candidates_used_for:
           this.negotiation === null || this.options.condition === 'reactive'
             ? 'log_and_research_view_only'
             : `negotiation:${this.options.condition}`,
+        cue_presentation:
+          this.negotiation === null || this.options.condition === 'reactive'
+            ? 'not_applicable'
+            : this.options.condition === 'initiative_inhale'
+              ? 'presented'
+              : 'shadow_not_presented',
       },
     };
     void this.describeWithAudio();

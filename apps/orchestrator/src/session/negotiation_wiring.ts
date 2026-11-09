@@ -32,7 +32,9 @@ import { atFromBrowser } from '@llm-vap/contracts';
 import {
   initialNegotiatorState,
   negotiate,
+  NOT_PRESENTED_REASON,
   observeCueReaction,
+  presentsCue,
   reasonKey,
   releaseForSpeech,
   releaseForWithdrawal,
@@ -152,10 +154,13 @@ export class NegotiationWiring {
   /** 棄てた候補の未再生の音声（撤回、改訂、期限）。D の状態の通知から。試験と研究者向け（JSONL には専用の項目がない）。 */
   readonly discardedAudio: { candidate_id: string; candidate_version: number; reason: string; chunks: number; samples: number }[] = [];
   /** 試験と研究者向けの数。 */
-  readonly counters = { cues: 0, deferred: 0, candidate_speech_started: 0, candidate_speech_refused: 0, signal_reports_unmatched: 0, signals_not_sent: 0 };
+  readonly counters = { cues: 0, shadow_cues: 0, deferred: 0, candidate_speech_started: 0, candidate_speech_refused: 0, signal_reports_unmatched: 0, signals_not_sent: 0 };
+  /** 合図を参加者へ提示する条件か。false（initiative_no_cue）は制御はそのままで、ブラウザへ送らず signal.* も出さない。 */
+  private readonly presents: boolean;
 
   constructor(private readonly options: NegotiationWiringOptions) {
     this.settings = options.settings;
+    this.presents = presentsCue(options.settings.condition);
   }
 
   negotiatorState(): NegotiatorState {
@@ -255,8 +260,8 @@ export class NegotiationWiring {
     const released = releaseForSpeech(this.state, view.candidate_id);
     this.state = released.state;
     if (released.action) this.apply(released.action, now);
-    // DEFERRED からの発話は再吸気せず、短い準備動作だけを行う（計画 §4.6）。
-    else if (view.state === 'DEFERRED') this.options.send({ type: 'breath.prepare', candidate_id: view.candidate_id });
+    // DEFERRED からの発話は再吸気せず、短い準備動作だけを行う（計画 §4.6）。これは吸気の続きの提示なので影の合図では送らない。
+    else if (view.state === 'DEFERRED' && this.presents) this.options.send({ type: 'breath.prepare', candidate_id: view.candidate_id });
     return null;
   }
 
@@ -328,10 +333,10 @@ export class NegotiationWiring {
     return true;
   }
 
-  /** 保留の希望（WAIT の候補）の持ち越しつきで、通常応答の開始を E2a へ伝える。吸気あり以外は従来どおり全部撤回。 */
+  /** 保留の希望（WAIT の候補）の持ち越しつきで、通常応答の開始を E2a へ伝える。提案条件は同じ。reactive は従来どおり全部撤回。 */
   onNormalResponseStarted(now: number): void {
     const { ledger, monitor } = this.options.initiative;
-    const carries = this.settings.condition === 'initiative_inhale' && this.settings.timing_gate === true;
+    const carries = this.settings.condition !== 'reactive' && this.settings.timing_gate === true;
     const carried = ledger.onNormalResponseStarted(
       now,
       carries ? (record) => record.state === 'INTENT_READY' && monitor.latestTiming(record.candidate_id, record.candidate_version)?.timing === 'WAIT_FOR_TURN_END' : undefined,
@@ -353,7 +358,7 @@ export class NegotiationWiring {
   /** 通常応答の準備の時点で、保留中の希望（WAIT の候補）があれば材料として渡す。記録は「渡した」事実だけ（使われたかは分からない）。 */
   responseMaterial(request: PrepareRequest, now: number): PendingResponseMaterial | null {
     if (request.origin.kind !== 'response') return null;
-    if (this.settings.condition !== 'initiative_inhale' || this.settings.timing_gate !== true) return null;
+    if (this.settings.condition === 'reactive' || this.settings.timing_gate !== true) return null;
     const { ledger, monitor } = this.options.initiative;
     for (const record of ledger.list()) {
       if (record.state !== 'INTENT_READY') continue;
@@ -512,6 +517,7 @@ export class NegotiationWiring {
     this.options.emitter.emit({
       event: 'negotiation.cue_reaction',
       cue_id,
+      cue_presented: reaction.cue_presented,
       candidate_id: reaction.candidate_id,
       candidate_version: reaction.candidate_version,
       cue_sent_at: reaction.cue_sent_at,
@@ -552,8 +558,8 @@ export class NegotiationWiring {
     for (const record of ledger.list()) {
       live.add(record.candidate_id);
       if (record.state === 'SPEAKING') continue;
-      // 吸気ありの WAIT_FOR_TURN_END は話さないので作らない（OFFER_NOW に変わったらこの tick で作る）。
-      if (this.settings.condition === 'initiative_inhale' && record.state === 'INTENT_READY' && monitor.latestTiming(record.candidate_id, record.candidate_version)?.timing === 'WAIT_FOR_TURN_END') continue;
+      // WAIT_FOR_TURN_END は話さないので作らない（OFFER_NOW に変わったらこの tick で作る）。提案条件は同じ。
+      if (record.state === 'INTENT_READY' && monitor.latestTiming(record.candidate_id, record.candidate_version)?.timing === 'WAIT_FOR_TURN_END') continue;
       const prepared = this.audio.get(record.candidate_id);
       if (prepared && prepared.candidate_version === record.candidate_version) continue;
       // 古い版の PCM は E2a が REVISE のときに棄てている（discardCandidate）。
@@ -609,22 +615,27 @@ export class NegotiationWiring {
           this.state = { ...this.state, cue: null };
           return;
         }
-        this.counters.cues += 1;
+        // 影の合図は状態と時間だけを進める。ブラウザへは送らず signal.sent も出さない（提示した記録にしない）。
+        let sent = false;
+        if (this.presents) {
+          this.counters.cues += 1;
+          const parameters = { cue_id: action.cue_id, duration_ms: action.duration_ms, inhale_completion: 'orchestrator_clock', phase_sent: 'inhale' };
+          this.cues.set(`${action.cue_id}:inhale`, { cue_id: action.cue_id, candidate_id: action.candidate_id, parameters });
+          sent = this.options.send({ type: 'breath.cue', cue_id: action.cue_id, candidate_id: action.candidate_id, duration_ms: action.duration_ms });
+          if (sent) this.options.emitter.emit({ event: 'signal.sent', candidate_id: action.candidate_id, phase: 'inhale', parameters, sent_at: now });
+          else this.noteSignalNotSent(action.candidate_id, action.cue_id, 'inhale');
+        } else {
+          this.counters.shadow_cues += 1;
+        }
+        // 人の様子の観測は両条件で同じ時点から同じ窓で測る（cue_presented で提示の有無を分ける）。
         if (ctx && this.settings.cue_reaction_window_ms !== undefined) {
           this.reactions.set(
             action.cue_id,
             startCueReaction(
-              { cue_id: action.cue_id, candidate_id: action.candidate_id, candidate_version: action.candidate_version, at: now, window_ms: this.settings.cue_reaction_window_ms },
+              { cue_id: action.cue_id, cue_presented: sent, candidate_id: action.candidate_id, candidate_version: action.candidate_version, at: now, window_ms: this.settings.cue_reaction_window_ms },
               { user_speaking: ctx.user_speaking, p_now_ai: ctx.p_now_ai ?? null, candidate_state: moved.to },
             ),
           );
-        }
-        const parameters = { cue_id: action.cue_id, duration_ms: action.duration_ms, inhale_completion: 'orchestrator_clock', phase_sent: 'inhale' };
-        this.cues.set(`${action.cue_id}:inhale`, { cue_id: action.cue_id, candidate_id: action.candidate_id, parameters });
-        if (this.options.send({ type: 'breath.cue', cue_id: action.cue_id, candidate_id: action.candidate_id, duration_ms: action.duration_ms })) {
-          this.options.emitter.emit({ event: 'signal.sent', candidate_id: action.candidate_id, phase: 'inhale', parameters, sent_at: now });
-        } else {
-          this.noteSignalNotSent(action.candidate_id, action.cue_id, 'inhale');
         }
         return;
       }
@@ -649,6 +660,10 @@ export class NegotiationWiring {
         ledger.transition(action.candidate_id, 'DEFERRED', 'user_continued', now);
         return;
       case 'release': {
+        if (!this.presents) {
+          this.noteShadowRelease(action);
+          return;
+        }
         const phase = action.reason === 'speech_started' ? 'pre_speech' : 'relax';
         const parameters = { cue_id: action.cue_id, reason: action.reason, phase_sent: phase };
         this.cues.set(`${action.cue_id}:release`, { cue_id: action.cue_id, candidate_id: action.candidate_id, parameters });
@@ -676,6 +691,20 @@ export class NegotiationWiring {
       candidate_state: record?.state ?? null,
       outcome: 'signal_not_sent',
       reasons: [`phase:${phase}`, `cue_id:${cue_id}`],
+    });
+  }
+
+  /** 影の合図の解除。ブラウザへは送らず、吸気の条件なら解除を送る時点を、提示なしと分かる形で残す（時点の比較用）。 */
+  private noteShadowRelease(action: Extract<NegotiatorAction, { kind: 'release' }>): void {
+    const record = this.options.initiative.ledger.get(action.candidate_id);
+    this.options.emitter.emit({
+      event: 'negotiation.decision',
+      stage: 'signal_gate',
+      candidate_id: present(action.candidate_id),
+      candidate_version: record ? present(record.candidate_version) : absent('candidate_not_found'),
+      candidate_state: record?.state ?? null,
+      outcome: 'shadow_release',
+      reasons: [`reason:${action.reason}`, `cue_id:${action.cue_id}`, NOT_PRESENTED_REASON],
     });
   }
 

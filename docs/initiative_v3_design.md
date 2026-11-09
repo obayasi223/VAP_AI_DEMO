@@ -57,9 +57,27 @@
 
 選び方と記録: `?conversation_kind=` と `?timing_strategy=`（開始画面の選択と同じ。`CONVERSATION_KIND_FROM_CLIENT=0`、`TIMING_STRATEGY_FROM_CLIENT=0` で固定）。既定は環境変数 `CONVERSATION_KIND`／`TIMING_STRATEGY`、なければ `policy.initiative.staged`。適用したものだけを manifest の `initiative` に残す（`timing_strategy`、`conversation_kind`、`desire_prompt_version`、`timing_prompt_version`、`profile_version`、由来 `*_source`）。`v2` のときは会話の種類を適用していないので `conversation_kind` は null。
 
-交渉（`control/negotiator.ts` の `timing_gate`）: 吸気の合図にはこの版のタイミング段の `OFFER_NOW` が要る。未判定（`timing_not_judged`）と `WAIT_FOR_TURN_END`（`timing_wait_for_turn_end`）は合図しない。タイミング段が未判定の間は候補を話さず通常の応答へ。音声の先行準備は吸気の対象になるとき（`OFFER_NOW`）に作る。`v2` は `timing_gate` なしで従来どおり。
+交渉（`control/negotiator.ts` の `timing_gate`）: 吸気の合図（`initiative_no_cue` では影の合図）にはこの版のタイミング段の `OFFER_NOW` が要る。未判定（`timing_not_judged`）と `WAIT_FOR_TURN_END`（`timing_wait_for_turn_end`）は合図しない。タイミング段が未判定の間は候補を話さず通常の応答へ。音声の先行準備は吸気の対象になるとき（`OFFER_NOW`）に作る。`v2` は `timing_gate` なしで従来どおり。
 
-**`WAIT_FOR_TURN_END` の扱い（`initiative_inhale`）。** 途中で吸気せず、候補の文をそのまま話さず、話し終わりは通常応答に回す（`selectSpeech` は `reasons: timing_wait_for_turn_end` で `response`）。候補は捨てない。通常応答の開始で撤回せず持ち越し（`carried_over`）、AI の発話の後も生成段が再評価する（維持、更新、撤回）。持ち越しの候補は次の発話の範囲に元の根拠がないので、根拠の残存と撤回根拠の位置の検査を免除する（逐語の照合は保つ）。segment の変更では消えないが、期限 `candidate_expiry_ms` は有効。`REVISE` で今の発話に根拠を得たら持ち越しの印を消す。`OFFER_NOW` で吸気した候補と未判定の候補は従来どおり通常応答の開始で撤回する。`initiative_no_cue` の振る舞いは変えない（`WAIT` は許可で話す。持ち越しも材料もない）。
+**2つの提案条件の違いは提示だけ（影の合図）。** `initiative_no_cue` は `initiative_inhale` と同じ制御を通る。候補の内容、音声の先行準備、ゲート、冷却時間、`inhale_ms` と `hold_max_ms`、`DEFERRED`、`WAIT_FOR_TURN_END` の扱い、持ち越し、通常応答の材料、開始の保留（`start_blocked_reason`）はすべて同じで、比較で合図の効果だけを取り出すためにそろえている。`want_to_speak`／`permitted_to_speak`／`speaking` の分離と TurnManager の許可の判定は変えていない。`reactive` は従来のまま。
+
+`initiative_no_cue` で出さないものは `breath.cue`、合図の `breath.release`、`breath.prepare`、`signal.sent`／`signal.started`／`signal.ended`、吸気音（ブラウザは `breath.cue` を受けたときだけ鳴らす）。短い声（§10）は `initiative_inhale` だけ。
+
+影の期間の読み方。状態の名前（`BREATH_INHALE`、`BREATH_HOLD_OR_READY`、原因 `signal_gate_allowed`）はそのまま使うので、**`BREATH_*` は提示を意味しない**。提示したかは次で読む。
+
+| 場所 | 値 |
+|---|---|
+| manifest の `initiative.cue_presentation` | `presented`（`initiative_inhale`）／`shadow_not_presented`（`initiative_no_cue`）／`not_applicable`（`reactive` か交渉なし） |
+| `negotiation.decision`（`stage: signal_gate`） | `outcome: shadow_cue`（ゲート通過）、`outcome: shadow_release`（解除の時点、`reason:<理由>`）。`reasons` に `not_presented:initiative_no_cue` |
+| `cue_id`、開始の保留の理由 | 頭が `shadow_`（`candidate_inhale_in_progress:shadow_cue_0001`） |
+| `negotiation.cue_reaction` | `cue_presented: false`（`cue_sent_at` は吸気の条件なら送る時点）。同じ時点、同じ窓で測る |
+| `signal.*` | 1件も出ない（`tools/log_check` は `initiative_no_cue` で出たら失敗にする） |
+
+`initiative_review` は `signal_gate` の `shadow_cue` を見て「吸気の期間（提示なし）」と表示する。
+
+**発話の開始の見え方。** Node からの再生の開始（`playback.begin`）の時点は両条件で同じで、発話の前のアバターの動きは条件で変えない（ブラウザの再生の動き、口の同期、視線は同じ）。残る違いは吸気の提示そのものだけ。`initiative_inhale` では吸気、保持、脱力の動きと吸気音、発話の直前の合図の解除（`breath.release: speech_started`）と `DEFERRED` からの短い準備動作（`breath.prepare`）がある。`initiative_no_cue` にこれらの代わりの動きは足していない（発話の直前の身体の動きの有無は提示の一部として残る）。
+
+**`WAIT_FOR_TURN_END` の扱い（2つの提案条件で同じ）。** 途中で吸気せず、候補の文をそのまま話さず、話し終わりは通常応答に回す（`selectSpeech` は `reasons: timing_wait_for_turn_end` で `response`）。候補は捨てない。通常応答の開始で撤回せず持ち越し（`carried_over`）、AI の発話の後も生成段が再評価する（維持、更新、撤回）。持ち越しの候補は次の発話の範囲に元の根拠がないので、根拠の残存と撤回根拠の位置の検査を免除する（逐語の照合は保つ）。segment の変更では消えないが、期限 `candidate_expiry_ms` は有効。`REVISE` で今の発話に根拠を得たら持ち越しの印を消す。`OFFER_NOW` で吸気した候補と未判定の候補は従来どおり通常応答の開始で撤回する。
 
 **通常応答の材料。** 通常応答の準備の時点で手元にある未解決の `WAIT` の候補を、応答プロンプトに「自然に活かせるときだけ使ってよい材料」として渡す（`pending_material_v1`）。強制せず、応答を待たせない。
 

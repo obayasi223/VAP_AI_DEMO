@@ -8783,6 +8783,9 @@
           "type": "string",
           "minLength": 1
         },
+        "cue_presented": {
+          "type": "boolean"
+        },
         "candidate_id": {
           "type": "string",
           "minLength": 1
@@ -9066,6 +9069,7 @@
         "time_basis",
         "event",
         "cue_id",
+        "cue_presented",
         "candidate_id",
         "candidate_version",
         "cue_sent_at",

@@ -56,7 +56,7 @@ function table(options: TransitionOptions): Table {
   return {
     INTENT_READY: {
       BREATH_INHALE: ['signal_gate_allowed'],
-      // initiative_no_cue の条件では合図を経ずに話す。
+      // 表は条件を持たず、許可の判定もしない。selectSpeech は提案条件のどちらでも INTENT_READY を選ばない（吸気の期間を経て話す）ので、通常の経路では通らない。
       SPEAKING: SPEAK_CAUSES,
       WITHDRAWN: WITHDRAW_CAUSES,
     },

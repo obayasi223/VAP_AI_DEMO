@@ -361,10 +361,12 @@ export class CandidateTracker {
         break;
       }
       case 'negotiation.cue_reaction':
-        this.addNote(event, '合図への反応（観測値）', cueReactionDetail(event), null, event.candidate_id);
+        this.addNote(event, event.cue_presented ? '合図への反応（観測値）' : '提示なしの時点の人の様子（観測値）', cueReactionDetail(event), null, event.candidate_id);
         break;
       case 'negotiation.decision':
-        if (event.stage === 'speech_selection' || event.stage === 'candidate_audio') {
+        if (event.stage === 'signal_gate' && (event.outcome === 'shadow_cue' || event.outcome === 'shadow_release')) {
+          this.addNote(event, event.outcome === 'shadow_cue' ? '影の合図（提示なし）' : '影の合図の解除（提示なし）', event.reasons.join('、'), null, event.candidate_id.value);
+        } else if (event.stage === 'speech_selection' || event.stage === 'candidate_audio') {
           this.addNote(event, `発話の${event.stage === 'speech_selection' ? '選択' : '音声'}: ${event.outcome}`, event.reasons.join('、'), null, event.candidate_id.value);
         }
         break;

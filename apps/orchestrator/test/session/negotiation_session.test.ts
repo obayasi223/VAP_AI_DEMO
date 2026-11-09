@@ -1,7 +1,7 @@
 /**
  * 波3: 発話希望を振る舞いにつなぐ配線（session.ts ＋ negotiation_wiring.ts）の結合試験。
  * LLM は台本（決まった NEW を返す）、TTS と STT も台本、VAP は偽の値。モデルの判断、合成の品質、VAP の性能は何も試していない。
- * 守ること: 条件ごとの振る舞い（reactive は今と同じ、no_cue は合図なしで話す、inhale は吸気の後に話す）、
+ * 守ること: 条件ごとの振る舞い（reactive は今と同じ、no_cue は inhale と同じ制御で提示だけしない、inhale は吸気の後に話す）、
  * 吸気中の開始の保留、DEFERRED、期限、通常応答による撤回、二つ目の NEW の棄却、直接の質問、PCM の破棄、履歴。
  */
 import { afterEach, describe, expect, it } from 'vitest';
@@ -235,19 +235,77 @@ describe('initiative_inhale（提案: 吸気で合図してから話す）', () 
   });
 });
 
-describe('initiative_no_cue（合図なしで候補を話す）', () => {
-  it('吸気を経ず INTENT_READY のまま発話の機会を待ち、許可で候補を話す', async () => {
-    rig = await setup('initiative_no_cue');
-    await speakMidway(rig);
-    await rig.steps(80, SPEAKING);
-    expect(rig.session.candidates?.list()).toMatchObject([{ state: 'INTENT_READY' }]);
-    const begin = await untilCandidateBegins(rig);
-    expect(begin).not.toBeNull();
-    expect(msgs(rig, 'breath.cue')).toHaveLength(0);
-    expect(msgs(rig, 'breath.release')).toHaveLength(0);
-    expect(rig.events.ofType('signal.sent')).toHaveLength(0);
-    expect(states(rig)).toEqual(['null->INTENT_READY:NEW', 'INTENT_READY->SPEAKING:turn_allowed']);
-    expect(rig.events.ofType('negotiation.decision').find((e) => e.stage === 'signal_gate')).toMatchObject({ outcome: 'no_cue_condition', reasons: ['condition:initiative_no_cue'] });
+describe('initiative_no_cue（影の合図: inhale と同じ制御で、提示だけしない）', () => {
+  /** 同じ入力を流して、候補の状態の時刻と開始の時点を集める。 */
+  async function scenario(condition: Condition) {
+    const r = await setup(condition);
+    await speakMidway(r);
+    await r.steps(80, SPEAKING);
+    const begin = await untilCandidateBegins(r);
+    const t0 = r.events.ofType('candidate.state_changed')[0]!.t_monotonic_ms;
+    return {
+      r,
+      begin,
+      states: states(r),
+      times: r.events.ofType('candidate.state_changed').map((e) => e.t_monotonic_ms - t0),
+      begin_frame: r.frame,
+      selection: r.events.ofType('negotiation.decision').filter((e) => e.stage === 'speech_selection').map((e) => `${e.outcome}:${e.reasons.join('+')}`),
+    };
+  }
+
+  it('同じ状態の経路を通り、参加者には何も提示しない（breath.* も signal.* も出さない）', async () => {
+    const run = await scenario('initiative_no_cue');
+    rig = run.r;
+    expect(run.begin).not.toBeNull();
+    expect(run.states).toEqual([
+      'null->INTENT_READY:NEW',
+      'INTENT_READY->BREATH_INHALE:signal_gate_allowed',
+      'BREATH_INHALE->BREATH_HOLD_OR_READY:inhale_completed',
+      'BREATH_HOLD_OR_READY->DEFERRED:user_continued',
+      'DEFERRED->SPEAKING:turn_allowed',
+    ]);
+    for (const type of ['breath.cue', 'breath.release', 'breath.prepare'] as const) expect(msgs(rig, type)).toHaveLength(0);
+    for (const type of ['signal.sent', 'signal.started', 'signal.ended'] as const) expect(rig.events.ofType(type)).toHaveLength(0);
+    expect(rig.session.negotiationWiring?.counters).toMatchObject({ cues: 0, shadow_cues: 1, deferred: 1 });
+  });
+
+  it('提示していないことがログから分かる（ゲート、解除、manifest）', async () => {
+    const run = await scenario('initiative_no_cue');
+    rig = run.r;
+    const gates = rig.events.ofType('negotiation.decision').filter((e) => e.stage === 'signal_gate');
+    expect(gates.find((e) => e.outcome === 'shadow_cue')).toMatchObject({ reasons: expect.arrayContaining(['not_presented:initiative_no_cue']) });
+    expect(gates.filter((e) => e.outcome === 'cue')).toHaveLength(0);
+    expect(gates.find((e) => e.outcome === 'shadow_release')).toMatchObject({ reasons: ['reason:deferred', 'cue_id:shadow_cue_0001', 'not_presented:initiative_no_cue'] });
+    expect(rig.described.at(-1)?.initiative).toMatchObject({ candidates_used_for: 'negotiation:initiative_no_cue', cue_presentation: 'shadow_not_presented' });
+  });
+
+  it('initiative_inhale と同じ時刻に状態が進み、同じ時点で話し始める。違いは提示だけ', async () => {
+    const inhale = await scenario('initiative_inhale');
+    expect(inhale.r.described.at(-1)?.initiative).toMatchObject({ cue_presentation: 'presented' });
+    const cueCount = msgs(inhale.r, 'breath.cue').length;
+    await inhale.r.session.close('test_done');
+    const shadow = await scenario('initiative_no_cue');
+    rig = shadow.r;
+    expect(cueCount).toBe(1);
+    expect(shadow.states).toEqual(inhale.states);
+    expect(shadow.times).toEqual(inhale.times);
+    expect(shadow.begin_frame).toBe(inhale.begin_frame);
+    expect(shadow.selection).toEqual(inhale.selection);
+    expect(candidateContext(shadow.r)?.sent.join('')).toBe(UTTERANCE);
+  });
+
+  it('人の様子の観測は同じ窓で測り、提示していないと記録する', async () => {
+    const pick = (r: Rig) => r.events.ofType('negotiation.cue_reaction')[0]!;
+    const inhale = await scenario('initiative_inhale');
+    const shown = pick(inhale.r);
+    await inhale.r.session.close('test_done');
+    const shadow = await scenario('initiative_no_cue');
+    rig = shadow.r;
+    const hidden = pick(shadow.r);
+    expect(shown).toMatchObject({ cue_id: 'cue_0001', cue_presented: true });
+    expect(hidden).toMatchObject({ cue_id: 'shadow_cue_0001', cue_presented: false });
+    const observed = (e: typeof shown) => ({ window_ms: e.window_ms, ended_by: e.ended_by, ticks: e.ticks, observed_ms: e.observed_ms, user_speaking_ticks: e.user_speaking_ticks, user_speaking_at_cue: e.user_speaking_at_cue, candidate_states: e.candidate_states });
+    expect(observed(hidden)).toEqual(observed(shown));
   });
 });
 

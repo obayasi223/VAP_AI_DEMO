@@ -111,6 +111,8 @@ export interface ReflectionView {
 export type AfterCueEnding = 'spoken' | 'content_withdrawn' | 'already_said' | 'not_spoken_other' | 'unresolved';
 
 export interface AfterCueView {
+  /** 合図を参加者に提示したか。initiative_no_cue の影の合図は false（BREATH_* の状態は提示を意味しない）。 */
+  cue_presented: boolean;
   /** 吸気の後に延期（DEFERRED）を通ったか。結末とは独立に見る。 */
   deferred: boolean;
   deferred_at: number | null;

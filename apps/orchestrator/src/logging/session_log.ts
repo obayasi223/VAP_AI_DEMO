@@ -62,6 +62,8 @@ export interface SessionManifestDetails {
     persona_id: string | null;
     persona_version: number | null;
     candidates_used_for: string;
+    /** 合図の提示。presented は参加者に見せる、shadow_not_presented は同じ制御で何も見せない（影の合図）、not_applicable は交渉なし。 */
+    cue_presentation?: 'presented' | 'shadow_not_presented' | 'not_applicable';
     /** 申し出るタイミングの方式（適用したもの）。判定が動いていなければ null。 */
     timing_strategy?: string | null;
     /** 会話の種類（適用したもの）。v2 と未適用は null。 */
