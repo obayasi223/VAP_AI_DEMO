@@ -8,6 +8,7 @@
  * G は list() で未解決の候補を受け取り、KEEP などの照合に使う。
  */
 import { z } from 'zod';
+import { Maybe, NonEmptyString } from './common';
 import type { CandidateRef } from './turn';
 
 /** 仕様§4 の遷移と計画 §4.6。 */
@@ -122,6 +123,26 @@ export type ContentWithdrawKind = z.infer<typeof ContentWithdrawKind>;
  */
 export const WithdrawEvidenceSource = z.enum(['user_utterance', 'ai_utterance']);
 export type WithdrawEvidenceSource = z.infer<typeof WithdrawEvidenceSource>;
+
+/**
+ * 吸気の合図を見せたか（送信の経路の事実。docs/initiative_v3_design.md §11）。presented はブラウザが描いたと報告したときだけ。
+ * sent_unconfirmed は送れたが描いた報告がまだない。not_presented は送っていない、送れなかった、描かれなかった。
+ */
+export const OfferPresentation = z.enum(['not_presented', 'sent_unconfirmed', 'presented']);
+export type OfferPresentation = z.infer<typeof OfferPresentation>;
+
+/** 合図の後の人の振る舞い（観測の粗い分類）。意思の推定ではない。invited は招待の規則に一致した語句を人が言った。unknown は観測がまだない。 */
+export const OfferFollowUp = z.enum(['kept_talking', 'stopped', 'invited', 'unknown']);
+export type OfferFollowUp = z.infer<typeof OfferFollowUp>;
+
+/** 判定に渡す申し出の状況。elapsed_s は合図（描いた時刻、未報告は送った時刻）からの秒。 */
+export const OfferView = z.strictObject({
+  presentation: OfferPresentation,
+  cue_id: Maybe(NonEmptyString),
+  elapsed_s: Maybe(z.number().nonnegative()),
+  follow_up: OfferFollowUp,
+});
+export type OfferView = z.infer<typeof OfferView>;
 
 export interface CandidateRegistration {
   segment_id: number;

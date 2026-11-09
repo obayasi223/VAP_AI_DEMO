@@ -148,6 +148,24 @@ const stageMeta = {
   recent_turn_count: 2,
 };
 
+const desireFixture = {
+  ...stageMeta,
+  event: 'initiative.desire',
+  desire: 'NEW',
+  candidate_id: present('c_0007'),
+  candidate_version: present(1),
+  intent_type: modelOutput('QUESTION'),
+  proposed_utterance: modelOutput('それは月額料金にも含まれていますか？'),
+  evidence_span: modelOutput('月額料金の話'),
+  reason: modelOutput('料金の範囲が話に出ていない'),
+  evidence_segment_ids: present(verified([7], 'normalized_substring_of_listed_segments')),
+  prior_turn_evidence_span: modelOutputAbsent('model_left_empty'),
+  prior_turn_evidence: absent('no_prior_turn_evidence'),
+  gate: verified({ passed: true, reasons: [] }, 'stage_gate'),
+  outcome: 'registered',
+  ledger_reason: absent('accepted'),
+};
+
 const signal = { ...envelope, candidate_id: 'c_0007', phase: 'inhale', parameters: { depth: 0.6 } };
 
 const candidateChange = {
@@ -358,23 +376,7 @@ export const VALID_FIXTURES: Record<SchemaName, { name: string; value: unknown }
     },
     {
       name: 'initiative.desire',
-      value: {
-        ...stageMeta,
-        event: 'initiative.desire',
-        desire: 'NEW',
-        candidate_id: present('c_0007'),
-        candidate_version: present(1),
-        intent_type: modelOutput('QUESTION'),
-        proposed_utterance: modelOutput('それは月額料金にも含まれていますか？'),
-        evidence_span: modelOutput('月額料金の話'),
-        reason: modelOutput('料金の範囲が話に出ていない'),
-        evidence_segment_ids: present(verified([7], 'normalized_substring_of_listed_segments')),
-        prior_turn_evidence_span: modelOutputAbsent('model_left_empty'),
-        prior_turn_evidence: absent('no_prior_turn_evidence'),
-        gate: verified({ passed: true, reasons: [] }, 'stage_gate'),
-        outcome: 'registered',
-        ledger_reason: absent('accepted'),
-      },
+      value: desireFixture,
     },
     {
       name: 'initiative.timing/llm',
@@ -1391,6 +1393,17 @@ export const OPTIONAL_FIXTURES: {
   value: unknown;
   optional_keys: string[];
 }[] = [
+  {
+    schema: 'events',
+    name: 'initiative.desire/offer_views',
+    value: {
+      ...desireFixture,
+      offer_views: present([
+        { candidate_id: 'c_0007', candidate_version: 1, presentation: 'presented', cue_id: present('cue_0001'), elapsed_s: present(1.2), follow_up: 'kept_talking' },
+      ]),
+    },
+    optional_keys: ['offer_views'],
+  },
   {
     schema: 'browser_rpc.browser_to_node',
     name: 'audio.report/counters',

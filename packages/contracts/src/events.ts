@@ -13,7 +13,7 @@ import {
   TrackSettings,
   VisibilityName,
 } from './browser_rpc';
-import { CandidateCause, CandidateRejectReason, CandidateState, ContentWithdrawKind, ConversationKind, TimingVerdict, VocalCueKind, WithdrawEvidenceSource } from './candidates';
+import { CandidateCause, CandidateRejectReason, CandidateState, ContentWithdrawKind, ConversationKind, OfferView, TimingVerdict, VocalCueKind, WithdrawEvidenceSource } from './candidates';
 import {
   AsrSegmentId,
   AudioFrameIndex,
@@ -427,6 +427,11 @@ export const InitiativeDesireEvent = eventSchema('initiative.desire', {
   ).optional(),
   /** AI がすでに話した内容と同じとして NEW を棄却した比較（gate.reasons の already_said）。棄却したときだけ入る。 */
   already_said_comparison: Verified(AlreadySaidComparison).optional(),
+  /**
+   * この判定のプロンプトに載せた申し出の状況（候補ごと）。送った時点の値。載せない版は null と理由。古いログにはない。
+   * 人の振る舞いの観測だけで、人の意思の推定ではない。
+   */
+  offer_views: Maybe(z.array(OfferView.extend({ candidate_id: CandidateId, candidate_version: CandidateVersion }))).optional(),
 });
 
 const TimingBody = {

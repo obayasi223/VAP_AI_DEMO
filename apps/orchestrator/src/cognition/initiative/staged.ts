@@ -28,6 +28,7 @@ import type {
   LlmProvider,
   LlmResult,
   MaybeModelOutput,
+  OfferView,
   TimeSource,
   TimingStrategy,
   WithdrawEvidenceSource,
@@ -36,6 +37,7 @@ import type { CandidateContent, CandidateModelNotes, DecisionMeta, DecisionResul
 import type { ConversationKindProfile } from './conversation_kind';
 import { findAlreadySaid } from './already_said';
 import type { AlreadySaidMatch } from './already_said';
+import type { OfferObservations } from './offer_view';
 import { failureReason } from './failure';
 import { SIMILARITY_METHOD, charNgramCosine } from '../similarity';
 import { checkAiWithdrawEvidence, checkEvidence, checkFreshness, checkPriorTurnEvidence, checkWithdrawEvidence } from './gate';
@@ -46,6 +48,7 @@ import type { DesireOutput, TimingChoice, TimingOutput } from './staged_output';
 import { CURRENT_DESIRE_PROMPT_VERSION, CURRENT_TIMING_PROMPT_VERSION, getDesirePrompt, getTimingPrompt } from './staged_prompt';
 import type { StagedPromptVersion } from './staged_prompt';
 import { normalizeForMatch } from './text';
+import type { PromptCandidate } from './prompt';
 import type { AsrSegmentSnapshot } from './transcript_view';
 
 export interface StagedOptions {
@@ -63,6 +66,8 @@ export interface StagedOptions {
   revise_min_utterance_similarity?: number;
   /** AI がすでに話した内容と同じ NEW を棄却する類似度の下限（policy.initiative.staged の暫定値）。省略は棄却しない。 */
   already_said_min_similarity?: number;
+  /** 申し出の状況の読み出し（InitiativeWiring が渡す）。省略は載せない。 */
+  offers?: Pick<OfferObservations, 'view'>;
 }
 
 /** 1回の判定の入力（段ごとに作り直す）。 */
@@ -123,6 +128,8 @@ interface ReviseComparison {
 interface StageContext {
   turns: readonly RecentTurn[];
   history_version: { value: number } | { value: null; null_reason: string };
+  /** この判定のプロンプトに載せた申し出の状況。要求を送る時点で作り、結果の記録まで同じ値を持つ。 */
+  offers: { value: (OfferView & { candidate_id: string; candidate_version: number })[] } | { value: null; null_reason: string };
 }
 
 /** タイミング段が判定する対象。発話中の候補は判定しない。 */
@@ -165,7 +172,7 @@ export class StagedPipeline<I extends StagedInput> {
 
   /** 増分の起動の1回。生成段のあと、未解決の希望があればタイミング段を実行する。 */
   async run(input: I, signal: AbortSignal): Promise<void> {
-    const context = this.context(input);
+    const context = this.context(input, this.desirePrompt);
     const profile = this.deps.options.profile;
     let result: LlmResult;
     try {
@@ -174,7 +181,7 @@ export class StagedPipeline<I extends StagedInput> {
         request_id: input.request_id,
         purpose: 'initiative',
         system: this.desirePrompt.system(profile),
-        messages: this.desirePrompt.messages({ segments: input.segments, candidates: input.candidates, recent_turns: context.turns }),
+        messages: this.desirePrompt.messages({ segments: input.segments, candidates: this.withOffers(input.candidates, context), recent_turns: context.turns }),
         response_json_schema: DESIRE_JSON_SCHEMA,
         transcript_revision: input.transcript_revision,
       });
@@ -196,13 +203,31 @@ export class StagedPipeline<I extends StagedInput> {
     await this.runTiming(input, signal);
   }
 
-  private context(input: StagedInput): StageContext {
+  private context(input: StagedInput, prompt: StagedPromptVersion): StageContext {
     const history = this.deps.options.history;
-    if (!history) return { turns: [], history_version: absent('history_not_wired') };
+    const offers = this.offerViews(input, prompt);
+    if (!history) return { turns: [], history_version: absent('history_not_wired'), offers };
     return {
       turns: recentTurnsFromHistory(history.snapshot(), input.segment_id, this.deps.options.recent_context),
       history_version: present(history.version()),
+      offers,
     };
+  }
+
+  private offerViews(input: StagedInput, prompt: StagedPromptVersion): StageContext['offers'] {
+    if (!prompt.shows_offer) return absent('prompt_version_does_not_show_offer');
+    const source = this.deps.options.offers;
+    if (!source) return absent('offer_source_not_wired');
+    return present(input.candidates.map((c) => ({ candidate_id: c.candidate_id, candidate_version: c.candidate_version, ...source.view(c.candidate_id, input.sent_at) })));
+  }
+
+  private withOffers(candidates: readonly CandidateRecord[], context: StageContext): PromptCandidate[] {
+    return candidates.map((c) => {
+      const entry = context.offers.value?.find((o) => o.candidate_id === c.candidate_id);
+      if (!entry) return c;
+      const { candidate_id: _id, candidate_version: _version, ...offer } = entry;
+      return { ...c, offer };
+    });
   }
 
   private meta(input: StagedInput, received_at: number): DecisionMeta {
@@ -554,6 +579,7 @@ export class StagedPipeline<I extends StagedInput> {
       gate: verified({ passed: fields.gate_reasons.length === 0, reasons: fields.gate_reasons }, 'stage_gate'),
       outcome: fields.outcome,
       ledger_reason: fields.ledger_reason,
+      offer_views: context.offers,
       ...(fields.revise_comparison ? { revise_comparison: verified(fields.revise_comparison, 'staged_revise_comparison') } : {}),
       ...(fields.already_said
         ? {
@@ -586,7 +612,7 @@ export class StagedPipeline<I extends StagedInput> {
     }
     const input = this.host.newTimingInput(desire.request_id);
     if (!input) return;
-    const context = this.context(input);
+    const context = this.context(input, this.timingPrompt);
     let result: LlmResult;
     try {
       result = await this.timingLlm.generate({
@@ -594,7 +620,7 @@ export class StagedPipeline<I extends StagedInput> {
         request_id: input.request_id,
         purpose: 'initiative',
         system: this.timingPrompt.system(this.deps.options.profile),
-        messages: this.timingPrompt.messages({ segments: input.segments, candidates: [target], recent_turns: context.turns }),
+        messages: this.timingPrompt.messages({ segments: input.segments, candidates: this.withOffers([target], context), recent_turns: context.turns }),
         response_json_schema: TIMING_JSON_SCHEMA,
         transcript_revision: input.transcript_revision,
       });

@@ -122,7 +122,7 @@
     "staged": {
       "timing_strategy": "llm",
       "conversation_kind": "joint_thinking",
-      "desire_prompt_version": "initiative-desire-ja-v3",
+      "desire_prompt_version": "initiative-desire-ja-v4",
       "timing_prompt_version": "initiative-timing-ja-v2",
       "recent_context": { "max_turns": 6, "max_chars_per_turn": 300 },
       "revise_min_utterance_similarity": 0.8,

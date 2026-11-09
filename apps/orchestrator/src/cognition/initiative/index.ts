@@ -3,6 +3,7 @@ export * from './failure';
 export * from './gate';
 export * from './model_output';
 export * from './monitor';
+export * from './offer_view';
 export * from './persona';
 export * from './prompt';
 export * from './recent_turns';

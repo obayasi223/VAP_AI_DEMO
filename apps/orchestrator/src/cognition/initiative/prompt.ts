@@ -2,7 +2,7 @@
  * 判定プロンプト。版ごとに残し、結果には必ず版を記録する（計画 §4.5a）。
  * 反例や検証用の台本の文言を入れない（過剰適合を避ける）。特定の話題の語も入れない。
  */
-import type { LlmMessage } from '@llm-vap/contracts';
+import type { LlmMessage, OfferView } from '@llm-vap/contracts';
 import type { InitiativePersona } from './persona';
 import type { AsrSegmentSnapshot } from './transcript_view';
 
@@ -14,6 +14,8 @@ export interface PromptCandidate {
   proposed_utterance: string;
   /** 前のターンから持ち越した希望（二段判定）。 */
   carried_over?: { from_segment_id: number; at: number };
+  /** 申し出の状況（offer_view.ts）。載せる版の生成段だけが渡す。 */
+  offer?: OfferView;
 }
 
 export interface PromptInput {

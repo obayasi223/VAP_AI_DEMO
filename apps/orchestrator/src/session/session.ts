@@ -938,6 +938,7 @@ export class Session {
           avatar_available: this.link !== null,
           user_speaking: previous.user_speaking,
           permitted: previous.permitted_to_speak,
+          invitation_detected: previous.invitation.detected,
           p_now_ai: this.vap === null ? null : readVap(this.vap, vapDirectionSettings(this.options.policy)).p_now_ai,
         }) ?? null;
       const inputs = this.inputs(holdStart);

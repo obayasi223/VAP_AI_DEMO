@@ -4,7 +4,7 @@
  * initiative-ja-v2 の (a)〜(c) は使わない。観点と判定の条件は config/conversation_kind.<id>.ja.json に置き、本体に種類ごとの語を埋めない。
  * v1 は版の記録のために残す（v1 のタイミング段の WITHDRAW は出力の形から外したので、v1 も撤回は生成段に寄る）。
  */
-import type { LlmMessage } from '@llm-vap/contracts';
+import type { LlmMessage, OfferView } from '@llm-vap/contracts';
 import type { ConversationKindProfile } from './conversation_kind';
 import type { PromptCandidate } from './prompt';
 import type { RecentTurn } from './recent_turns';
@@ -103,7 +103,7 @@ const WITHDRAW_KINDS_V2 = `- question_resolved: AI が確かめたかったこ�
 
 const WITHDRAW_EVIDENCE_RULE_V2 = `- withdraw_evidence_span は、WITHDRAW の根拠になった発話を、今話している人の発話の、希望の根拠より後ろからそのまま連続して抜き出す。withdraw_reason にその理由を書く。`;
 
-const DESIRE_SYSTEM_V2_BODY = (profile: ConversationKindProfile, withdrawKinds: string, withdrawEvidenceRule: string) => `あなたは音声対話システムの中で、AI の側の「言いたいこと」の内容だけを判定する段です。
+const DESIRE_SYSTEM_V2_BODY = (profile: ConversationKindProfile, withdrawKinds: string, withdrawEvidenceRule: string, offerSection = '') => `あなたは音声対話システムの中で、AI の側の「言いたいこと」の内容だけを判定する段です。
 判定するのは、言いたいことが生じたかどうかと、未解決の希望の内容がどうなったかだけです。いつ言うか、今言うべきか、話の途中かどうかは別の段が決めるので、考えません。
 
 # この会話と AI の立場
@@ -128,7 +128,7 @@ ${profile.desire_lens.conditions.map((c) => `- ${c}`).join('\n')}
 - WITHDRAW: 未解決の希望が内容の面で要らなくなった。今は言わない、待ったほうがよいというタイミングの理由では選ばない（それは別の段が判定する）。
 
 # WITHDRAW の分類（withdraw_kind）
-${withdrawKinds}
+${withdrawKinds}${offerSection}
 
 # 書き方の決まり
 - evidence_span は、今話している人の発話（# の区間）からそのまま連続して抜き出す。言い換えない。根拠の箇所だけを短く抜き出す。
@@ -142,12 +142,21 @@ ${WRITING_RULES}`;
 const DESIRE_SYSTEM_V2 = (profile: ConversationKindProfile) => DESIRE_SYSTEM_V2_BODY(profile, WITHDRAW_KINDS_V2, WITHDRAW_EVIDENCE_RULE_V2);
 
 // v3: 撤回の根拠の範囲に AI の発話（直近の会話、実際に声に出た部分）を足し、分類に already_said を足しただけ。判定の条件の語は変えていない（v2 と同じ本体）。
-const DESIRE_SYSTEM_V3 = (profile: ConversationKindProfile) =>
-  DESIRE_SYSTEM_V2_BODY(
-    profile,
-    `${WITHDRAW_KINDS_V2}\n- already_said: その内容を AI がすでに話した。`,
-    `- withdraw_evidence_span は、WITHDRAW の根拠になった発話を、今話している人の発話の、希望の根拠より後ろから、または「# 直近の会話」の AI の発話からそのまま連続して抜き出す。AI の発話から抜き出したときは withdraw_evidence_segment_ids を空にする。withdraw_reason にその理由を書く。`,
-  );
+const WITHDRAW_KINDS_V3 = `${WITHDRAW_KINDS_V2}\n- already_said: その内容を AI がすでに話した。`;
+const WITHDRAW_EVIDENCE_RULE_V3 = `- withdraw_evidence_span は、WITHDRAW の根拠になった発話を、今話している人の発話の、希望の根拠より後ろから、または「# 直近の会話」の AI の発話からそのまま連続して抜き出す。AI の発話から抜き出したときは withdraw_evidence_segment_ids を空にする。withdraw_reason にその理由を書く。`;
+
+const DESIRE_SYSTEM_V3 = (profile: ConversationKindProfile) => DESIRE_SYSTEM_V2_BODY(profile, WITHDRAW_KINDS_V3, WITHDRAW_EVIDENCE_RULE_V3);
+
+// v4: 未解決の希望に申し出の状況（事実）を載せ、その読み方だけを足した。NEW の説明と判定の条件は変えていない。
+const OFFER_SECTION_V4 = `
+
+# 申し出の状況（未解決の希望の「申し出」の欄）
+この欄は、AI が吸気の合図を見せたかどうかと、その後に観測された人の振る舞いの事実で、内容を判定するときの文脈として読む。人が受け入れたかどうかを示すものではない。
+- 人が話し続けていることは、拒否でも関心のなさでもない。人は合図を見ていないかもしれず、合図に応える義務もない。
+- 人が話していないことや、AI に話を促す語句を言ったことも、希望の内容について何かを示すものではない。
+- KEEP／REVISE／WITHDRAW は、人が実際に話した内容に基づいて選ぶ。合図の有無や人の振る舞いだけを理由に REVISE や WITHDRAW を選ばない。WITHDRAW の根拠はこれまでどおり発話から抜き出す。`;
+
+const DESIRE_SYSTEM_V4 = (profile: ConversationKindProfile) => DESIRE_SYSTEM_V2_BODY(profile, WITHDRAW_KINDS_V3, WITHDRAW_EVIDENCE_RULE_V3, OFFER_SECTION_V4);
 
 // v2: タイミングの判定だけにした（撤回は生成段へ）。判定の条件の語は会話の種類の設定（timing_lens.conditions）にある。
 const TIMING_SYSTEM_V2 = (profile: ConversationKindProfile) => `あなたは音声対話システムの中で、すでに生じた「言いたいこと」を、いつ申し出るかを判定する段です。
@@ -174,7 +183,22 @@ ${profile.timing_lens.conditions.map((c) => `- ${c}`).join('\n')}
 - target_candidate_id は判定した希望の ID を書く。
 ${WRITING_RULES}`;
 
-function stagedUserMessage(input: StagedPromptInput): string {
+const FOLLOW_UP_TEXT: Record<OfferView['follow_up'], string> = {
+  kept_talking: '人は話している',
+  stopped: '人は今話していない',
+  invited: '人が AI に話を促す語句を言った',
+  unknown: 'まだ分からない',
+};
+
+/** 未解決の希望の「申し出」の欄。事実だけを書く。 */
+export function offerStatusText(offer: OfferView): string {
+  if (offer.presentation === 'not_presented') return '合図は見せていない';
+  const shown = offer.presentation === 'presented' ? '吸気の合図を見せた' : '吸気の合図を送った（表示の報告はまだない）';
+  const elapsed = offer.elapsed_s.value !== null ? `（${offer.elapsed_s.value.toFixed(1)} 秒前）` : '';
+  return `${shown}${elapsed}、その後: ${FOLLOW_UP_TEXT[offer.follow_up]}`;
+}
+
+function stagedUserMessage(input: StagedPromptInput, showsOffer: boolean): string {
   const turns =
     input.recent_turns.length === 0
       ? 'なし'
@@ -189,34 +213,38 @@ function stagedUserMessage(input: StagedPromptInput): string {
     input.candidates.length === 0
       ? 'なし'
       : input.candidates
-          .map((c) => `- ID: ${c.candidate_id} ／種別: ${c.intent_type} ／根拠: ${c.evidence_span} ／言いたい内容: ${c.proposed_utterance}${c.carried_over ? ' ／持ち越し' : ''}`)
+          .map((c) => `- ID: ${c.candidate_id} ／種別: ${c.intent_type} ／根拠: ${c.evidence_span} ／言いたい内容: ${c.proposed_utterance}${c.carried_over ? ' ／持ち越し' : ''}${showsOffer && c.offer ? ` ／申し出: ${offerStatusText(c.offer)}` : ''}`)
           .join('\n');
   return `# 直近の会話\n${turns}\n\n# 今話している人の発話（安定した逐次音声認識）\n${segments}\n\n# 未解決の希望\n${candidates}`;
 }
 
 export interface StagedPromptVersion {
   id: string;
+  /** 未解決の希望に申し出の状況を載せる版か。 */
+  shows_offer: boolean;
   system(profile: ConversationKindProfile): string;
   messages(input: StagedPromptInput): LlmMessage[];
 }
 
-const staged = (id: string, system: (p: ConversationKindProfile) => string): StagedPromptVersion => ({
+const staged = (id: string, system: (p: ConversationKindProfile) => string, shows_offer = false): StagedPromptVersion => ({
   id,
+  shows_offer,
   system,
-  messages: (input) => [{ role: 'user', text: stagedUserMessage(input) }],
+  messages: (input) => [{ role: 'user', text: stagedUserMessage(input, shows_offer) }],
 });
 
 export const DESIRE_PROMPTS: Record<string, StagedPromptVersion> = {
   'initiative-desire-ja-v1': staged('initiative-desire-ja-v1', DESIRE_SYSTEM_V1),
   'initiative-desire-ja-v2': staged('initiative-desire-ja-v2', DESIRE_SYSTEM_V2),
   'initiative-desire-ja-v3': staged('initiative-desire-ja-v3', DESIRE_SYSTEM_V3),
+  'initiative-desire-ja-v4': staged('initiative-desire-ja-v4', DESIRE_SYSTEM_V4, true),
 };
 export const TIMING_PROMPTS: Record<string, StagedPromptVersion> = {
   'initiative-timing-ja-v1': staged('initiative-timing-ja-v1', TIMING_SYSTEM_V1),
   'initiative-timing-ja-v2': staged('initiative-timing-ja-v2', TIMING_SYSTEM_V2),
 };
 
-export const CURRENT_DESIRE_PROMPT_VERSION = 'initiative-desire-ja-v3';
+export const CURRENT_DESIRE_PROMPT_VERSION = 'initiative-desire-ja-v4';
 export const CURRENT_TIMING_PROMPT_VERSION = 'initiative-timing-ja-v2';
 
 export function getDesirePrompt(id: string): StagedPromptVersion {
