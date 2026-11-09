@@ -20,7 +20,7 @@ import type {
   SttResult,
   TimeSource,
 } from '@llm-vap/contracts';
-import { InitiativeMonitor } from '../cognition/initiative';
+import { InitiativeMonitor, OfferObservations } from '../cognition/initiative';
 import type { FailureBackoff, InitiativePersona, StagedOptions, SttInput, TriggerOptions } from '../cognition/initiative';
 import { CandidateLedger, candidateLedgerSettings } from '../control/candidates';
 import type { CandidateSpeechPort } from '../control/candidates';
@@ -65,6 +65,8 @@ export interface InitiativeWiringOptions {
 export class InitiativeWiring {
   readonly ledger: CandidateLedger;
   readonly monitor: InitiativeMonitor;
+  /** 申し出の状況。NegotiationWiring が送信の経路から書き、生成段が読む。 */
+  readonly offers = new OfferObservations();
   private closed = false;
 
   constructor(options: InitiativeWiringOptions) {
@@ -90,7 +92,7 @@ export class InitiativeWiring {
       ...(options.trigger ? { trigger: options.trigger } : {}),
       ...(options.prompt_version ? { prompt_version: options.prompt_version } : {}),
       ...(options.failure_backoff ? { failure_backoff: options.failure_backoff } : {}),
-      ...(options.staged ? { staged: options.staged } : {}),
+      ...(options.staged ? { staged: { ...options.staged, offers: this.offers } } : {}),
     });
     this.monitor = monitor;
   }

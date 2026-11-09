@@ -3149,6 +3149,114 @@
   },
   "optional": [
     {
+      "schema": "events",
+      "name": "initiative.desire/offer_views",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "initiative_inhale",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "segment_id": 3,
+        "transcript_revision": 42,
+        "request_id": "r_2",
+        "sent_at": 1000,
+        "received_at": 1200,
+        "latency_ms": 200,
+        "model_version": "gemini-3.5-flash-lite",
+        "prompt_version": "initiative-desire-ja-v1",
+        "conversation_kind": "joint_thinking",
+        "profile_version": 1,
+        "history_version": {
+          "value": 4
+        },
+        "input_segment_ids": [
+          7
+        ],
+        "recent_turn_count": 2,
+        "event": "initiative.desire",
+        "desire": "NEW",
+        "candidate_id": {
+          "value": "c_0007"
+        },
+        "candidate_version": {
+          "value": 1
+        },
+        "intent_type": {
+          "source": "model_output",
+          "value": "QUESTION"
+        },
+        "proposed_utterance": {
+          "source": "model_output",
+          "value": "それは月額料金にも含まれていますか？"
+        },
+        "evidence_span": {
+          "source": "model_output",
+          "value": "月額料金の話"
+        },
+        "reason": {
+          "source": "model_output",
+          "value": "料金の範囲が話に出ていない"
+        },
+        "evidence_segment_ids": {
+          "value": {
+            "source": "verified",
+            "value": [
+              7
+            ],
+            "method": "normalized_substring_of_listed_segments"
+          }
+        },
+        "prior_turn_evidence_span": {
+          "source": "model_output",
+          "value": null,
+          "null_reason": "model_left_empty"
+        },
+        "prior_turn_evidence": {
+          "value": null,
+          "null_reason": "no_prior_turn_evidence"
+        },
+        "gate": {
+          "source": "verified",
+          "value": {
+            "passed": true,
+            "reasons": []
+          },
+          "method": "stage_gate"
+        },
+        "outcome": "registered",
+        "ledger_reason": {
+          "value": null,
+          "null_reason": "accepted"
+        },
+        "offer_views": {
+          "value": [
+            {
+              "candidate_id": "c_0007",
+              "candidate_version": 1,
+              "presentation": "presented",
+              "cue_id": {
+                "value": "cue_0001"
+              },
+              "elapsed_s": {
+                "value": 1.2
+              },
+              "follow_up": "kept_talking"
+            }
+          ]
+        }
+      },
+      "optional_keys": [
+        "offer_views"
+      ]
+    },
+    {
       "schema": "browser_rpc.browser_to_node",
       "name": "audio.report/counters",
       "value": {

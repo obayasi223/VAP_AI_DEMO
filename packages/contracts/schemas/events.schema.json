@@ -4979,6 +4979,147 @@
             "method"
           ],
           "additionalProperties": false
+        },
+        "offer_views": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "presentation": {
+                        "type": "string",
+                        "enum": [
+                          "not_presented",
+                          "sent_unconfirmed",
+                          "presented"
+                        ]
+                      },
+                      "cue_id": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "value"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "type": "null"
+                              },
+                              "null_reason": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "value",
+                              "null_reason"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "elapsed_s": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "type": "number",
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "value"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "type": "null"
+                              },
+                              "null_reason": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "value",
+                              "null_reason"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "follow_up": {
+                        "type": "string",
+                        "enum": [
+                          "kept_talking",
+                          "stopped",
+                          "invited",
+                          "unknown"
+                        ]
+                      },
+                      "candidate_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "candidate_version": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "presentation",
+                      "cue_id",
+                      "elapsed_s",
+                      "follow_up",
+                      "candidate_id",
+                      "candidate_version"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "null_reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value",
+                "null_reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
         }
       },
       "required": [

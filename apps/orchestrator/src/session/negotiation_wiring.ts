@@ -116,6 +116,8 @@ export interface BeforeStepContext {
   permitted?: boolean;
   /** VAP の AI 側の p_now（合図の後の反応の観測）。使えないときは null。 */
   p_now_ai?: number | null;
+  /** TurnManager の招待の検出（前の tick の値。申し出の状況の観測）。省略は検出なし。 */
+  invitation_detected?: boolean;
 }
 
 export interface CandidateChoice extends Selection {
@@ -183,6 +185,13 @@ export class NegotiationWiring {
     for (const action of step.actions) this.apply(action, ctx.now, ctx);
     if (step.gate !== null) this.logGate(step.gate);
     this.observeReactions(ctx);
+    this.options.initiative.offers.observe({
+      now: ctx.now,
+      user_speaking: ctx.user_speaking,
+      ai_speaking: ctx.ai_speaking,
+      invitation_detected: ctx.invitation_detected ?? false,
+      live_candidate_ids: new Set(this.options.initiative.ledger.list().map((c) => c.candidate_id)),
+    });
     // 合図を E2a が拒否した（apply で cue を消した）なら吸気の保留は要らない。延期中の音声待ちは cue を持たない。
     return step.state.cue !== null && this.state.cue === null ? null : step.hold_start;
   }
@@ -308,8 +317,12 @@ export class NegotiationWiring {
           { event: 'signal.started', candidate_id: report.candidate_id, phase: report.phase, parameters, visible: true, started_at },
           at,
         );
-        if (report.phase === 'inhale') this.options.initiative.ledger.noteCueStarted(report.candidate_id, started_at);
+        if (report.phase === 'inhale') {
+          this.options.initiative.ledger.noteCueStarted(report.candidate_id, started_at);
+          this.options.initiative.offers.noteReport(report.candidate_id, cue.cue_id, { visible: true, started_at });
+        }
       } else {
+        if (report.phase === 'inhale') this.options.initiative.offers.noteReport(report.candidate_id, cue.cue_id, { visible: false });
         this.options.emitter.emit({
           event: 'signal.started',
           candidate_id: report.candidate_id,
@@ -622,8 +635,12 @@ export class NegotiationWiring {
           const parameters = { cue_id: action.cue_id, duration_ms: action.duration_ms, inhale_completion: 'orchestrator_clock', phase_sent: 'inhale' };
           this.cues.set(`${action.cue_id}:inhale`, { cue_id: action.cue_id, candidate_id: action.candidate_id, parameters });
           sent = this.options.send({ type: 'breath.cue', cue_id: action.cue_id, candidate_id: action.candidate_id, duration_ms: action.duration_ms });
-          if (sent) this.options.emitter.emit({ event: 'signal.sent', candidate_id: action.candidate_id, phase: 'inhale', parameters, sent_at: now });
-          else this.noteSignalNotSent(action.candidate_id, action.cue_id, 'inhale');
+          if (sent) {
+            this.options.emitter.emit({ event: 'signal.sent', candidate_id: action.candidate_id, phase: 'inhale', parameters, sent_at: now });
+            this.options.initiative.offers.noteSent({ cue_id: action.cue_id, candidate_id: action.candidate_id, at: now, invitation_detected: ctx?.invitation_detected ?? false });
+          } else {
+            this.noteSignalNotSent(action.candidate_id, action.cue_id, 'inhale');
+          }
         } else {
           this.counters.shadow_cues += 1;
         }
