@@ -23,6 +23,7 @@
     "test:e2e": "tsx apps/orchestrator/test/e2e/run.ts",
     "log:check": "tsx tools/log_check/cli.ts",
     "review:initiative": "tsx tools/initiative_review/cli.ts",
+    "latency:initiative": "tsx tools/latency_initiative/cli.ts",
     "dev:fakes": "npm run fakes -w @llm-vap/testkit"
   },
   "devDependencies": {

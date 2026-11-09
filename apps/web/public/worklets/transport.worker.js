@@ -20213,12 +20213,17 @@ var ClockEstimator = class {
 };
 var ThreadAxisEstimator = class {
   best = null;
-  /** workerSent と workerReceived は Worker の now、mainT は主スレッドの now。 */
-  add(workerSentMs, mainMs, workerReceivedMs) {
+  /**
+   * workerSent と workerReceived は Worker の now、mainT は主スレッドの now。
+   * 採った標本が前の推定と minChangeMs 以上違うときに true を返す（時計差の報告をやり直す合図）。
+   */
+  add(workerSentMs, mainMs, workerReceivedMs, minChangeMs = 1) {
     const rtt = workerReceivedMs - workerSentMs;
-    if (this.best === null || rtt < this.best.rtt_ms) {
-      this.best = { offset_ms: mainMs - (workerSentMs + workerReceivedMs) / 2, rtt_ms: rtt };
-    }
+    if (this.best !== null && rtt >= this.best.rtt_ms) return false;
+    const offset_ms = mainMs - (workerSentMs + workerReceivedMs) / 2;
+    const changed = this.best === null || Math.abs(offset_ms - this.best.offset_ms) >= minChangeMs;
+    this.best = { offset_ms, rtt_ms: rtt };
+    return changed;
   }
   get offsetMs() {
     return this.best === null ? null : this.best.offset_ms;
@@ -20230,6 +20235,13 @@ var ThreadAxisEstimator = class {
     return this.best === null ? null : this.best.rtt_ms;
   }
 };
+function composeMainThreadClock(workerClock, axisOffsetMs, axisUncertaintyMs) {
+  return {
+    ...workerClock,
+    offset_ms: workerClock.offset_ms - axisOffsetMs,
+    uncertainty_ms: workerClock.uncertainty_ms + axisUncertaintyMs
+  };
+}
 var RenderClock = class {
   constructor(rate, windowObservations = 256) {
     this.rate = rate;
@@ -20446,6 +20458,8 @@ var MAX_PENDING_CONTROL = 256;
 var CLOCK_BURST = 6;
 var CLOCK_BURST_INTERVAL_MS = 100;
 var AXIS_PING_INTERVAL_MS = 500;
+var AXIS_BURST_COUNT = 20;
+var AXIS_BURST_INTERVAL_MS = 25;
 var RECONNECT_MIN_MS = 250;
 var RECONNECT_MAX_MS = 5e3;
 var SESSION_OPEN_ELSEWHERE_CODE = 4e3;
@@ -20494,6 +20508,10 @@ function clientNow() {
 }
 function axisPing() {
   toMain({ t: "axis_ping", worker_t_ms: performance.now() });
+}
+function axisBurst(left) {
+  axisPing();
+  if (left > 1) setTimeout(() => axisBurst(left - 1), AXIS_BURST_INTERVAL_MS);
 }
 function toMain(message) {
   scope.postMessage(message);
@@ -20589,7 +20607,22 @@ function sendAudioReport() {
   });
 }
 function sendPing() {
-  sendJson({ type: "clock.ping", seq: pingSeq++, client_t_ms: clientNow() });
+  sendJson({ type: "clock.ping", seq: pingSeq++, client_t_ms: performance.now() });
+}
+function reportClock() {
+  const workerClock = clock.best();
+  const axisOffset = axis.offsetMs;
+  if (link !== "ready" || workerClock === null || axisOffset === null) return;
+  const estimate = composeMainThreadClock(workerClock, axisOffset, axis.uncertaintyMs);
+  toMain({ t: "clock", estimate });
+  sendJson({
+    type: "clock.report",
+    offset_ms: estimate.offset_ms,
+    rtt_ms: estimate.rtt_ms,
+    uncertainty_ms: estimate.uncertainty_ms,
+    samples: estimate.samples,
+    client_t_ms: clientNow()
+  });
 }
 function clockTick() {
   if (link !== "ready" || init === null) return;
@@ -20727,19 +20760,8 @@ function onJson(text) {
   const message = parsed.data;
   switch (message.type) {
     case "clock.pong": {
-      const receivedAt = clientNow();
-      const estimate = clock.add(message.client_t_ms, message.server_t_ms, receivedAt);
-      if (estimate !== null) {
-        toMain({ t: "clock", estimate });
-        sendJson({
-          type: "clock.report",
-          offset_ms: estimate.offset_ms,
-          rtt_ms: estimate.rtt_ms,
-          uncertainty_ms: estimate.uncertainty_ms + axis.uncertaintyMs,
-          samples: estimate.samples,
-          client_t_ms: receivedAt
-        });
-      }
+      clock.add(message.client_t_ms, message.server_t_ms, performance.now());
+      reportClock();
       return;
     }
     case "server.hello":
@@ -20895,7 +20917,7 @@ scope.onmessage = (event) => {
       renderClock = new RenderClock(message.init.sampleRateHz);
       worklet.onmessage = onWorklet;
       setInterval(sendAudioReport, message.init.reportIntervalMs);
-      axisPing();
+      axisBurst(AXIS_BURST_COUNT);
       setInterval(axisPing, AXIS_PING_INTERVAL_MS);
       connect();
       break;
@@ -20914,7 +20936,7 @@ scope.onmessage = (event) => {
       sendControl(message.message);
       break;
     case "axis_pong":
-      axis.add(message.worker_t_ms, message.main_t_ms, performance.now());
+      if (axis.add(message.worker_t_ms, message.main_t_ms, performance.now())) reportClock();
       break;
     case "shutdown":
       shuttingDown = true;

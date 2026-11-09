@@ -16,7 +16,7 @@ import {
   peekFrameKind,
   type PcmFrame,
 } from '@llm-vap/contracts/binary';
-import { ClockEstimator, RenderClock, ThreadAxisEstimator } from './clock_sync';
+import { ClockEstimator, RenderClock, ThreadAxisEstimator, composeMainThreadClock } from './clock_sync';
 import { PolyphaseResampler, designResampler, type ResamplerDesign } from './dsp/resampler';
 import type {
   FromWorklet,
@@ -39,6 +39,8 @@ const MAX_PENDING_CONTROL = 256;
 const CLOCK_BURST = 6;
 const CLOCK_BURST_INTERVAL_MS = 100;
 const AXIS_PING_INTERVAL_MS = 500;
+const AXIS_BURST_COUNT = 20;
+const AXIS_BURST_INTERVAL_MS = 25;
 const RECONNECT_MIN_MS = 250;
 const RECONNECT_MAX_MS = 5000;
 /** Node が「このセッションは別のタブで接続中」として新しい接続を断る close code（apps/orchestrator/src/ws/server.ts）。 */
@@ -101,6 +103,12 @@ function clientNow(): number {
 
 function axisPing(): void {
   toMain({ t: 'axis_ping', worker_t_ms: performance.now() });
+}
+
+/** 読み込み直後は主スレッドが詰まるので、最初だけ細かく測って RTT の小さい標本を早く得る。 */
+function axisBurst(left: number): void {
+  axisPing();
+  if (left > 1) setTimeout(() => axisBurst(left - 1), AXIS_BURST_INTERVAL_MS);
 }
 
 function toMain(message: WorkerToMain): void {
@@ -211,7 +219,29 @@ function sendAudioReport(): void {
 // ---- 時計差 -------------------------------------------------------------------
 
 function sendPing(): void {
-  sendJson({ type: 'clock.ping', seq: pingSeq++, client_t_ms: clientNow() });
+  // Worker の now のまま（主スレッドの軸へ直さない）。軸の差は reportClock で合成する。
+  sendJson({ type: 'clock.ping', seq: pingSeq++, client_t_ms: performance.now() });
+}
+
+/**
+ * 主スレッド基準の時計差を報告する。軸の推定がまだなければ送らない（timeOrigin の差で代用すると 1 秒以上ずれることがある）。
+ * browser_rtt の clock.sync の元（Node は往復の時刻を知らない）。
+ */
+function reportClock(): void {
+  const workerClock = clock.best();
+  const axisOffset = axis.offsetMs;
+  // 再接続の途中は前の接続の標本が残っているので送らない（startClock が消してから測り直す）。
+  if (link !== 'ready' || workerClock === null || axisOffset === null) return;
+  const estimate = composeMainThreadClock(workerClock, axisOffset, axis.uncertaintyMs);
+  toMain({ t: 'clock', estimate });
+  sendJson({
+    type: 'clock.report',
+    offset_ms: estimate.offset_ms,
+    rtt_ms: estimate.rtt_ms,
+    uncertainty_ms: estimate.uncertainty_ms,
+    samples: estimate.samples,
+    client_t_ms: clientNow(),
+  });
 }
 
 function clockTick(): void {
@@ -362,20 +392,8 @@ function onJson(text: string): void {
   const message = parsed.data;
   switch (message.type) {
     case 'clock.pong': {
-      const receivedAt = clientNow();
-      const estimate = clock.add(message.client_t_ms, message.server_t_ms, receivedAt);
-      if (estimate !== null) {
-        toMain({ t: 'clock', estimate });
-        // browser_rtt の clock.sync の元（Node は往復の時刻を知らない）。
-        sendJson({
-          type: 'clock.report',
-          offset_ms: estimate.offset_ms,
-          rtt_ms: estimate.rtt_ms,
-          uncertainty_ms: estimate.uncertainty_ms + axis.uncertaintyMs,
-          samples: estimate.samples,
-          client_t_ms: receivedAt,
-        });
-      }
+      clock.add(message.client_t_ms, message.server_t_ms, performance.now());
+      reportClock();
       return; // 主スレッドへは転送しない
     }
     case 'server.hello':
@@ -546,7 +564,7 @@ scope.onmessage = (event: MessageEvent<MainToWorker>) => {
       worklet.onmessage = onWorklet;
       setInterval(sendAudioReport, message.init.reportIntervalMs);
       // 時間軸の測定: 主スレッドが詰まると RTT が伸びるので繰り返して最小を採る。
-      axisPing();
+      axisBurst(AXIS_BURST_COUNT);
       setInterval(axisPing, AXIS_PING_INTERVAL_MS);
       connect();
       break;
@@ -565,7 +583,8 @@ scope.onmessage = (event: MessageEvent<MainToWorker>) => {
       sendControl(message.message);
       break;
     case 'axis_pong':
-      axis.add(message.worker_t_ms, message.main_t_ms, performance.now());
+      // 軸が動いたら過去の標本を待たずに報告し直す（ClockEstimator は Worker 基準なので再推定は不要）。
+      if (axis.add(message.worker_t_ms, message.main_t_ms, performance.now())) reportClock();
       break;
     case 'shutdown':
       shuttingDown = true;

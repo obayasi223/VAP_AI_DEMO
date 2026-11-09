@@ -10,6 +10,7 @@ export default defineConfig({
       'apps/web/src/avatar/__tests__/**/*.test.ts',
       'tools/initiative_spike/test/**/*.test.ts',
       'tools/initiative_review/test/**/*.test.ts',
+      'tools/latency_initiative/test/**/*.test.ts',
     ],
     testTimeout: 15000,
   },
