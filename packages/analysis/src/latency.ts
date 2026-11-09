@@ -228,7 +228,7 @@ function isStt(event: ResearchEvent): event is SttEvent {
  * （span が区間をまたぐ場合があり、別の区間の同じ語に誤って当たらないようにする）。
  * LLM に渡したあとの revision は根拠になりえないので sent_at までに限る。
  */
-function firstSttContaining(
+export function firstSttContaining(
   stt: readonly SttEvent[],
   decision: Pick<CandidateOrigin, 'evidence_span' | 'evidence_segment_ids' | 'sent_at'>,
 ): SttEvent | null {

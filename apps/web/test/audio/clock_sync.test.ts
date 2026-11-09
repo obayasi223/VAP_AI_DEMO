@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ClockEstimator, RenderClock, ThreadAxisEstimator } from '../../src/audio/clock_sync';
+import { ClockEstimator, RenderClock, ThreadAxisEstimator, composeMainThreadClock, type ClockEstimate } from '../../src/audio/clock_sync';
 
 describe('ClockEstimator', () => {
   it('RTT が最小の標本を採る', () => {
@@ -31,6 +31,37 @@ describe('ThreadAxisEstimator', () => {
     expect(a.offsetMs).toBeCloseTo(5299);
     expect(a.rttMs).toBe(2);
     expect(a.uncertaintyMs).toBe(1);
+  });
+});
+
+describe('axis の推定の更新', () => {
+  it('RTT の小さい標本で軸が動いたときだけ true を返す', () => {
+    const a = new ThreadAxisEstimator();
+    expect(a.add(1000, 6500, 1200)).toBe(true); // 最初の標本
+    expect(a.add(2000, 7300, 2300)).toBe(false); // RTT が大きいので採らない
+    expect(a.add(3000, 8000, 3002)).toBe(true); // 差が変わった
+    expect(a.add(4000, 9000, 4001)).toBe(false); // RTT は小さいが差は 1ms 未満
+    expect(a.rttMs).toBe(1);
+  });
+});
+
+describe('composeMainThreadClock', () => {
+  const worker: ClockEstimate = { offset_ms: 5000, rtt_ms: 2, uncertainty_ms: 1, samples: 3, measured_at_client_ms: 10 };
+
+  it('サーバー時刻 = 主スレッド時刻 - 軸の差 + Worker の時計差 で合成し、誤差は足す', () => {
+    const main = composeMainThreadClock(worker, 120, 4);
+    expect(main.offset_ms).toBeCloseTo(4880);
+    expect(main.uncertainty_ms).toBe(5);
+    expect(main.rtt_ms).toBe(2);
+    expect(main.samples).toBe(3);
+  });
+
+  it('軸の推定が良くなれば、同じ Worker の時計差から合成し直すだけで結果が直る（古い偏りが残らない）', () => {
+    // 主スレッドが詰まっていた間の偏り（+90ms）を持つ軸の推定。
+    const biased = composeMainThreadClock(worker, 210, 90);
+    const corrected = composeMainThreadClock(worker, 120, 1);
+    expect(corrected.offset_ms - biased.offset_ms).toBeCloseTo(90);
+    expect(corrected.uncertainty_ms).toBeLessThan(biased.uncertainty_ms);
   });
 });
 
