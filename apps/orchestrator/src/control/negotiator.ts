@@ -7,9 +7,15 @@
  *
  * 研究条件（計画 §4.6 末尾）。候補の生成までは3条件とも同じ経路で、違いはここの設定だけ。
  *  - reactive          : 候補は記録するが、合図も発話もしない（通常の応答だけ）。
- *  - initiative_no_cue : 合図を経ずに INTENT_READY のまま発話の機会を待ち、許可が出たら候補を話す。
  *  - initiative_inhale : 合図（吸気1回）→ 準備姿勢 → 許可で発話。人が話し続けたら DEFERRED（脱力）、
  *                        DEFERRED からは再吸気せず、許可が出たら話す。吸気中は通常の応答も含めて開始を保留する。
+ *  - initiative_no_cue : initiative_inhale と同じ制御（影の合図）。違いは参加者に見せないことだけ。
+ *
+ * 影の合図（shadow cue）: 比較で合図の効果だけを取り出すため、initiative_no_cue の候補も同じ状態遷移、ゲート、冷却時間、
+ * inhale_ms と hold_max_ms、DEFERRED、開始の保留を通る。ここは両条件で同じ動作を返し、提示するかどうかは配線
+ * （negotiation_wiring.ts）だけが presentsCue で分ける。状態の名前（BREATH_*）は提示を意味しない。提示したかは
+ * signal.sent／signal.started／signal.ended の有無で読む。影の合図の記録は outcome が shadow_cue、reasons に
+ * not_presented:initiative_no_cue、cue_id の頭が shadow_（docs/initiative_v3_design.md §2）。
  */
 import type { CandidateState, Condition, Invitation, TimingVerdict } from '@llm-vap/contracts';
 import { normalizeForSimilarity } from '../cognition/similarity';
@@ -115,8 +121,8 @@ export interface GateResult {
   candidate_id: string;
   candidate_version: number;
   candidate_state: CandidateState;
-  /** cue は合図した、blocked は条件のどれかで止めた、no_cue_condition は条件で合図しない。 */
-  outcome: 'cue' | 'blocked' | 'no_cue_condition';
+  /** cue は合図した、shadow_cue は同じゲートを通ったが提示しない（影の合図）、blocked は条件のどれかで止めた、no_cue_condition は条件で合図しない（reactive）。 */
+  outcome: 'cue' | 'shadow_cue' | 'blocked' | 'no_cue_condition';
   reasons: string[];
 }
 
@@ -128,6 +134,14 @@ export interface NegotiatorStep {
   /** 通常の応答を含めて開始を保留する理由（吸気中、吸気の後に音声を待つ間）。なければ null。TurnInputs.start_blocked_reason に入れる。 */
   hold_start: string | null;
 }
+
+/** 合図を参加者に提示する条件か。false の initiative_no_cue は同じ制御を通るが、何も見せない（影の合図）。 */
+export function presentsCue(condition: Condition): boolean {
+  return condition === 'initiative_inhale';
+}
+
+/** 影の合図の記録に付ける理由（提示していないことをログから読めるように）。 */
+export const NOT_PRESENTED_REASON = 'not_presented:initiative_no_cue';
 
 const UNRESOLVED: readonly CandidateState[] = [
   'INTENT_READY',
@@ -142,6 +156,7 @@ const UNRESOLVED: readonly CandidateState[] = [
  * と検証（E2a に登録済み）に合格、AI 非発話、合図の冷却時間を超過、活動中の候補が1つまで。
  * 加えて、アバターを描けること（仕様 §4 の avatar available）と、候補の音声が用意できること（準備中か準備済み。作れないなら
  * 合図しても話せない）を見る。音声の完成は待たない（吸気の間に作る。known_gaps §11）。
+ * initiative_no_cue も同じ基準で判定し、通れば outcome は shadow_cue（提示はしない）。
  */
 export function signalGate(
   settings: NegotiatorSettings,
@@ -154,7 +169,7 @@ export function signalGate(
     candidate_version: candidate.candidate_version,
     candidate_state: candidate.state,
   };
-  if (settings.condition !== 'initiative_inhale') {
+  if (settings.condition === 'reactive') {
     return { ...base, outcome: 'no_cue_condition', reasons: [`condition:${settings.condition}`] };
   }
   const reasons: string[] = [];
@@ -178,9 +193,10 @@ export function signalGate(
     reasons.push(candidate.timing == null ? 'timing_not_judged' : `timing_${candidate.timing.toLowerCase()}`);
   }
   if (reasons.length > 0) return { ...base, outcome: 'blocked', reasons };
+  const presented = presentsCue(settings.condition);
   return {
     ...base,
-    outcome: 'cue',
+    outcome: presented ? 'cue' : 'shadow_cue',
     reasons: [
       'judgement_fresh',
       'ai_silent',
@@ -189,6 +205,7 @@ export function signalGate(
       'single_active_candidate',
       `candidate_audio_${candidate.audio}`,
       ...(settings.timing_gate === true ? ['timing_offer_now'] : []),
+      ...(presented ? [] : [NOT_PRESENTED_REASON]),
     ],
   };
 }
@@ -287,9 +304,10 @@ export function negotiate(settings: NegotiatorSettings, previous: NegotiatorStat
   const ready = inputs.candidates.find((c) => c.state === 'INTENT_READY');
   if (ready !== undefined) {
     gate = signalGate(settings, state, inputs, ready);
-    if (gate.outcome === 'cue') {
+    if (gate.outcome === 'cue' || gate.outcome === 'shadow_cue') {
       const cue_seq = state.cue_seq + 1;
-      const cue_id = `cue_${String(cue_seq).padStart(4, '0')}`;
+      // 影の合図の ID は頭で見分ける（hold_start の理由と cue_reaction に残るので、提示と取り違えない）。
+      const cue_id = `${gate.outcome === 'shadow_cue' ? 'shadow_' : ''}cue_${String(cue_seq).padStart(4, '0')}`;
       actions.push({
         kind: 'cue',
         cue_id,
@@ -357,6 +375,8 @@ export function releaseForWithdrawal(
 /** 吸気の合図の後の観測。**譲ったと確定する処理ではない**（話し続けた時間と VAP の値を測るだけ）。 */
 export interface CueReaction {
   cue_id: string;
+  /** 参加者に実際に提示したか（影の合図と、送れなかった合図は false）。 */
+  cue_presented: boolean;
   candidate_id: string;
   candidate_version: number;
   cue_sent_at: number;
@@ -375,7 +395,7 @@ export interface CueReaction {
 }
 
 export function startCueReaction(
-  input: { cue_id: string; candidate_id: string; candidate_version: number; at: number; window_ms: number },
+  input: { cue_id: string; cue_presented: boolean; candidate_id: string; candidate_version: number; at: number; window_ms: number },
   tick: { user_speaking: boolean; p_now_ai: number | null; candidate_state: CandidateState | null },
 ): CueReaction {
   const { at, ...identity } = input;
@@ -472,11 +492,10 @@ export function selectSpeech(settings: NegotiatorSettings, inputs: SelectionInpu
   if (settings.timing_gate === true && c.state === 'INTENT_READY' && c.timing == null) {
     return { choice: 'response', reasons: ['timing_not_judged'], cause: null };
   }
-  // initiative_inhale の WAIT_FOR_TURN_END は話さない（吸気なしの発話を混ぜない）。通常応答に回し、候補は保留に残す。
-  const waiting = settings.timing_gate === true && c.state === 'INTENT_READY' && c.timing === 'WAIT_FOR_TURN_END';
-  if (waiting && settings.condition === 'initiative_inhale') return { choice: 'response', reasons: ['timing_wait_for_turn_end'], cause: null };
-  // 吸気あり: 吸気の後（BREATH_HOLD_OR_READY、DEFERRED）だけが話せる。声が先に出る経路はない。
-  const speakable: readonly CandidateState[] = settings.condition === 'initiative_inhale' ? ['BREATH_HOLD_OR_READY', 'DEFERRED'] : ['INTENT_READY'];
+  // WAIT_FOR_TURN_END は話さない（吸気の期間を経ない発話を混ぜない）。通常応答に回し、候補は保留に残す。ここからは2つの提案条件で同じ。
+  if (settings.timing_gate === true && c.state === 'INTENT_READY' && c.timing === 'WAIT_FOR_TURN_END') return { choice: 'response', reasons: ['timing_wait_for_turn_end'], cause: null };
+  // 吸気の期間の後（BREATH_HOLD_OR_READY、DEFERRED）だけが話せる。声が先に出る経路はない。
+  const speakable: readonly CandidateState[] = ['BREATH_HOLD_OR_READY', 'DEFERRED'];
   if (!speakable.includes(c.state)) {
     return { choice: 'response', reasons: [c.state === 'INTENT_READY' ? 'not_cued' : `state_not_speakable:${c.state}`], cause: null };
   }
@@ -494,7 +513,6 @@ export function selectSpeech(settings: NegotiatorSettings, inputs: SelectionInpu
     reasons: [
       go_ahead ? `invitation:${inputs.invitation.detected ? inputs.invitation.phrase : ''}` : 'natural_yield',
       `from:${c.state}`,
-      ...(waiting ? ['timing_wait_for_turn_end'] : []),
     ],
     cause: go_ahead ? 'invitation' : 'turn_allowed',
   };

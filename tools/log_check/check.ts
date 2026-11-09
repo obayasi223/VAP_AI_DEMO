@@ -282,6 +282,11 @@ export async function checkLog(input: string, options: CheckOptions = {}): Promi
       evidenceReasons.push(`条件 ${manifest.condition} で交渉が動いていない（${used ?? 'manifest に記録なし'}${reason ? `: ${reason}` : ''}）`);
     }
   }
+  // 影の合図の条件では、提示の記録（signal.*）が1件もないはず。あれば条件の比較が成り立たない。
+  if (manifest?.condition === 'initiative_no_cue') {
+    const shown = events.filter((e) => e.event === 'signal.sent' || e.event === 'signal.started' || e.event === 'signal.ended').length;
+    if (shown > 0) failures.push(`条件 initiative_no_cue なのに合図の提示の記録がある（signal.* ${shown} 件）`);
+  }
   for (const row of providers.values()) {
     if (row.provider_class !== 'production') evidenceReasons.push(`${row.provider} は ${row.provider_class}`);
   }

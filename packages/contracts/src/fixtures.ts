@@ -538,6 +538,7 @@ export const VALID_FIXTURES: Record<SchemaName, { name: string; value: unknown }
         ...envelope,
         event: 'negotiation.cue_reaction',
         cue_id: 'cue_0001',
+        cue_presented: true,
         candidate_id: 'c_0007',
         candidate_version: 1,
         cue_sent_at: 1000,

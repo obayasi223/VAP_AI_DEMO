@@ -98,8 +98,8 @@ const decisions = (r: Rig, stage: string) => r.events.ofType('negotiation.decisi
 const speechOf = (r: Rig) => r.session as unknown as { speech: { entries: Map<number, unknown>; fail(entry: unknown, reason: string): void } };
 
 describe('WAIT_FOR_TURN_END（話し終わりまで待つ）の候補', () => {
-  it('吸気せず、候補の文を話さず、通常応答へ回す。候補は捨てずに持ち越し、渡したことと版を記録する', async () => {
-    rig = await setup(staged([NEW], [timing('WAIT_FOR_TURN_END')]));
+  it.each(['initiative_inhale', 'initiative_no_cue'] as const)('%s: 吸気せず、候補の文を話さず、通常応答へ回す。候補は捨てずに持ち越し、渡したことと版を記録する', async (condition) => {
+    rig = await setup(staged([NEW], [timing('WAIT_FOR_TURN_END')]), condition);
     await speak(rig);
     await rig.steps(10, SPEAKING);
     expect(msgs(rig, 'breath.cue')).toHaveLength(0);
@@ -153,13 +153,25 @@ describe('WAIT_FOR_TURN_END（話し終わりまで待つ）の候補', () => {
     expect(rig.events.ofType('initiative.not_offered')).toHaveLength(0);
   });
 
-  it('initiative_no_cue の WAIT は今までどおり話す（条件を変えない）し、材料にも持ち越しにもしない', async () => {
-    rig = await setup(staged([NEW], [timing('WAIT_FOR_TURN_END')]), 'initiative_no_cue');
+  it('initiative_no_cue で OFFER_NOW の候補は影の合図になり、通常応答の開始で inhale と同じく撤回する（持ち越さない）', async () => {
+    rig = await setup(staged([NEW], [timing('OFFER_NOW')]), 'initiative_no_cue');
+    await speak(rig);
+    expect(rig.session.candidates?.list()).toMatchObject([{ state: 'BREATH_INHALE' }]);
+    expect(msgs(rig, 'breath.cue')).toHaveLength(0);
+    expect(rig.session.negotiationWiring?.counters.shadow_cues).toBe(1);
+    await rig.session.negotiationWiring?.onNormalResponseStarted(rig.time.monotonicMs());
+    expect(rig.session.candidates?.list().filter((c) => c.carried_over)).toHaveLength(0);
+    expect(rig.events.ofType('initiative.not_offered')).toHaveLength(0);
+  });
+
+  it('reactive は WAIT を持ち越さず材料にもしない（従来どおり）', async () => {
+    rig = await setup(staged([NEW], [timing('WAIT_FOR_TURN_END')]), 'reactive');
     await speak(rig);
     await finishTurn(rig);
-    expect(await until(rig, () => beginOf(rig!, UTTERANCE) !== null)).toBe(true);
+    expect(await until(rig, () => beginOf(rig!, REPLY) !== null)).toBe(true);
     expect(rig.events.ofType('initiative.not_offered')).toHaveLength(0);
     expect(rig.events.ofType('initiative.response_material')).toHaveLength(0);
+    expect(rig.session.candidates?.list().filter((c) => c.carried_over)).toHaveLength(0);
   });
 });
 

@@ -59,7 +59,8 @@ describe('E2 合図のゲート（signalGate）', () => {
   const cases: { name: string; condition: Condition; state?: Partial<NegotiatorState>; inputs?: Partial<NegotiatorTickInputs>; candidate?: Partial<CandidateView>; patch?: Partial<NegotiatorSettings>; outcome: string; reasons: string[] }[] = [
     { name: '全部満たせば合図する', condition: 'initiative_inhale', outcome: 'cue', reasons: ['judgement_fresh', 'ai_silent', 'avatar_available', 'cooldown_passed', 'single_active_candidate', 'candidate_audio_ready'] },
     { name: 'reactive は合図しない（記録だけ）', condition: 'reactive', outcome: 'no_cue_condition', reasons: ['condition:reactive'] },
-    { name: 'initiative_no_cue は合図しない（吸気を経ない）', condition: 'initiative_no_cue', outcome: 'no_cue_condition', reasons: ['condition:initiative_no_cue'] },
+    { name: 'initiative_no_cue は同じ基準で影の合図になる（提示しない）', condition: 'initiative_no_cue', outcome: 'shadow_cue', reasons: ['judgement_fresh', 'ai_silent', 'avatar_available', 'cooldown_passed', 'single_active_candidate', 'candidate_audio_ready', 'not_presented:initiative_no_cue'] },
+    { name: 'initiative_no_cue も冷却時間の中は止める（吸気の条件と同じ）', condition: 'initiative_no_cue', state: { last_cue_at: 0 }, outcome: 'blocked', reasons: ['cooldown_remaining_ms=2900'] },
     { name: 'AI が話している', condition: 'initiative_inhale', inputs: { ai_speaking: true }, outcome: 'blocked', reasons: ['ai_speaking'] },
     { name: 'アバターを描けない（切断中）', condition: 'initiative_inhale', inputs: { avatar_available: false }, outcome: 'blocked', reasons: ['avatar_unavailable'] },
     { name: '冷却時間の中', condition: 'initiative_inhale', state: { last_cue_at: 0 }, outcome: 'blocked', reasons: ['cooldown_remaining_ms=2900'] },
@@ -250,13 +251,70 @@ describe('E2 吸気から DEFERRED まで（negotiate）', () => {
     expect(log.map((l) => l.gate)).toEqual(['cue', null, 'blocked', 'cue']);
   });
 
-  it.each(['reactive', 'initiative_no_cue'] as const)('%s は合図せず、開始も保留しない', (condition) => {
-    const { log } = run(condition, [
+  it('reactive は合図せず、開始も保留しない', () => {
+    const { log } = run('reactive', [
       { now: 1000, state: 'INTENT_READY' },
       { now: 3000, state: 'INTENT_READY' },
     ]);
     expect(log.flatMap((l) => l.actions)).toEqual([]);
     expect(log.every((l) => l.hold === null && l.gate === 'no_cue_condition')).toBe(true);
+  });
+
+  describe('initiative_no_cue は initiative_inhale と同じ制御（影の合図）', () => {
+    /** 影の印だけを除いて比べる（ID の頭と、ゲートの outcome の名前）。 */
+    const normalize = (log: ReturnType<typeof run>['log']) =>
+      log.map((l) => ({ ...l, hold: l.hold?.replace('shadow_', '') ?? null, gate: l.gate === 'shadow_cue' ? 'cue' : l.gate }));
+
+    const paths: { name: string; frames: Parameters<typeof run>[1] }[] = [
+      {
+        name: '吸気 → 保持 → 人が話し続けて DEFERRED',
+        frames: [
+          { now: 1000, state: 'INTENT_READY' },
+          { now: 1200, state: 'BREATH_INHALE' },
+          { now: 1450, state: 'BREATH_INHALE' },
+          { now: 1460, state: 'BREATH_HOLD_OR_READY' },
+          { now: 2449, state: 'BREATH_HOLD_OR_READY' },
+          { now: 2450, state: 'BREATH_HOLD_OR_READY' },
+          { now: 2470, state: 'DEFERRED' },
+        ],
+      },
+      {
+        name: '吸気の後に音声が間に合わず撤回',
+        frames: [
+          { now: 1000, state: 'INTENT_READY', audio: 'preparing' },
+          { now: 1450, state: 'BREATH_INHALE', audio: 'preparing' },
+          { now: 1460, state: 'BREATH_HOLD_OR_READY', audio: 'preparing' },
+          { now: 2450, state: 'BREATH_HOLD_OR_READY', audio: 'preparing' },
+        ],
+      },
+      {
+        name: '撤回で解除、冷却時間の中は次を止める',
+        frames: [
+          { now: 1000, state: 'INTENT_READY' },
+          { now: 1200, state: null },
+          { now: 1300, state: 'INTENT_READY' },
+          { now: 5001, state: 'INTENT_READY' },
+        ],
+      },
+    ];
+
+    it.each(paths)('$name: 同じ入力から同じ動作、同じ時刻、同じ開始の保留', ({ frames }) => {
+      const inhale = run('initiative_inhale', frames);
+      const shadow = run('initiative_no_cue', frames);
+      expect(normalize(shadow.log)).toEqual(normalize(inhale.log));
+      expect(shadow.state.last_cue_at).toBe(inhale.state.last_cue_at);
+      expect(shadow.state.cue?.inhale_ends_at ?? null).toBe(inhale.state.cue?.inhale_ends_at ?? null);
+      expect(shadow.state.cue?.hold_started_at ?? null).toBe(inhale.state.cue?.hold_started_at ?? null);
+    });
+
+    it('影の合図は ID と保留の理由から見分けられる', () => {
+      const shadow = run('initiative_no_cue', [{ now: 1000, state: 'INTENT_READY' }]);
+      expect(shadow.state.cue?.cue_id).toBe('shadow_cue_0001');
+      expect(shadow.log[0]).toMatchObject({ gate: 'shadow_cue', hold: 'candidate_inhale_in_progress:shadow_cue_0001' });
+      const inhale = run('initiative_inhale', [{ now: 1000, state: 'INTENT_READY' }]);
+      expect(inhale.state.cue?.cue_id).toBe('cue_0001');
+      expect(inhale.log[0]).toMatchObject({ gate: 'cue' });
+    });
   });
 
   it('候補の発話を始めたら合図を解く（speech_started）', () => {
@@ -292,16 +350,18 @@ describe('E3 発話の選択（selectSpeech）', () => {
     { name: 'inhale: 吸気中に許可 → 待つ（吸気を終えてから）', condition: 'initiative_inhale', candidate: { state: 'BREATH_INHALE' }, choice: 'wait', reasons: ['inhale_in_progress'] },
     { name: 'inhale: 合図していない候補は話さない', condition: 'initiative_inhale', candidate: { state: 'INTENT_READY' }, choice: 'response', reasons: ['not_cued'] },
     { name: 'inhale: 招待が疑問の形でも候補（発話文と招待が同じ文、文末の規則を通さない）', condition: 'initiative_inhale', candidate: { state: 'DEFERRED' }, invitation: invitation('go_ahead', '何かありますか'), text: '何かありますか', choice: 'candidate', reasons: ['invitation:何かありますか', 'from:DEFERRED'], cause: 'invitation' },
-    { name: 'no_cue: 招待「何か言いたいことありますか」も候補', condition: 'initiative_no_cue', candidate: { state: 'INTENT_READY' }, invitation: invitation('go_ahead', '何か言いたいことありますか'), text: '何か言いたいことありますか', choice: 'candidate', reasons: ['invitation:何か言いたいことありますか', 'from:INTENT_READY'], cause: 'invitation' },
+    { name: 'no_cue: 招待「何か言いたいことありますか」も候補', condition: 'initiative_no_cue', candidate: { state: 'DEFERRED' }, invitation: invitation('go_ahead', '何か言いたいことありますか'), text: '何か言いたいことありますか', choice: 'candidate', reasons: ['invitation:何か言いたいことありますか', 'from:DEFERRED'], cause: 'invitation' },
     { name: 'inhale: 「どうぞ」なら候補（原因は invitation）', condition: 'initiative_inhale', candidate: { state: 'DEFERRED' }, invitation: invitation('go_ahead', 'どうぞ'), choice: 'candidate', reasons: ['invitation:どうぞ', 'from:DEFERRED'], cause: 'invitation' },
     // initiative_no_cue
-    { name: 'no_cue: INTENT_READY のまま許可 → 候補', condition: 'initiative_no_cue', candidate: { state: 'INTENT_READY' }, choice: 'candidate', reasons: ['natural_yield', 'from:INTENT_READY'], cause: 'turn_allowed' },
-    { name: 'no_cue: 吸気の状態は話さない（来ないはずの状態）', condition: 'initiative_no_cue', candidate: { state: 'DEFERRED' }, choice: 'response', reasons: ['state_not_speakable:DEFERRED'] },
+    { name: 'no_cue: 影の合図を経ていない候補は話さない', condition: 'initiative_no_cue', candidate: { state: 'INTENT_READY' }, choice: 'response', reasons: ['not_cued'] },
+    { name: 'no_cue: 影の吸気中に許可 → 待つ', condition: 'initiative_no_cue', candidate: { state: 'BREATH_INHALE' }, choice: 'wait', reasons: ['inhale_in_progress'] },
+    { name: 'no_cue: 保持中に許可 → 候補', condition: 'initiative_no_cue', candidate: { state: 'BREATH_HOLD_OR_READY' }, choice: 'candidate', reasons: ['natural_yield', 'from:BREATH_HOLD_OR_READY'], cause: 'turn_allowed' },
+    { name: 'no_cue: DEFERRED から許可 → 候補', condition: 'initiative_no_cue', candidate: { state: 'DEFERRED' }, choice: 'candidate', reasons: ['natural_yield', 'from:DEFERRED'], cause: 'turn_allowed' },
     // 共通の除外
     { name: '直前が直接の質問（招待の検出）→ 通常応答', condition: 'initiative_inhale', candidate: { state: 'DEFERRED' }, invitation: invitation('direct_question', 'どう思いますか'), choice: 'response', reasons: ['direct_question:invitation:どう思いますか'] },
     { name: '直前が直接の質問（文末の規則）→ 通常応答', condition: 'initiative_no_cue', candidate: { state: 'INTENT_READY' }, text: '明日は晴れるんですか', choice: 'response', reasons: ['direct_question:rule:desuka'] },
-    { name: '判定が古い → 通常応答', condition: 'initiative_no_cue', candidate: { new_chars_since_judgement: 61 }, choice: 'response', reasons: ['judgement_stale:chars=61'] },
-    { name: '判定の入力が分からない → 通常応答', condition: 'initiative_no_cue', candidate: { new_chars_since_judgement: null }, choice: 'response', reasons: ['judgement_input_unknown'] },
+    { name: '判定が古い → 通常応答', condition: 'initiative_no_cue', candidate: { state: 'DEFERRED', new_chars_since_judgement: 61 }, choice: 'response', reasons: ['judgement_stale:chars=61'] },
+    { name: '判定の入力が分からない → 通常応答', condition: 'initiative_no_cue', candidate: { state: 'DEFERRED', new_chars_since_judgement: null }, choice: 'response', reasons: ['judgement_input_unknown'] },
     { name: '音声がまだ（DEFERRED の作り直し）→ 待つ（期限で引き下がるのは negotiate）', condition: 'initiative_inhale', candidate: { state: 'DEFERRED', audio: 'preparing' }, choice: 'wait', reasons: ['candidate_audio_preparing'] },
     { name: '音声がまだ（吸気の後の準備姿勢）→ 待つ（期限で引き下がるのは negotiate）', condition: 'initiative_inhale', candidate: { state: 'BREATH_HOLD_OR_READY', audio: 'preparing' }, choice: 'wait', reasons: ['candidate_audio_preparing'] },
     { name: '音声が失敗（準備姿勢）→ 通常応答', condition: 'initiative_inhale', candidate: { state: 'BREATH_HOLD_OR_READY', audio: 'failed' }, choice: 'response', reasons: ['candidate_audio_failed'] },
@@ -369,8 +429,18 @@ describe('二段判定のタイミング（timing_gate）', () => {
     expect(select({ timing: 'WAIT_FOR_TURN_END' })).toMatchObject({ choice: 'response', reasons: ['timing_wait_for_turn_end'] });
   });
 
-  it('no_cue の WAIT_FOR_TURN_END は従来どおり許可で話す（条件を変えない）', () => {
-    expect(select({ timing: 'WAIT_FOR_TURN_END' }, 'initiative_no_cue')).toMatchObject({ choice: 'candidate', reasons: ['natural_yield', 'from:INTENT_READY', 'timing_wait_for_turn_end'], cause: 'turn_allowed' });
+  it('no_cue の WAIT_FOR_TURN_END も吸気の条件と同じく話さず、通常応答へ回す', () => {
+    expect(select({ timing: 'WAIT_FOR_TURN_END' }, 'initiative_no_cue')).toMatchObject({ choice: 'response', reasons: ['timing_wait_for_turn_end'] });
+  });
+
+  it('選択は2つの提案条件で全く同じ（状態、タイミング、音声の組み合わせ）', () => {
+    const states: CandidateState[] = ['INTENT_READY', 'BREATH_INHALE', 'BREATH_HOLD_OR_READY', 'DEFERRED', 'SPEAKING'];
+    const timings: CandidateView['timing'][] = [null, 'OFFER_NOW', 'WAIT_FOR_TURN_END'];
+    const audios: CandidateAudio[] = ['none', 'preparing', 'ready', 'failed'];
+    for (const state of states) for (const timing of timings) for (const audio of audios) {
+      const candidate = { state, timing, audio };
+      expect(select(candidate, 'initiative_no_cue')).toEqual(select(candidate, 'initiative_inhale'));
+    }
   });
 
   it('OFFER_NOW で合図がまだなら通常応答（吸気の条件は合図を経て話す）', () => {
@@ -382,8 +452,9 @@ describe('二段判定のタイミング（timing_gate）', () => {
     expect(select({ timing: null }, 'initiative_no_cue')).toMatchObject({ choice: 'response', reasons: ['timing_not_judged'] });
   });
 
-  it('no_cue の OFFER_NOW は許可で話す', () => {
-    expect(select({ timing: 'OFFER_NOW' }, 'initiative_no_cue').choice).toBe('candidate');
+  it('no_cue の OFFER_NOW も影の合図を経てから話す（INTENT_READY のままなら通常応答）', () => {
+    expect(select({ timing: 'OFFER_NOW' }, 'initiative_no_cue')).toMatchObject({ choice: 'response', reasons: ['not_cued'] });
+    expect(select({ timing: 'OFFER_NOW', state: 'DEFERRED' }, 'initiative_no_cue').choice).toBe('candidate');
   });
 
   it('直接の質問は WAIT_FOR_TURN_END でも通常応答を優先する', () => {

@@ -363,6 +363,7 @@ function afterCueBlock(item) {
   return el(
     'table',
     {},
+    el('tr', {}, el('th', { text: '合図の提示' }), el('td', { text: view.cue_presented === false ? 'なし（影の合図。制御だけを同じに進め、参加者には何も見せていない）' : 'あり' })),
     el('tr', {}, el('th', { text: '流れ' }), el('td', { text: view.label })),
     el('tr', {}, el('th', { text: '延期' }), el('td', { text: view.deferred ? `あり（${fmtT(view.deferred_at)}）` : 'なし' })),
     el('tr', {}, el('th', { text: '結末' }), el('td', { text: `${ending}${view.ending_at === null ? '' : `（${fmtT(view.ending_at)}）`}` })),

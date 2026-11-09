@@ -205,14 +205,14 @@
 | 条件 | 判定（G） | 候補の音声 | 吸気の合図 | 候補を話すか |
 |---|---|---|---|---|
 | `reactive`（通常応答、ベースライン） | 動く（ログと研究者画面だけ） | 作らない | 出さない（`negotiation.decision` に `condition:reactive`） | 話さない。通常の応答だけ |
-| `initiative_no_cue`（吸気なし） | 動く | `proposed_utterance` をそのまま TTS | 出さない | `INTENT_READY` のまま、許可で話す |
+| `initiative_no_cue`（吸気なし） | 動く | `proposed_utterance` をそのまま TTS | 提示しない（同じゲートと時間で影の合図を進める。`negotiation.decision` の `shadow_cue`、`docs/initiative_v3_design.md` §2） | `initiative_inhale` と同じ（`BREATH_HOLD_OR_READY` か `DEFERRED` の後、許可で話す） |
 | `initiative_inhale`（吸気あり、提案） | 動く | 同上 | ゲートを通れば `breath.cue`（吸気 `inhale_ms`） | 吸気の後（`BREATH_HOLD_OR_READY` か `DEFERRED`）、許可で話す |
 
 **規則**
 
 | 項目 | 規則 | 理由、残る問題 |
 |---|---|---|
-| 合図のゲート | 条件が `initiative_inhale`、活動中の候補が1つ、合図中でない、AI が話していない、アバターが使える、冷却時間（`signal_cooldown_ms`）を超えた（null は未校正として合図しない）、判定の入力の後の新しい安定文字が上限以下（入力が分からなければ合図しない。上限 null は `max_new_stable_chars_since_input` を使う）、判定からの経過が上限以下（null は `max_result_age_ms`）、候補の音声が用意できる（`preparing` か `ready`。作れない `none`／`failed` では合図しない）。止めた理由は全部 `negotiation.decision`（stage `signal_gate`）に残す（同じ理由の繰り返しは数字を除いた鍵で1回）。合図の理由に `candidate_audio_preparing`／`candidate_audio_ready` が残る | 音声の完成を待たず、NEW の次の tick で合図と TTS の準備を同時に始める（吸気の 700ms の間に作る）。吸気の後に間に合わないときの振る舞いは下の「音声が間に合わない」 |
+| 合図のゲート | 条件が `reactive` でない（`initiative_no_cue` は同じ基準で影の合図になる）、活動中の候補が1つ、合図中でない、AI が話していない、アバターが使える、冷却時間（`signal_cooldown_ms`）を超えた（null は未校正として合図しない）、判定の入力の後の新しい安定文字が上限以下（入力が分からなければ合図しない。上限 null は `max_new_stable_chars_since_input` を使う）、判定からの経過が上限以下（null は `max_result_age_ms`）、候補の音声が用意できる（`preparing` か `ready`。作れない `none`／`failed` では合図しない）。止めた理由は全部 `negotiation.decision`（stage `signal_gate`）に残す（同じ理由の繰り返しは数字を除いた鍵で1回）。合図の理由に `candidate_audio_preparing`／`candidate_audio_ready` が残る | 音声の完成を待たず、NEW の次の tick で合図と TTS の準備を同時に始める（吸気の 700ms の間に作る）。吸気の後に間に合わないときの振る舞いは下の「音声が間に合わない」 |
 | 音声が間に合わない（合図と TTS の同時開始の帰結） | 吸気の後の `BREATH_HOLD_OR_READY` で音声が `preparing` のあいだは `candidate_audio_wait:<cue_id>` で通常応答も含めて開始を保留し、許可が出ても選択は `wait`（理由 `candidate_audio_preparing`）。`hold_max_ms`（吸気の完了から 800ms）を過ぎても来なければ候補を撤回する（`candidate.state_changed` の `expired`、`negotiation.decision` の stage `candidate_audio`、outcome `audio_abandoned`、理由 `audio_not_ready_by_deadline:hold_ms=…`）。`breath.release` は `withdrawn`。人が話していて期限に達したら撤回せず既存の `DEFERRED`。音声の失敗（`failed`、`none`）は期限を待たず同じ撤回。撤回と改訂で準備中の音声を棄てるのは既存の E2a の `discardCandidate` | 吸気を見せた後に話さないことが起きうる（候補を話さない撤回 1 件）。期限 `hold_max_ms` は `DEFERRED` の暫定値を流用しており、音声待ちの値としては測っていない。全体の猶予は吸気 700ms ＋ 保持 800ms = 1.5 秒で、その間に TTS（現状の ElevenLabs の実測はこのログにない）が間に合わないと引き下がる |
 | 吸気の長さと完了 | Node が `inhale_ms` を決めて `breath.cue` で送り、完了は Node の時計で判定する（ブラウザの報告は待たない）。`signal.sent` の `parameters.inhale_completion` は `orchestrator_clock` | 描画の遅れや背景タブで完了が遅れないため。`signal.started` は描画の rAF の時刻で別に残す |
 | 吸気中の許可 | 吸気中は `start_blocked_reason`（`candidate_inhale_in_progress:<cue_id>`）で通常応答も含めて開始を止める。吸気を終えた tick で許可を見直して話す | 計画 §4.6 のとおり |

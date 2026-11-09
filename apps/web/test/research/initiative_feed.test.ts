@@ -233,6 +233,7 @@ describe('候補の周辺の出来事（持ち越し、材料、反映、重複�
     tracker.add(
       event({
         event: 'negotiation.cue_reaction',
+        cue_presented: true,
         candidate_id: 'c_0003',
         ended_by: 'ai_speech_started',
         ticks: 10,
@@ -262,5 +263,25 @@ describe('候補の周辺の出来事（持ち越し、材料、反映、重複�
     const html = renderToStaticMarkup(createElement(CandidatePanel, { candidates: tracker.summary() }));
     expect(html).toContain('candidate-notes');
     expect(html).toContain('材料の反映（推定）');
+  });
+
+  it('影の合図（initiative_no_cue）の記録は提示なしと分かる見出しで出す', () => {
+    const tracker = new CandidateTracker();
+    tracker.add(event({ event: 'negotiation.decision', stage: 'signal_gate', candidate_id: { value: 'c_0003' }, outcome: 'shadow_cue', reasons: ['not_presented:initiative_no_cue'] }));
+    tracker.add(event({ event: 'negotiation.decision', stage: 'signal_gate', candidate_id: { value: 'c_0003' }, outcome: 'shadow_release', reasons: ['reason:deferred', 'not_presented:initiative_no_cue'] }));
+    tracker.add(
+      event({
+        event: 'negotiation.cue_reaction',
+        cue_presented: false,
+        candidate_id: 'c_0003',
+        ended_by: 'window',
+        ticks: 10,
+        user_speaking_ticks: 4,
+        user_speaking_at_cue: true,
+        time_to_user_stop_ms: { value: null, null_reason: 'x' },
+        time_to_user_start_ms: { value: null, null_reason: 'x' },
+      }),
+    );
+    expect(tracker.summary().notes.map((n) => n.kind).sort()).toEqual(['影の合図（提示なし）', '影の合図の解除（提示なし）', '提示なしの時点の人の様子（観測値）'].sort());
   });
 });

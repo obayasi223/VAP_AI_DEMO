@@ -679,9 +679,13 @@ export const CandidateRejectedEvent = eventSchema('candidate.rejected', {
 /**
  * 吸気の合図の後の、人の反応の観測（cue ごとに1回）。**譲ったと確定した記録ではない**。話し続けた時間、VAP の p_now の変化、
  * 話が止まるまでの時間などを、窓（policy.initiative.negotiation.cue_reaction_window_ms）の間に測った値だけを残す。
+ * initiative_no_cue の影の合図でも同じ時点、同じ窓で測る（比較のため）。そのとき cue_presented は false で、cue_sent_at は
+ * 「合図を送るはずだった時点」。cue_id の頭は shadow_。
  */
 export const NegotiationCueReactionEvent = eventSchema('negotiation.cue_reaction', {
   cue_id: NonEmptyString,
+  /** 参加者に実際に提示したか（breath.cue を送ったか）。影の合図と、送れなかった合図は false。 */
+  cue_presented: z.boolean(),
   candidate_id: CandidateId,
   candidate_version: CandidateVersion,
   cue_sent_at: MonotonicMs,
@@ -740,7 +744,9 @@ export const SignalEndedEvent = eventSchema('signal.ended', {
 
 /**
  * 発話希望の交渉の判断（計画 §4.6。E2 の合図のゲートと、E3 の発話の選択）。判断か理由が変わったときだけ出す。
- *  - signal_gate: 合図（吸気）を出したか、出さなかった理由。条件 reactive と initiative_no_cue では合図しない理由を残す。
+ *  - signal_gate: 合図（吸気）を出したか、出さなかった理由。条件 reactive では合図しない理由を残す。
+ *    initiative_no_cue は同じ基準で判定するが提示しない。通過は outcome: shadow_cue、解除は shadow_release で、
+ *    reasons に not_presented:initiative_no_cue が入る（BREATH_* の状態は提示を意味しない）。
  *  - speech_selection: 発話の許可（turn_allowed）が出ている間に、候補と通常の応答のどちらを話すか（または待つか）。
  * outcome と reasons はコードの値で、モデルの説明文は入れない。urgency は使わない（計画 §4.5）。
  */

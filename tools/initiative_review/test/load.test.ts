@@ -344,6 +344,19 @@ describe('吸気の後の結末（延期と内容の撤回の区別）', () => {
     expect(view?.label).toBe('吸気 → 延期 → 発話');
   });
 
+  it('影の合図（shadow_cue）の候補は提示なしとして見せる（BREATH_* の状態は提示を意味しない）', () => {
+    const gate = all.find((e) => e.event === 'negotiation.decision' && e.stage === 'signal_gate') as Ev;
+    const shadowGate: Ev = { ...gate, outcome: 'shadow_cue', reasons: ['not_presented:initiative_no_cue'] };
+    const rest = all.filter((e) => e !== gate && !(isState(e) && e.to === 'WITHDRAWN'));
+    const shown = withStates(DEFER);
+    const shadow = candidate(load({ events: [...rest, shadowGate] }));
+    expect(shown.after_cue).toMatchObject({ cue_presented: true });
+    expect(shown.after_cue?.label.startsWith('吸気 → ')).toBe(true);
+    expect(shadow.after_cue).toMatchObject({ cue_presented: false });
+    expect(shadow.after_cue?.label).toContain('吸気の期間（提示なし）');
+    expect(shadow.timeline.some((r) => r.event === 'candidate.state_changed' && r.label.endsWith('BREATH_INHALE（提示なし）'))).toBe(true);
+  });
+
   it('延期の後に内容で撤回した: 延期と内容の撤回を両方残す', () => {
     const view = withStates(DEFER, ['DEFERRED', 'WITHDRAWN', model('premise_changed')]).after_cue;
     expect(view).toMatchObject({ deferred: true, ending: 'content_withdrawn', withdraw_kind: 'premise_changed', code_cause: null });
