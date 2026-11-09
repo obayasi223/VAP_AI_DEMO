@@ -15,6 +15,12 @@ export interface ClockEstimate extends ClockSample {
   measured_at_client_ms: number;
 }
 
+/**
+ * 時計の飛びと見なす余裕（ms、暫定値）。各標本の真の時計差は、片道の非対称によらず offset ± RTT/2 の中にある。
+ * 2 つの範囲がこの余裕を超えて離れていたら、測定の揺れではなく時計そのものが飛んでいる。
+ */
+export const CLOCK_STEP_MARGIN_MS = 20;
+
 export class ClockEstimator {
   private readonly samples: (ClockSample & { at: number })[] = [];
 
@@ -25,6 +31,11 @@ export class ClockEstimator {
 
   add(clientSentMs: number, serverMs: number, clientReceivedMs: number): ClockEstimate | null {
     const sample = computeClockSample(clientSentMs, serverMs, clientReceivedMs);
+    // 時計の飛びの後は、RTT が小さくても前の標本は誤りなので窓に残さない（実機で数秒の飛びが残り、描画の時刻がずれた。docs/time_axes.md）。
+    const previous = this.best();
+    if (previous !== null && Math.abs(sample.offset_ms - previous.offset_ms) > sample.uncertainty_ms + previous.uncertainty_ms + CLOCK_STEP_MARGIN_MS) {
+      this.samples.length = 0;
+    }
     this.samples.push({ ...sample, at: clientReceivedMs });
     while (
       this.samples.length > this.maxSamples ||

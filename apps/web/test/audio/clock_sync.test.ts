@@ -21,6 +21,26 @@ describe('ClockEstimator', () => {
   });
 });
 
+describe('ClockEstimator の時計の飛び', () => {
+  it('飛びの後は、RTT の小さい古い標本を捨てて新しい時計差を使う', () => {
+    const c = new ClockEstimator();
+    // 時計差 1000、RTT 2 の良い標本。
+    c.add(0, 1001, 2);
+    // 時計差が 3 秒飛んだ。RTT は 10 で前の標本より大きい。
+    const after = c.add(4000, 8005, 4010);
+    expect(after?.offset_ms).toBeCloseTo(4000, 3);
+    expect(after?.samples).toBe(1);
+  });
+
+  it('RTT の範囲に収まる揺れでは窓を捨てない', () => {
+    const c = new ClockEstimator();
+    c.add(0, 1001, 2);
+    const after = c.add(4000, 5008, 4010);
+    expect(after?.offset_ms).toBeCloseTo(1000, 3);
+    expect(after?.samples).toBe(2);
+  });
+});
+
 describe('ThreadAxisEstimator', () => {
   it('RTT が最小の往復から差を求め、timeOrigin に依らない', () => {
     const a = new ThreadAxisEstimator();

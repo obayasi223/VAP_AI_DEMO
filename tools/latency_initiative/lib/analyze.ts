@@ -24,6 +24,12 @@ export const SUSTAINED_SILENCE_MS = 700;
  */
 export const RENDER_SUSPECT_MARGIN_MS = 20;
 
+/**
+ * ブラウザの再生開始の時刻（speech.started.started_at、写像の値）が、その報告を受信した時刻より後なら物理的にありえない。
+ * この余裕を超えていれば、そのセッションのブラウザ時計の写像は信用しない（時計の飛びが残っている。docs/time_axes.md）。
+ */
+export const RECEIPT_VIOLATION_MARGIN_MS = 50;
+
 /** 16 kHz。audio_frame は 16 kHz のサンプル番号。 */
 const FRAMES_PER_MS = 16;
 /** 音声の時刻の写像に使う vap.state がこれより遠ければ写さない（フレーム数、2 秒分）。 */
@@ -177,6 +183,9 @@ export function analyzeSession(events: readonly RawEvent[]): CandidateLatency[] 
   const stt = sorted.filter((e) => e.event === 'stt.interim' || e.event === 'stt.final');
   const sttFinals = stt.filter((e) => e.event === 'stt.final').map((e) => e.t_monotonic_ms);
   const started = sorted.filter((e) => e.event === 'signal.started' && e.phase === 'inhale');
+  const clockBroken = sorted.some(
+    (e) => e.event === 'speech.started' && typeof e.started_at === 'number' && e.started_at - e.t_monotonic_ms > RECEIPT_VIOLATION_MARGIN_MS,
+  );
   const seenCandidates = new Set<string>();
   const rows: CandidateLatency[] = [];
 
@@ -267,11 +276,12 @@ export function analyzeSession(events: readonly RawEvent[]): CandidateLatency[] 
       const uncertainty = numberOr(startedEvent.time_basis?.uncertainty_ms?.value, 0);
       const startedAt: number = startedEvent.started_at;
       const delta = startedAt - sentAt;
-      const suspect = delta < -(uncertainty + RENDER_SUSPECT_MARGIN_MS);
+      const suspect = clockBroken || delta < -(uncertainty + RENDER_SUSPECT_MARGIN_MS);
+      const suspectReason = clockBroken ? 'time_axis_suspect_browser_clock_stepped' : 'time_axis_suspect_started_before_sent';
       render = { started_at: startedAt, visible: true, uncertainty_ms: uncertainty, suspect };
       if (suspect) {
-        sentToRender = { value_ms: delta, null_reason: 'time_axis_suspect_started_before_sent' };
-        spokenToRendered = audioTimeMs === null ? absent('no_audio_time_or_time_axis_suspect') : { value_ms: startedAt - audioTimeMs, null_reason: 'time_axis_suspect_started_before_sent' };
+        sentToRender = { value_ms: delta, null_reason: suspectReason };
+        spokenToRendered = audioTimeMs === null ? absent('no_audio_time_or_time_axis_suspect') : { value_ms: startedAt - audioTimeMs, null_reason: suspectReason };
       } else {
         sentToRender = present(delta);
         spokenToRendered = audioTimeMs === null ? absent(audioToAsr.null_reason ?? 'no_audio_time') : present(startedAt - audioTimeMs);

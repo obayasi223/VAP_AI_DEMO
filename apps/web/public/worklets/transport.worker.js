@@ -20177,6 +20177,7 @@ function computeClockSample(clientSentMs, serverMs, clientReceivedMs) {
 }
 
 // src/audio/clock_sync.ts
+var CLOCK_STEP_MARGIN_MS = 20;
 var ClockEstimator = class {
   constructor(windowMs = 6e4, maxSamples = 32) {
     this.windowMs = windowMs;
@@ -20187,6 +20188,10 @@ var ClockEstimator = class {
   samples = [];
   add(clientSentMs, serverMs, clientReceivedMs) {
     const sample = computeClockSample(clientSentMs, serverMs, clientReceivedMs);
+    const previous = this.best();
+    if (previous !== null && Math.abs(sample.offset_ms - previous.offset_ms) > sample.uncertainty_ms + previous.uncertainty_ms + CLOCK_STEP_MARGIN_MS) {
+      this.samples.length = 0;
+    }
     this.samples.push({ ...sample, at: clientReceivedMs });
     while (this.samples.length > this.maxSamples || this.samples.length > 1 && clientReceivedMs - this.samples[0].at > this.windowMs) {
       this.samples.shift();

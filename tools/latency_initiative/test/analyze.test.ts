@@ -157,6 +157,14 @@ describe('analyzeSession', () => {
     expect(summary.sections.signal_sent_to_render.n).toBe(0);
   });
 
+  it('再生の開始が受信より後のセッションは、時計の飛びとして描画の区間を異常にし、話の途中の判定は signal.sent を基準にする', () => {
+    const events = chain({ extra: [base(9000, 'speech.started', { started_at: 10500 })] });
+    const row = analyzeSession(events)[0]!;
+    expect(row.render.suspect).toBe(true);
+    expect(row.sections.signal_sent_to_render.null_reason).toBe('time_axis_suspect_browser_clock_stepped');
+    expect(row.cue_landing.reference).toBe('signal_sent');
+  });
+
   it('報告誤差の範囲の負の値は異常にしない（クランプもしない）', () => {
     const [row] = analyzeSession(chain({ startedAt: 5981, uncertainty: 5 }));
     expect(row!.render.suspect).toBe(false);
