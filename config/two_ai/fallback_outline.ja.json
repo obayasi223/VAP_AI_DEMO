@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "beats": [
+    { "beat_id": "fb01", "speaker": "A", "kind": "open", "discussion_stage": 1, "text_template": "{user_name}さんは、{core_short}ということで迷っているんですよね。まずは、いまの状況を二人で整理してみます。", "text_generic": "まずは、いまのお話の状況を、二人で順番に整理してみますね。", "optional": false },
+    { "beat_id": "fb02", "speaker": "B", "kind": "react", "discussion_stage": 1, "text_template": "はい。{option_1}と{option_2}の二つが出ていましたね。", "text_generic": "はい、いくつかの道が出ていましたね。", "optional": false },
+    { "beat_id": "fb03", "speaker": "A", "kind": "develop", "discussion_stage": 2, "text_template": "わたしは、{option_1}を選んだときに、どれくらい時間がかかりそうかが気になっています。", "text_generic": "わたしは、それぞれの道にどれくらい時間がかかりそうかが気になっています。", "optional": false },
+    { "beat_id": "fb04", "speaker": "B", "kind": "develop", "discussion_stage": 2, "text_template": "わたしは、{value_1}と話していたのが印象に残っていて、ふだんの一日の過ごし方から考えてみたいです。", "text_generic": "わたしは、ふだんの一日をどう過ごしていたいか、から考えてみたいです。", "optional": false },
+    { "beat_id": "fb05", "speaker": "A", "kind": "question", "discussion_stage": 3, "text_template": "{option_2}のほうは、まだ分かっていないことがありそうですね。", "text_generic": "まだ分かっていないことが、いくつかありそうですね。", "optional": false },
+    { "beat_id": "fb06", "speaker": "B", "kind": "react", "discussion_stage": 3, "text_template": "そうですね、調べてみると見え方が変わるかもしれません。", "text_generic": "そうですね、調べてみると見え方が変わるかもしれません。", "optional": false },
+    { "beat_id": "fb07", "speaker": "A", "kind": "develop", "discussion_stage": 4, "text_template": "次の一歩としては、{option_1}と{option_2}のそれぞれについて、確かめたいことを一つずつ書き出すのがよさそうです。", "text_generic": "次の一歩としては、確かめたいことを一つずつ書き出すのがよさそうです。", "optional": true },
+    { "beat_id": "fb08", "speaker": "B", "kind": "close", "discussion_stage": 4, "text_template": "候補をいくつか並べてみたので、{user_name}さんに選んでもらえたらと思います。", "text_generic": "候補をいくつか並べてみたので、その中から選んでもらえたらと思います。", "optional": false }
+  ],
+  "board_generic": [
+    { "order": 1, "discussion_stage": 1, "text": "確かめたい日程を一つ書き出す" },
+    { "order": 2, "discussion_stage": 2, "text": "それぞれの道の一日を想像してみる" },
+    { "order": 3, "discussion_stage": 3, "text": "分かっていないことを一つ調べる" },
+    { "order": 4, "discussion_stage": 4, "text": "相談したい人に話す日を決める" }
+  ],
+  "rebuild_generic": ["ここまでの話から、候補を四つ並べました。この中から、次の一歩を考えてみてください。"]
+}

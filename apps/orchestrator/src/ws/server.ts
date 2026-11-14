@@ -19,14 +19,42 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { BrowserToNode, Condition, ConversationKind, SystemTimeSource, TimingStrategy, VocalCueMode } from '@llm-vap/contracts';
-import type { ClientHello, EmitOptions, EventDraft, EventEmitter, ResearchEvent, TimeSource } from '@llm-vap/contracts';
+import type {
+  ClientHello,
+  EmitOptions,
+  EventDraft,
+  EventEmitter,
+  ResearchEvent,
+  ResearchTwoAiArm,
+  ResearchTwoAiArmAck,
+  ResearchWoz,
+  ResearchWozAck,
+  TimeSource,
+  TwoAiCondition,
+  TwoAiEmitContext,
+} from '@llm-vap/contracts';
 import { openSessionLogging } from '../logging';
 import type { MaaiWorkerClient } from '../maai';
 import type { OrchestratorConfig } from '../app/config';
-import { conversationKindFile, createSessionProviders } from '../app/providers';
+import { conversationKindFile, createSessionProviders, createTwoAiProviders, TWO_AI_VOICE_ENV } from '../app/providers';
 import type { ChoiceSource, InitiativeChoice } from '../app/providers';
 import { Session, type BrowserLink } from '../session/session';
-import { handleResearchMessage, researchConfigMessage, type NoteTarget } from './research_channel';
+import { handleResearchMessage, researchConfigMessage, type NoteTarget, type TwoAiResearchHandlers } from './research_channel';
+import { REPO_ROOT } from '../maai';
+// 2 体のモードの部品（生成の側を含む）は 2 体のセッションを作るときに読む（1 対 1 のモードの起動はそれに依らない）。
+import type { TwoAiSession } from '../two_ai/two_ai_session';
+import type { TwoAiSettingsResult } from '../two_ai/settings';
+import { redactForResearch, type RedactionPolicy } from '../two_ai/research_redaction';
+
+/** 参加者のセッション（1 対 1 か 2 体）。 */
+type AnySession = Session | TwoAiSession;
+
+/** 2 体のセッションを始められない理由（WS は 1011 とこの理由で閉じる）。 */
+class TwoAiStartError extends Error {}
+
+function isTwoAi(session: AnySession | null): session is TwoAiSession {
+  return session !== null && !(session instanceof Session);
+}
 import { TuneChannel } from './tune_channel';
 
 /** MaAI クライアントはプロセスに1つなので、時刻源をセッションの時計へ切り替える。 */
@@ -75,7 +103,7 @@ export class OrchestratorServer {
   readonly http: Server;
   private readonly browserWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
   private readonly researchWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
-  private session: Session | null = null;
+  private session: AnySession | null = null;
   private sessionSocket: WebSocket | null = null;
   private graceTimer: NodeJS.Timeout | null = null;
   /** hello の処理の列。届いた時点で同期的につなぐ。 */
@@ -89,11 +117,19 @@ export class OrchestratorServer {
   private sessionTime: TimeSource | null = null;
   /** 試験が閉じたセッションも調べられるように残す。 */
   readonly pastSessions: Session[] = [];
+  readonly pastTwoAiSessions: TwoAiSession[] = [];
+  /** 研究画面の arm（次の 2 体のセッションに使う。始めたら消す）。 */
+  private armed: ResearchTwoAiArm | null = null;
+  /** 2 体のモードの設定（最初に要るときに読む。起動の後の設定の書き換えは再起動で反映）。 */
+  private twoAiSettings: TwoAiSettingsResult | null = null;
+  /** 今の 2 体のセッションの研究画面の伏せ字（1 対 1 は null で何もしない）。 */
+  private redaction: RedactionPolicy | null = null;
 
   constructor(private readonly options: ServerOptions) {
     this.log = options.log ?? ((message) => console.log(`[orchestrator] ${message}`));
     this.tune = new TuneChannel(options.config, () => {
-      const session = this.session;
+      // 2 体のモードは turn_diagnostic を出さない（TurnManager は受け止めの時機にしか使わない）。
+      const session = this.current();
       return session === null || this.sessionTime === null ? null : { session, time: this.sessionTime };
     });
     this.http = createServer((req, res) => this.onHttp(req, res));
@@ -106,11 +142,16 @@ export class OrchestratorServer {
       }
       if (url.pathname === '/ws') {
         this.browserWss.handleUpgrade(req, socket, head, (ws) =>
-          this.onBrowser(ws, url.searchParams.get('condition'), {
-            conversation_kind: url.searchParams.get('conversation_kind'),
-            timing_strategy: url.searchParams.get('timing_strategy'),
-            vocal_cue: url.searchParams.get('vocal_cue'),
-          }),
+          this.onBrowser(
+            ws,
+            url.searchParams.get('condition'),
+            {
+              conversation_kind: url.searchParams.get('conversation_kind'),
+              timing_strategy: url.searchParams.get('timing_strategy'),
+              vocal_cue: url.searchParams.get('vocal_cue'),
+            },
+            url.searchParams.get('mode'),
+          ),
         );
       } else if (url.pathname === '/research') {
         this.researchWss.handleUpgrade(req, socket, head, (ws) => this.onResearch(ws, url.searchParams.get('tune') === '1'));
@@ -131,7 +172,18 @@ export class OrchestratorServer {
     });
   }
 
+  /** 今の 1 対 1 のセッション（2 体のモードでは null）。 */
   current(): Session | null {
+    return this.session instanceof Session ? this.session : null;
+  }
+
+  /** 今の 2 体のセッション。 */
+  currentTwoAi(): TwoAiSession | null {
+    return isTwoAi(this.session) ? this.session : null;
+  }
+
+  /** 今の参加者のセッション（モードを問わない）。 */
+  active(): AnySession | null {
     return this.session;
   }
 
@@ -192,17 +244,83 @@ export class OrchestratorServer {
   // ---- 研究者画面 ----------------------------------------------------------------
 
   private onResearch(ws: WebSocket, tune = false): void {
-    ws.send(JSON.stringify(researchConfigMessage(this.options.config.policy, this.options.config.condition)));
+    ws.send(JSON.stringify(this.researchConfig()));
     if (tune) this.tune.attach(ws);
     for (const line of this.backlog) ws.send(line);
     ws.on('message', (data: RawData, isBinary: boolean) => {
       if (isBinary) return;
-      const target = this.noteTarget?.session_id === this.session?.session_id ? this.noteTarget : null;
-      ws.send(JSON.stringify(handleResearchMessage(Buffer.from(toBytes(data)).toString('utf8'), target)));
+      const target = this.noteTarget?.session_id === this.active()?.session_id ? this.noteTarget : null;
+      const reply = handleResearchMessage(Buffer.from(toBytes(data)).toString('utf8'), target, this.twoAiHandlers());
+      if (reply instanceof Promise) {
+        reply.then(
+          (ack) => {
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(ack));
+          },
+          (error: unknown) => this.log(`research message failed: ${error instanceof Error ? error.message : String(error)}`),
+        );
+      } else {
+        ws.send(JSON.stringify(reply));
+      }
     });
   }
 
+  /** 接続の直後の research.config。1 対 1 は今の形のまま（mode を足さない）。 */
+  private researchConfig() {
+    const base = researchConfigMessage(this.options.config.policy, this.options.config.condition);
+    if (this.options.config.session_mode !== 'two_ai' || base.type !== 'research.config') return base;
+    const armed = this.armed;
+    return {
+      ...base,
+      mode: 'two_ai' as const,
+      two_ai_armed:
+        armed === null ? null : { arm_id: armed.arm_id, condition: armed.condition, script_id: armed.script_id, interjection_feeds_generation: armed.interjection_feeds_generation },
+    };
+  }
+
+  private twoAiHandlers(): TwoAiResearchHandlers | null {
+    if (this.options.config.session_mode !== 'two_ai') return null;
+    return { arm: (m) => this.arm(m), woz: (m) => this.woz(m) };
+  }
+
+  private async loadTwoAi(): Promise<TwoAiSettingsResult> {
+    if (this.twoAiSettings === null) {
+      const { loadTwoAiSettings } = await import('../two_ai/settings');
+      const { config } = this.options;
+      this.twoAiSettings = loadTwoAiSettings({ root: REPO_ROOT, config_path: config.two_ai_config_path, script_path: config.two_ai_script_path });
+      if (this.twoAiSettings.ok) for (const r of this.twoAiSettings.settings.rejected) this.log(`two_ai script rejected: ${r.file}: ${r.reason}`);
+      else this.log(`two_ai settings invalid: ${this.twoAiSettings.reason}`);
+    }
+    return this.twoAiSettings;
+  }
+
+  /** 研究画面の arm（06 §3、05 §2.2）。セッションの途中は断る。 */
+  private async arm(message: ResearchTwoAiArm): Promise<ResearchTwoAiArmAck> {
+    const reject = (detail: string): ResearchTwoAiArmAck => ({ type: 'research.two_ai.arm.ack', arm_id: message.arm_id, status: 'rejected', detail });
+    const running = this.currentTwoAi();
+    if (running !== null && running.attached) return reject('session_running');
+    const settings = await this.loadTwoAi();
+    if (!settings.ok) return reject(`settings_invalid:${settings.reason}`.slice(0, 200));
+    if (!settings.settings.scripts.has(message.script_id)) return reject('unknown_script');
+    const env = this.options.env ?? process.env;
+    if (this.options.config.tts !== 'test_double' && (!env[TWO_AI_VOICE_ENV.A] || !env[TWO_AI_VOICE_ENV.B])) return reject('voices_not_set');
+    this.armed = message;
+    this.log(`two_ai armed: ${message.arm_id} condition=${message.condition} script=${message.script_id}`);
+    return { type: 'research.two_ai.arm.ack', arm_id: message.arm_id, status: 'armed', detail: 'armed' };
+  }
+
+  private woz(message: ResearchWoz): ResearchWozAck {
+    const session = this.currentTwoAi();
+    if (session === null) return { type: 'research.woz.ack', woz_id: message.woz_id, status: 'no_session', detail: 'not_two_ai_session', phase: null };
+    return session.handleWoz(message);
+  }
+
   private broadcast(event: ResearchEvent): void {
+    if (this.redaction !== null) {
+      // 研究画面へは伏せ字にして配る（06 §4.6）。ログ（JSONL）は伏せない。
+      const redacted = redactForResearch(event, this.redaction);
+      if (redacted === null) return;
+      event = redacted;
+    }
     const line = JSON.stringify(event);
     this.tune.observe(event);
     this.backlog.push(line);
@@ -215,8 +333,13 @@ export class OrchestratorServer {
   // ---- 参加者 --------------------------------------------------------------------
 
   /** requestedCondition は WS の URL の ?condition=（参加者画面の選択）。新しいセッションを作るときだけ使う。 */
-  private onBrowser(ws: WebSocket, requestedCondition: string | null = null, requestedInitiative: RequestedInitiative = NO_REQUEST): void {
-    let session: Session | null = null;
+  private onBrowser(
+    ws: WebSocket,
+    requestedCondition: string | null = null,
+    requestedInitiative: RequestedInitiative = NO_REQUEST,
+    requestedMode: string | null = null,
+  ): void {
+    let session: AnySession | null = null;
     const link: BrowserLink = {
       sendJson: (message) => {
         if (ws.readyState !== WebSocket.OPEN) return false;
@@ -247,7 +370,7 @@ export class OrchestratorServer {
       if (message.type === 'client.hello') {
         // 届いた時点で列につなぐ。await の間に別の hello が割り込まない。
         this.helloQueue = this.helloQueue
-          .then(() => this.onHello(ws, link, message, requestedCondition, requestedInitiative))
+          .then(() => this.onHello(ws, link, message, requestedCondition, requestedInitiative, requestedMode))
           .then((s) => {
             session = s;
           })
@@ -267,7 +390,7 @@ export class OrchestratorServer {
   }
 
   /** 切断中のセッションを猶予の後に閉じる。どの経路で切れても（開始の途中を含む）ここを通す。 */
-  private scheduleGrace(session: Session): void {
+  private scheduleGrace(session: AnySession): void {
     if (this.graceTimer !== null) clearTimeout(this.graceTimer);
     this.log(`browser disconnected; keeping ${session.session_id} for ${this.options.config.resume_grace_ms} ms`);
     this.graceTimer = setTimeout(() => {
@@ -282,9 +405,16 @@ export class OrchestratorServer {
     hello: ClientHello,
     requestedCondition: string | null = null,
     requestedInitiative: RequestedInitiative = NO_REQUEST,
-  ): Promise<Session | null> {
+    requestedMode: string | null = null,
+  ): Promise<AnySession | null> {
     // 列で待つ間に閉じた接続は扱わない。
     if (ws.readyState !== WebSocket.OPEN) return null;
+    // 画面の ?mode= は起動の SESSION_MODE と合うときだけ（省略は合うとみなす）。
+    if (requestedMode !== null && requestedMode !== '' && requestedMode !== this.options.config.session_mode) {
+      this.log(`refused a participant connection: ?mode=${requestedMode.slice(0, 20)} but SESSION_MODE=${this.options.config.session_mode}`);
+      ws.close(1008, 'session_mode_mismatch');
+      return null;
+    }
     const wanted = hello.session_id.value;
     const current = this.session;
     const previousSocket = this.sessionSocket;
@@ -311,9 +441,9 @@ export class OrchestratorServer {
       return null;
     }
     if (current !== null) await this.endSession('new_client_session');
-    let session: Session | null = null;
+    let session: AnySession | null = null;
     try {
-      session = await this.createSession(requestedCondition, requestedInitiative);
+      session = this.options.config.session_mode === 'two_ai' ? await this.createTwoAiSession() : await this.createSession(requestedCondition, requestedInitiative);
       this.session = session;
       this.sessionSocket = ws;
       await session.start(link, hello);
@@ -329,7 +459,7 @@ export class OrchestratorServer {
       this.log(`session start failed: ${error instanceof Error ? error.message : String(error)}`);
       if (this.sessionSocket === ws) this.sessionSocket = null;
       if (session !== null && this.session === session) await this.endSession('start_failed');
-      ws.close(1011, 'session start failed');
+      ws.close(1011, error instanceof TwoAiStartError ? truncateUtf8(error.message, 120) : 'session start failed');
       return null;
     }
   }
@@ -445,13 +575,84 @@ export class OrchestratorServer {
     });
   }
 
+  /** 2 体のセッション（docs/design/two_ai/01 §1.1）。条件は arm、なければ TWO_AI_CONDITION。どちらもなければ始めない。 */
+  private async createTwoAiSession(): Promise<TwoAiSession> {
+    const { config } = this.options;
+    const loaded = await this.loadTwoAi();
+    const { TwoAiSession } = await import('../two_ai/two_ai_session');
+    const { loadDiscussionAssets } = await import('../cognition/discussion');
+    if (!loaded.ok) throw new TwoAiStartError(`two_ai settings invalid: ${loaded.reason}`);
+    const settings = loaded.settings;
+    const arm = this.armed;
+    const condition: TwoAiCondition | null = arm?.condition ?? config.two_ai_condition;
+    if (condition === null) throw new TwoAiStartError('two_ai condition not set');
+    const script_id = arm?.script_id ?? settings.default_script_id;
+    const script = script_id === null ? undefined : settings.scripts.get(script_id);
+    if (script === undefined) throw new TwoAiStartError(script_id === null ? 'two_ai script not set' : `two_ai unknown script: ${script_id}`);
+    const session_id = newSessionId();
+    const time = new SystemTimeSource();
+    // セッションを作る前（ログの開始の provider.status）も 2 体の封筒を付ける（06 §4.1：2 体のセッションのすべてのイベント）。
+    let context: () => TwoAiEmitContext | null = () => ({ phase: 'intake', discussion_stage: null, script_variant: 'original' });
+    const logging = await openSessionLogging({
+      dir: config.sessions_dir,
+      session_id,
+      time,
+      condition: () => condition,
+      two_ai_context: () => context(),
+      provider_class: [config.stt, config.tts, config.llm].includes('test_double') ? 'test_double' : 'production',
+    });
+    const inner = logging.emitter;
+    const emitter: EventEmitter = {
+      emit: (draft: EventDraft, emitOptions?: EmitOptions) => {
+        const event = inner.emit(draft, emitOptions);
+        this.broadcast(event);
+        return event;
+      },
+    };
+    this.backlog.length = 0;
+    this.tune.resetSession();
+    this.sessionTime = time;
+    this.noteTarget = { session_id, emitter };
+    this.redaction = { hide_point_texts: script.script.hide_points_on_research_screen };
+    this.options.maaiTime?.use(time);
+    const personas = loadDiscussionAssets(settings.root, settings.config, script.script.personas_file).personas;
+    const providers = await createTwoAiProviders({ config, twoAi: settings.config, personas, time, emitter, ...(this.options.env ? { env: this.options.env } : {}) });
+    if (!providers.ok) {
+      await logging.log.close();
+      throw new TwoAiStartError(`two_ai providers: ${providers.reason}`);
+    }
+    this.armed = null;
+    return new TwoAiSession({
+      session_id,
+      condition,
+      condition_source: arm !== null ? 'research_screen' : 'env',
+      arm:
+        arm === null
+          ? null
+          : { arm_id: arm.arm_id, interjection_feeds_generation: arm.interjection_feeds_generation, session_index: arm.session_index, counterbalance_label: arm.counterbalance_label },
+      policy: config.policy,
+      time,
+      emitter,
+      bindEmitContext: (c) => {
+        context = c;
+      },
+      log: logging.log,
+      settings,
+      script,
+      providers,
+      maai: this.options.maai,
+      ...(this.options.maaiUnavailableReason ? { maaiUnavailableReason: this.options.maaiUnavailableReason } : {}),
+    });
+  }
+
   async endSession(reason: string): Promise<void> {
     const session = this.session;
     if (session === null) return;
     this.session = null;
     if (this.graceTimer !== null) clearTimeout(this.graceTimer);
     this.graceTimer = null;
-    this.pastSessions.push(session);
+    if (isTwoAi(session)) this.pastTwoAiSessions.push(session);
+    else this.pastSessions.push(session);
     await session.close(reason);
     this.log(`session ${session.session_id} closed (${reason})`);
   }
@@ -463,6 +664,13 @@ export class OrchestratorServer {
     this.tune.close();
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
   }
+}
+
+/** WS の close の理由は 123 バイトまで。 */
+function truncateUtf8(text: string, maxBytes: number): string {
+  let out = text;
+  while (Buffer.byteLength(out, 'utf8') > maxBytes) out = out.slice(0, -1);
+  return out;
 }
 
 function toBytes(data: RawData): Uint8Array {

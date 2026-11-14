@@ -6,7 +6,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { Condition, ConversationKind, Policy, TimingStrategy, VocalCueMode, type PolicyOverrideInfo } from '@llm-vap/contracts';
+import { Condition, ConversationKind, Policy, TimingStrategy, TwoAiCondition, VocalCueMode, type PolicyOverrideInfo } from '@llm-vap/contracts';
 import { loadOverrideFile } from '../dev/policy_override';
 import { REPO_ROOT } from '../maai';
 
@@ -74,6 +74,22 @@ export interface OrchestratorConfig {
   persona_file: string;
   /** 判定に使う Gemini のモデル。S の推奨（docs/initiative_spike.md）の flash-lite（minimal）が既定。 */
   initiative_model: string;
+  /** セッションの種類（SESSION_MODE、既定 one_to_one。不正な値で起動を止める）。docs/design/two_ai/01 §1.2。 */
+  session_mode: SessionMode;
+  /** 2 体の条件の既定（TWO_AI_CONDITION）。研究画面の arm が優先。未設定は null（arm がなければ作らない）。 */
+  two_ai_condition: TwoAiCondition | null;
+  /** 2 体の設定ファイル（TWO_AI_CONFIG、既定 config/two_ai/session.ja.json）。リポジトリの根からの相対。 */
+  two_ai_config_path: string;
+  /** 2 体の既定の台本（TWO_AI_SCRIPT）。未設定は null。 */
+  two_ai_script_path: string | null;
+}
+
+export type SessionMode = 'one_to_one' | 'two_ai';
+
+function sessionModeFrom(value: string | undefined): SessionMode {
+  if (value === undefined || value === '') return 'one_to_one';
+  if (value === 'one_to_one' || value === 'two_ai') return value;
+  throw new Error(`SESSION_MODE must be one_to_one or two_ai, got ${value.slice(0, 40)}`);
 }
 
 /** リポジトリの .env を読む（あれば）。既に設定された環境変数は上書きしない。 */
@@ -164,5 +180,9 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
     initiative_conditions: conditions(env.INITIATIVE_CONDITIONS),
     persona_file: path.resolve(REPO_ROOT, env.PERSONA_FILE || 'config/persona.ja.conversation.json'),
     initiative_model: env.INITIATIVE_GEMINI_MODEL || 'gemini-3.5-flash-lite',
+    session_mode: sessionModeFrom(env.SESSION_MODE),
+    two_ai_condition: env.TWO_AI_CONDITION ? TwoAiCondition.parse(env.TWO_AI_CONDITION) : null,
+    two_ai_config_path: env.TWO_AI_CONFIG || 'config/two_ai/session.ja.json',
+    two_ai_script_path: env.TWO_AI_SCRIPT || null,
   };
 }

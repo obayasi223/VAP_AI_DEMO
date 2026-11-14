@@ -22696,6 +22696,40 @@
                       "additionalProperties": false
                     }
                   ]
+                },
+                "credited_ms": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "null"
+                        },
+                        "null_reason": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "value",
+                        "null_reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
                 }
               },
               "required": [
@@ -22704,7 +22738,8 @@
                 "ended_at",
                 "ended_by",
                 "stt_final_after_ms",
-                "judgment_after_ms"
+                "judgment_after_ms",
+                "credited_ms"
               ],
               "additionalProperties": false
             },
@@ -25222,8 +25257,7 @@
                 ]
               },
               "text": {
-                "type": "string",
-                "minLength": 1
+                "type": "string"
               },
               "trigger_turn_ended": {
                 "type": "boolean"

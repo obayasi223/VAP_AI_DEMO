@@ -175,3 +175,19 @@ describe('列挙と古いメッセージ', () => {
     expect(NodeToBrowser.safeParse({ ...board, cards: [card] }).success).toBe(true);
   });
 });
+
+describe('two_ai.board の伏せ字（06 §4.6）', () => {
+  const board = VALID_FIXTURES.events.find((f) => (f.value as { event: string }).event === 'two_ai.board')!.value as {
+    cards: { text: string; trigger_turn_ended: boolean }[];
+  };
+  const withCard = (text: string, trigger_turn_ended: boolean) => ({ ...board, cards: [{ ...board.cards[0]!, text, trigger_turn_ended }] });
+
+  it('出したターンが終わる前のカードは text を空にしてよい（研究画面への配信）', () => {
+    expect(ResearchEvent.safeParse(withCard('', false)).success).toBe(true);
+  });
+
+  it('出したターンが終わった後のカードは空を許さない', () => {
+    expect(ResearchEvent.safeParse(withCard('', true)).success).toBe(false);
+    expect(ResearchEvent.safeParse(withCard('締切に合わせて申し込む', true)).success).toBe(true);
+  });
+});

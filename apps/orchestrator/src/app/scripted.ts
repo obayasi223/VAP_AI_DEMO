@@ -635,6 +635,128 @@ export function scriptedStagedReply(request: LlmRequest, mode: ScriptedInitiativ
   });
 }
 
+// ---- two_ai の用途（docs/design/two_ai/02 §1。E2E と dev:orchestrator:scripted 用。判定はしていない） ----
+
+/** 台本の生のターン（話し合い）。帯（react 15〜35 字から develop 60〜90 字）のどれにも入る中立の文。 */
+export const SCRIPTED_TWO_AI_TURN = 'なるほど、その点は大事そうですね。もう少し順番に考えてみたいです。';
+export const SCRIPTED_TWO_AI_INTAKE = 'なるほど。いま、ほかに考えている道はありますか。';
+
+function scriptedLedgerReply(request: LlmRequest): string {
+  const text = request.messages.at(-1)?.text ?? '';
+  const lines = [...text.matchAll(/^#(\d+)：(.+)$/gmu)];
+  const first = lines[0];
+  const core =
+    first === undefined
+      ? { id: 'core', text: '', evidence: [] }
+      : (() => {
+          const span = [...(first[2] as string)].slice(0, 12).join('');
+          return { id: 'core_1', text: span, evidence: [{ span, segment_ids: [Number(first[1])] }] };
+        })();
+  return JSON.stringify({ core, options: [], dropped_options: [], facts: [], values: [], sensitive: [] });
+}
+
+/** 段ごとの計画の段の呼び出し（02 §2.5.1）：決まった拍の数だけ、kind に合う中立の文。 */
+function scriptedStageReply(request: LlmRequest): string {
+  const slots = [...request.system.matchAll(/^- (b\d+)：話者 [AB]（.*?）、kind (\w+)（/gmu)];
+  const beats = slots.map((m) => {
+    const kind = m[2];
+    const text =
+      kind === 'react'
+        ? 'そうですね、その順番で考えるのがよさそうです。'
+        : kind === 'question'
+          ? 'そこは、もう少し具体的に考えてみたいですね。'
+          : kind === 'close'
+            ? 'ここまでの話から、いくつか候補が見えてきたので、最後に並べてみたいと思います。'
+            : 'わたしは、それぞれの道を選んだときに、ふだんの一日がどう変わるかが気になっています。そこから考えてみたいです。';
+    return { beat_id: m[1], intent: '台本の拍', ledger_refs: [], fallback_text: text, fallback_text_corrected: text };
+  });
+  return JSON.stringify({ beats });
+}
+
+function scriptedPlanReply(request: LlmRequest): string {
+  if (request.system.includes('# この段の拍')) return scriptedStageReply(request);
+  const counts = /段ごとの拍の数は \[(\d+), (\d+), (\d+), (\d+)\]/u.exec(request.system)?.slice(1).map(Number) ?? [2, 2, 2, 2];
+  const beats: Record<string, unknown>[] = [];
+  const kinds = ['develop', 'react', 'question'] as const;
+  counts.forEach((n, s) => {
+    for (let i = 0; i < n; i++) {
+      const isLast = s === 3 && i === n - 1;
+      const kind = beats.length === 0 ? 'open' : isLast ? 'close' : kinds[beats.length % kinds.length]!;
+      const text =
+        kind === 'react'
+          ? 'そうですね、その順番で考えるのがよさそうです。'
+          : kind === 'question'
+            ? 'そこは、もう少し具体的に考えてみたいですね。'
+            : kind === 'open'
+              ? 'まずは、いまのお話の状況を二人で整理してみます。いくつかの道があって、どれを選ぶかで迷っているということでした。'
+              : kind === 'close'
+                ? 'ここまでの話から、いくつか候補が見えてきたので、最後に並べてみたいと思います。'
+                : 'わたしは、それぞれの道を選んだときに、ふだんの一日がどう変わるかが気になっています。そこから考えてみたいです。';
+      beats.push({ stage: s + 1, speaker: beats.length % 2 === 0 ? 'A' : 'B', kind, intent: '台本の拍', ledger_refs: [], optional: false, fallback_text: text, fallback_text_corrected: text });
+    }
+  });
+  const quote = /"quotes":\["([^"]+)"/u.exec(request.system)?.[1] ?? '';
+  const out: Record<string, unknown> = {
+    beats,
+    board: [1, 2, 3, 4].map((order) => ({ order, text: `候補${order}について、今週中に一つ調べてみる`, corrected_text: `候補${order}について、今週中に一つ調べてみる` })),
+  };
+  if (request.system.includes('- framing_C：')) {
+    out.framing_C = {
+      candidates: [{ c_core: '決め方の順番', distance: 3 }],
+      c_core: '決め方の順番',
+      c_core_short: '決め方の順番',
+      core_short: 'どちらを選ぶか',
+      c_reason: '先に決めることの順番が、まだ定まっていないように聞こえました。',
+      c_elab: '順番が決まると、選びやすくなるかもしれません。',
+      quote,
+    };
+  }
+  if (request.system.includes('- fact_slip：')) {
+    out.fact_slip = {
+      slip_statement: '説明会は来月の十日まで',
+      slip_value: '来月の十日',
+      correct_statement: '説明会は来月の末まで',
+      inference_step_1: '説明会の申し込みは急いだほうがよさそうです',
+      inference_step_2: '先に説明会の日程だけ押さえておけばいいですね',
+      conclusion: '説明会の日程を先に押さえる',
+      target_option: '説明会',
+      corrected_step_1: '説明会の申し込みには少し余裕がありそうです',
+      corrected_step_2: '先に調べたいことを整理しておけばいいですね',
+      corrected_conclusion: '調べたいことを先に整理する',
+    };
+  }
+  if (request.system.includes('- control_inference：')) {
+    out.control_inference = {
+      control_statement: '面談は週に一回ある',
+      control_step_1: '面談で聞きたいことを毎週一つ決められそうです',
+      control_step_2: '次の面談で聞くことを先に書いておけばいいですね',
+      conclusion: '次の面談で聞くことを書く',
+      target_option: '面談',
+    };
+  }
+  return JSON.stringify(out);
+}
+
+/** two_ai の用途の台本の返答。two_ai の用途でなければ null。 */
+export function scriptedTwoAiReply(request: LlmRequest): string | null {
+  switch (request.purpose) {
+    case 'intake':
+      return SCRIPTED_TWO_AI_INTAKE;
+    case 'discussion_turn':
+      return SCRIPTED_TWO_AI_TURN;
+    case 'ledger':
+      return scriptedLedgerReply(request);
+    case 'discussion_plan':
+      return scriptedPlanReply(request);
+    case 'correction_assist': {
+      const corrects = /いや|違|ちが/u.test(request.messages.at(-1)?.text ?? '');
+      return JSON.stringify({ corrects, evidence_span: '', reason: '台本の判定（判定はしていない）' });
+    }
+    default:
+      return null;
+  }
+}
+
 export interface ScriptedReplyLlmOptions {
   time: TimeSource;
   emitter?: EventEmitter;
@@ -679,13 +801,19 @@ export class ScriptedReplyLlm implements LlmProvider {
 
   stream(request: LlmRequest): LlmStream {
     const { time, emitter, chars_per_delta, delta_delay_ms, first_delta_delay_ms } = this.options;
+    const twoAiReply = scriptedTwoAiReply(request);
     const reply =
-      request.purpose !== 'initiative'
+      twoAiReply ??
+      (request.purpose !== 'initiative'
         ? this.options.reply
         : (scriptedStagedReply(request, this.options.initiative) ??
-          (this.options.initiative !== 'none' ? scriptedInitiativeReply(request) : SCRIPTED_INITIATIVE_REPLY));
+          (this.options.initiative !== 'none' ? scriptedInitiativeReply(request) : SCRIPTED_INITIATIVE_REPLY)));
     // 2回の判定の経路の台本は、判定の文字列を1塊で返す（待ちは最初の遅延だけ。話している間に2回の判定を通すため）。
-    const perDelta = request.purpose === 'initiative' && scriptedSecondJudgementMode(this.options.initiative) ? reply.length : chars_per_delta;
+    // two_ai の JSON の用途も 1 塊で返す。
+    const perDelta =
+      (request.purpose === 'initiative' && scriptedSecondJudgementMode(this.options.initiative)) || (twoAiReply !== null && request.response_json_schema !== null)
+        ? reply.length
+        : chars_per_delta;
     const sent_at = time.monotonicMs();
     emitter?.emit({
       event: 'llm.request',

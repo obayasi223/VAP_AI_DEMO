@@ -5,7 +5,7 @@
  * J の配線: orchestrator からこの画面向けの WS へ、イベントの JSON を 1 テキスト枠に 1 件（改行区切りも可）で流す。
  */
 import type { ResearchToNode } from '@llm-vap/contracts';
-import { createFakeEventScript, FAKE_RESEARCH_CONFIG } from './fake_events';
+import { createFakeEventScript, createTwoAiFakeEventScript, FAKE_RESEARCH_CONFIG, FAKE_TWO_AI_RESEARCH_CONFIG } from './fake_events';
 
 export type FeedConnection = 'idle' | 'connecting' | 'open' | 'closed' | 'error';
 
@@ -66,19 +66,20 @@ const FAKE_VIRTUAL_MS_PER_STEP = 150;
  * 刻みごとに、偽の時刻が FAKE_VIRTUAL_MS_PER_STEP 進んだ分を流す（最低 1 件）。既定の刻みでほぼ実時間。
  * メモの送信は受けるが保存しない（偽の口なので「セッションなし」で返す）。
  */
-export function createFakeFeed(options: { stepMs?: number } = {}): ResearchFeed {
+export function createFakeFeed(options: { stepMs?: number; mode?: 'one_to_one' | 'two_ai' } = {}): ResearchFeed {
   let activeSink: FeedSink | null = null;
+  const twoAi = options.mode === 'two_ai';
   return {
     kind: 'fake',
-    label: '偽のイベント列（test double）',
+    label: twoAi ? '偽のイベント列（two_ai、test double）' : '偽のイベント列（test double）',
     synthetic: true,
     start(sink) {
-      const script = createFakeEventScript();
+      const script = twoAi ? createTwoAiFakeEventScript() : createFakeEventScript();
       let index = 0;
       let virtualMs = 0;
       activeSink = sink;
       sink.connection('open', '偽のイベント列を再生中');
-      sink.event(FAKE_RESEARCH_CONFIG);
+      sink.event(twoAi ? FAKE_TWO_AI_RESEARCH_CONFIG : FAKE_RESEARCH_CONFIG);
       const timeOf = (value: unknown) => {
         const t = (value as { t_monotonic_ms?: unknown } | null)?.t_monotonic_ms;
         return typeof t === 'number' ? t : -Infinity;
@@ -102,8 +103,19 @@ export function createFakeFeed(options: { stepMs?: number } = {}): ResearchFeed 
     },
     send(message) {
       const sink = activeSink;
-      // 偽データの口はメモだけを受ける（two_ai の arm と WoZ は送らない）。
-      if (sink === null || message.type !== 'research.note') return false;
+      if (sink === null) return false;
+      // two_ai の偽の口だけ、arm と WoZ に偽の ack を返す（流れは変えない）。
+      if (message.type === 'research.two_ai.arm' || message.type === 'research.woz') {
+        if (!twoAi) return false;
+        setTimeout(() =>
+          sink.event(
+            message.type === 'research.woz'
+              ? { type: 'research.woz.ack', woz_id: message.woz_id, status: 'no_session', detail: 'fake_feed_does_not_apply', phase: null }
+              : { type: 'research.two_ai.arm.ack', arm_id: message.arm_id, status: 'rejected', detail: 'fake_feed_does_not_arm' },
+          ),
+        );
+        return true;
+      }
       setTimeout(() =>
         sink.event({
           type: 'research.note.ack',
@@ -186,7 +198,7 @@ export function createWsFeed(
 export function feedFromQuery(search: string): ResearchFeed {
   const params = new URLSearchParams(search);
   const source = params.get('source');
-  if (source === 'fake') return createFakeFeed();
+  if (source === 'fake') return createFakeFeed(params.get('mode') === 'two_ai' ? { mode: 'two_ai' } : {});
   if (source === 'ws') {
     const url = params.get('url');
     if (url !== null && url !== '') return createWsFeed(url);

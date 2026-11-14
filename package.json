@@ -24,7 +24,13 @@
     "log:check": "tsx tools/log_check/cli.ts",
     "review:initiative": "tsx tools/initiative_review/cli.ts",
     "latency:initiative": "tsx tools/latency_initiative/cli.ts",
-    "dev:fakes": "npm run fakes -w @llm-vap/testkit"
+    "dev:fakes": "npm run fakes -w @llm-vap/testkit",
+    "report:two_ai": "tsx tools/two_ai_report/cli.ts",
+    "dryrun:two_ai": "tsx tools/two_ai_dryrun/cli.ts",
+    "test:e2e:two_ai": "tsx apps/orchestrator/test/e2e/two_ai_run.ts",
+    "perf:two_ai": "tsx tools/two_ai_perf/run.ts",
+    "perf:two_ai:quick": "tsx tools/two_ai_perf/quick_rtf.ts",
+    "probe:two_ai": "tsx tools/two_ai_probe/cli.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

@@ -23,7 +23,9 @@ import {
   present,
   ResearchEvent,
   SystemTimeSource,
-  type Condition,
+  type SessionCondition,
+  type TwoAiEmitContext,
+  type TwoAiManifest,
   type EventDraft,
   type EventEmitter,
   type EventSink,
@@ -46,7 +48,11 @@ export interface ManifestProvider {
 
 /** manifest に載せるセッションの条件（J が渡す）。log_check はこれを必ず見る。 */
 export interface SessionManifestDetails {
-  condition: Condition;
+  /** 1 対 1 は Condition、2 体は TwoAiCondition（docs/design/two_ai/06 §9.6）。 */
+  condition: SessionCondition;
+  /** 2 体のセッションだけ書く（1 対 1 は書かない）。 */
+  mode?: 'one_to_one' | 'two_ai';
+  two_ai?: TwoAiManifest;
   policy_id: string;
   /** 使ったアバター（画面の avatar.report）。未報告は null。 */
   avatar?: Record<string, unknown> | null;
@@ -737,7 +743,9 @@ function serializable(value: unknown): unknown {
 
 export interface SessionLoggingOptions extends SessionLogOptions {
   /** 条件はセッションの途中で切り替わりうる。 */
-  condition: () => Condition;
+  condition: () => SessionCondition;
+  /** 2 体のセッションだけ渡す（封筒の two_ai。06 §4.1）。省略は 1 対 1 と同じ出力。 */
+  two_ai_context?: () => TwoAiEmitContext | null;
   /** session_log の provider.status に載せる区分。test double の試験では test_double を渡す。 */
   provider_class?: ProviderClass;
 }
@@ -792,6 +800,7 @@ export async function openSessionLogging(options: SessionLoggingOptions): Promis
     time,
     session_id: options.session_id,
     condition: options.condition,
+    ...(options.two_ai_context ? { two_ai_context: options.two_ai_context } : {}),
     sink: log,
     invalid: 'report',
     onInvalid(error: InvalidEventError, draft: EventDraft) {

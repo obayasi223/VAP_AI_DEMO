@@ -53,6 +53,11 @@ export const TwoAiSessionConfig = z
         max_sec: Sec,
         /** 点のために max_sec を延ばせる上限（絶対の上限 = max_sec + これ）。 */
         points_overrun_max_sec: Sec,
+        /**
+         * ① の割り込みの時間（本人の発話、受け止め、保留、つなぎ）の分だけ、壁時計の上限（max_sec と絶対の上限）を延ばせる上限。
+         * ① で ② が受け取る中身（段 1〜4、板の 4 枚）を壁時計で切らないため（統合 1 の U1）。既定 240。
+         */
+        interjection_allowance_max_sec: Sec.default(240),
         /** after_turn の見込みの時刻（暫定 9）。 */
         avg_turn_sec_estimate: z.number().positive(),
         /** 最後の点の後に残す見込み（暫定 30）。 */
@@ -198,6 +203,15 @@ export const TwoAiSessionConfig = z
         ledger: NonNegativeMs,
         correction_assist: NonNegativeMs,
       }),
+      /** 出力の上限（省略は providers の既定。計画は約 16384 が要る。WP1 の追加）。 */
+      max_output_tokens: z
+        .strictObject({
+          discussion_turn: z.number().int().positive().optional(),
+          discussion_plan: z.number().int().positive().optional(),
+          ledger: z.number().int().positive().optional(),
+          correction_assist: z.number().int().positive().optional(),
+        })
+        .optional(),
     }),
     safety: z.strictObject({ banned_terms_file: NonEmptyString, person_evaluation_pairs_file: NonEmptyString }),
     render: z.strictObject({
@@ -773,5 +787,16 @@ export const TwoAiManifest = z.strictObject({
   /** 研究の比較の証拠に使えるか。exploratory、fallback_outline、fact_slip か control_inference の欠け、点の forced／missed で false。 */
   evidence_ok_for_comparison: z.boolean(),
   evidence_notes: z.array(NonEmptyString),
+  /**
+   * 話し合いの壁時計（統合 1）。interjection_wall_ms：① の割り込みに使った壁時計（上限の延長に使った値は max_ms まで）。
+   * interjections_by_stage：段ごとの割り込みの数（両条件。言い直しが切れ続ける回の確認用。U3）。古い manifest にはない。
+   */
+  discussion_wall: z
+    .strictObject({
+      interjection_wall_ms: NonNegativeMs,
+      interjection_allowance_max_ms: NonNegativeMs,
+      interjections_by_stage: z.tuple([NonNegativeInt, NonNegativeInt, NonNegativeInt, NonNegativeInt]),
+    })
+    .optional(),
 });
 export type TwoAiManifest = z.infer<typeof TwoAiManifest>;

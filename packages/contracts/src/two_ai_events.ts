@@ -158,6 +158,8 @@ export const TwoAiInterjectionEpisodeShape = {
       /** 本人の発話の終わりから、確定文と判定が届くまで（届かなければ null）。 */
       stt_final_after_ms: Maybe(NonNegativeMs),
       judgment_after_ms: Maybe(NonNegativeMs),
+      /** 時間切れ（auto の failed を含む）で捨てた F.1、F.2 の見込みの長さ。中身の時計に 1 回足した値（06 §6.0。第 5 回 M2）。timeout 以外は null。 */
+      credited_ms: Maybe(NonNegativeMs),
     })
     .nullable(),
   /** onset の前後 marker.near_window_ms に印があった（印のボタンの物音で止まった疑い）。② でも付ける。 */
@@ -305,9 +307,16 @@ export const TwoAiBoardCardRecord = z.strictObject({
   discussion_stage: DiscussionStage,
   variant: ScriptVariant,
   depends_on: BoardDependency,
-  text: NonEmptyString,
+  /**
+   * カードの文。研究画面への配信の伏せ字（06 §4.6）では trigger_turn_ended が偽の間 '' になるので、空は
+   * trigger_turn_ended: false のときだけ許す（refine。JSON Schema では空を許す形になる）。
+   */
+  text: z.string(),
   /** そのカードを出したターンの再生が終わったか。偽の間、研究画面へは text を伏せる（06 §4.6）。 */
   trigger_turn_ended: z.boolean(),
+}).refine((c) => c.text.length > 0 || !c.trigger_turn_ended, {
+  message: "board card text may be '' only while trigger_turn_ended is false (redacted, 06 §4.6)",
+  path: ['text'],
 });
 export type TwoAiBoardCardRecord = z.infer<typeof TwoAiBoardCardRecord>;
 

@@ -1,0 +1,137 @@
+{
+  "script_id": "demo_career",
+  "version": 1,
+  "kind": "demo",
+  "topic": "博士課程に進むか、長期インターンに応募して就職するか",
+  "aspect": "どの道を選ぶか",
+  "user_name": "中村",
+  "user_name_reading": "なかむら",
+  "sample_persona": {
+    "name": "中村 遥（架空の人物）",
+    "profile": [
+      "情報系の修士 1 年。",
+      "博士課程に進むか、内定につながる長期インターン（締切は 2 月末）に応募して就職するかで迷っている。",
+      "本人の言う核：自分に研究の才能があるか分からないこと（確信度 75）。",
+      "事実：インターンの締切は 2 月末。博士課程は給付型の奨学金に内定済み。研究科の説明会は 1 月 15 日。",
+      "内容はすべて架空。実在の人物、研究室、企業とは関係がない。"
+    ]
+  },
+  "prior": {
+    "core": "自分に研究の才能があるか分からないこと",
+    "confidence_0_100": 75,
+    "facts": [
+      { "fact_id": "f_intern", "kind": "date", "text": "インターンの締切は 2 月末", "slip_hint": "12 月末" },
+      { "fact_id": "f_seminar", "kind": "date", "text": "研究科の説明会は 1 月 15 日", "slip_hint": null }
+    ]
+  },
+  "personas_file": "config/two_ai/personas.ja.json",
+  "stages": ["いまの状況の整理", "二人の見方", "もう一歩の掘り下げ", "次の一歩の候補"],
+  "planned_points": [
+    {
+      "id": "fact1",
+      "kind": "fact_slip",
+      "speaker": "A",
+      "trigger": { "in_stage": 1, "after_stage_turn": 1 },
+      "elaborate_turns": 2,
+      "source": "prepared",
+      "turns": [
+        { "turn_key": "F.0", "speaker": "A", "text": "インターンの締切は 12 月末でしたよね。まずは、そこから考えてみましょうか。" },
+        { "turn_key": "F.1", "speaker": "B", "text": "それなら、冬の合同説明会に出る時間は、なさそうですね。" },
+        { "turn_key": "F.2", "speaker": "A", "text": "すると、説明会はオンラインの録画だけ見ておけばいい、となりますね。" }
+      ],
+      "corrected_turns": [
+        { "turn_key": "F.0", "speaker": "A", "text": "インターンの締切は 2 月末でしたよね。まずは、そこから考えてみましょうか。" },
+        { "turn_key": "F.1", "speaker": "B", "text": "それなら、冬の合同説明会にも、十分に間に合いそうですね。" },
+        { "turn_key": "F.2", "speaker": "A", "text": "すると、説明会は会場に行って、直接聞いてみてもいい、となりますね。" }
+      ],
+      "uptake": { "turn_key": "F.uptake", "speaker": "A", "text": "あ、2 月末なんですね。失礼しました。" },
+      "slip": {
+        "fact_id": "f_intern",
+        "correct_statement": "インターンの締切は 2 月末",
+        "slip_statement": "インターンの締切は 12 月末",
+        "slip_value": "12 月末"
+      },
+      "inference": {
+        "premise_fact_id": "f_intern",
+        "premise_statement": "インターンの締切は 12 月末",
+        "steps": ["それなら、冬の合同説明会に出る時間はなさそうだ", "すると、説明会はオンラインの録画だけ見ておけばいい"],
+        "conclusion": "冬の合同説明会は、会場に行かずにオンラインの録画を見るだけで済ませてよい。",
+        "target_option": "冬の合同説明会への出方",
+        "stakes": "low"
+      }
+    },
+    {
+      "id": "ctl1",
+      "kind": "control_inference",
+      "speaker": "A",
+      "trigger": { "in_stage": 2, "after_stage_turn": 2 },
+      "elaborate_turns": 2,
+      "source": "prepared",
+      "turns": [
+        { "turn_key": "K.0", "speaker": "A", "text": "研究科の説明会は 1 月 15 日でしたよね。そこも、押さえておきましょうか。" },
+        { "turn_key": "K.1", "speaker": "B", "text": "それなら、その前に先輩に話を聞く時間は、とれそうですね。" },
+        { "turn_key": "K.2", "speaker": "A", "text": "すると、質問は 1 月の頭までにまとめておけばいい、となりますね。" }
+      ],
+      "corrected_turns": [
+        { "turn_key": "K.0", "speaker": "A", "text": "研究科の説明会は 1 月 15 日でしたよね。そこも、押さえておきましょうか。" },
+        { "turn_key": "K.1", "speaker": "B", "text": "それなら、その前に先輩に話を聞く時間は、とれそうですね。" },
+        { "turn_key": "K.2", "speaker": "A", "text": "すると、質問は 1 月の頭までにまとめておけばいい、となりますね。" }
+      ],
+      "uptake": null,
+      "slip": null,
+      "inference": {
+        "premise_fact_id": "f_seminar",
+        "premise_statement": "研究科の説明会は 1 月 15 日",
+        "steps": ["それなら、その前に先輩に話を聞く時間はとれそうだ", "すると、質問は 1 月の頭までにまとめておけばいい"],
+        "conclusion": "研究科の説明会への質問は、1 月の頭までにまとめておけばよい。",
+        "target_option": "説明会に向けた質問の準備の時期",
+        "stakes": "low"
+      }
+    },
+    {
+      "id": "C1",
+      "kind": "framing_C",
+      "speaker": "B",
+      "trigger": { "in_stage": 3, "after_stage_turn": 0 },
+      "elaborate_turns": 2,
+      "source": "prepared",
+      "turns": [
+        { "turn_key": "C.0", "speaker": "B", "text": "聞いていると、問題は才能があるかどうかより、5 年後にどんな一日を過ごしていたいかが、まだ決まっていないことなんじゃないかな。" },
+        { "turn_key": "C.1", "speaker": "A", "text": "たしかに、才能の見込みは外からは測りにくいけれど、過ごしたい一日なら、今からでも書き出せますね。" },
+        { "turn_key": "C.2", "speaker": "B", "text": "だから、才能の有無を先に決めるより、研究をしている平日と、働いている平日を、並べて思い浮かべてみるのがいいと思う。" }
+      ],
+      "corrected_turns": [
+        { "turn_key": "C.0", "speaker": "B", "text": "聞いていると、問題は才能があるかどうかより、5 年後にどんな一日を過ごしていたいかが、まだ決まっていないことなんじゃないかな。" },
+        { "turn_key": "C.1", "speaker": "A", "text": "たしかに、才能の見込みは外からは測りにくいけれど、過ごしたい一日なら、今からでも書き出せますね。" },
+        { "turn_key": "C.2", "speaker": "B", "text": "だから、才能の有無を先に決めるより、研究をしている平日と、働いている平日を、並べて思い浮かべてみるのがいいと思う。" }
+      ],
+      "uptake": null,
+      "slip": null,
+      "inference": null
+    }
+  ],
+  "board": [
+    { "card_id": "card_1", "order": 1, "discussion_stage": 1, "depends_on": "fact_slip", "text": "説明会はオンラインの録画で済ませる", "corrected_text": "冬の合同説明会に会場で出る" },
+    { "card_id": "card_2", "order": 2, "discussion_stage": 2, "depends_on": "none", "text": "奨学金の条件を 1 枚にまとめる", "corrected_text": "奨学金の条件を 1 枚にまとめる" },
+    { "card_id": "card_3", "order": 3, "discussion_stage": 3, "depends_on": "framing_C", "text": "5 年後の平日の一日を書き出してみる", "corrected_text": "5 年後の平日の一日を書き出してみる" },
+    { "card_id": "card_4", "order": 4, "discussion_stage": 4, "depends_on": "control_inference", "text": "1 月の研究科の説明会の前に先輩に話を聞く", "corrected_text": "1 月の研究科の説明会の前に先輩に話を聞く" }
+  ],
+  "rebuild_turns": [
+    { "turn_key": "R.0", "speaker": "A", "text": "最後に、候補を整理し直しますね。締切は 2 月末なので、1 枚目は、冬の合同説明会に会場で出る、にします。" },
+    { "turn_key": "R.1", "speaker": "B", "text": "2 枚目は奨学金の条件をまとめる、3 枚目は 5 年後の平日の一日を書き出す、4 枚目は説明会の前に先輩に話を聞く、です。" }
+  ],
+  "retraction": {
+    "fact": "先ほど、インターンの締切は 12 月末と言いましたが、正しくは 2 月末でした。",
+    "inference": "そのうえで、冬の合同説明会に出る時間はなさそうなので、説明会は録画だけ見ておけばいい、という話をしましたが、その推論は誤った前提の上にありました。この結論は取り消します。",
+    "inference_unspoken": "そのうえで、冬の合同説明会に出る時間はなさそうなので、説明会は録画だけ見ておけばいい、という話をする予定でしたが、その推論は誤った前提の上にありました。この結論は取り消します。",
+    "process": "この話し合いでは、研究のために、AI が事実を取り違える場面をあらかじめ入れていました。"
+  },
+  "intake_source": "live",
+  "scripted_intake": [
+    { "at_sec": 2, "text": "博士課程に進むか、インターンに応募して就職するかで迷っています。" },
+    { "at_sec": 12, "text": "いちばん引っかかっているのは、自分に研究の才能があるか分からないことです。" },
+    { "at_sec": 24, "text": "インターンの締切は 2 月末で、博士課程の奨学金はもう内定しています。" },
+    { "at_sec": 36, "text": "研究科の説明会は 1 月 15 日にあります。" }
+  ],
+  "hide_points_on_research_screen": false
+}

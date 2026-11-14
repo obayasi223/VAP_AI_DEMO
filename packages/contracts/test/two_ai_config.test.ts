@@ -98,7 +98,7 @@ describe('TwoAiSessionConfig', () => {
     const cases: [string, (c: any) => void][] = [
       ['intake order', (c) => (c.phases.intake.plan_start_sec = 10)],
       ['discussion order', (c) => (c.phases.discussion.close_at_sec = 590)],
-      ['second filler', (c) => (c.phases.plan_wait.second_filler_after_ms = 30000)],
+      ['second filler', (c) => (c.phases.plan_wait.second_filler_after_ms = c.phases.plan_wait.max_wait_ms)],
       ['ack ids', (c) => c.acknowledgment.templates.push({ id: 'ack_1', text: 'x' })],
       ['stage_fracs', (c) => (c.phases.discussion.stage_fracs = [0.5, 0.25, 0.25, 0.25])],
       ['retraction timing', (c) => (c.retraction.timing = 'end_of_session')],

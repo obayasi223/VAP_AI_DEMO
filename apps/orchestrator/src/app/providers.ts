@@ -6,8 +6,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { absent } from '@llm-vap/contracts';
 import type {
+  AiId,
   Condition,
   ConversationKind,
+  LlmPurpose,
+  TwoAiPersonas,
+  TwoAiSessionConfig,
   EventEmitter,
   LlmProvider,
   Policy,
@@ -29,6 +33,7 @@ import { chooseTtsProvider, createElevenLabsTtsProviderFromEnv, createGeminiTtsP
 import type { OrchestratorConfig } from './config';
 import { EnergyScriptedSttProvider, INITIATIVE_LONG_STT_SCRIPT, INITIATIVE_STT_SCRIPT, ScriptedReplyLlm, WavScriptedTtsProvider, scriptedSecondJudgementMode } from './scripted';
 import type { ScriptedInitiativeMode } from './scripted';
+import { scopedEmitter } from '../two_ai/scoped_emitter';
 
 /**
  * 台本の発話希望（SCRIPTED_INITIATIVE。E2E 用、app/scripted.ts）。台本の STT と LLM のとき、STT の台本は reactive 以外のセッションだけ変える。
@@ -115,30 +120,34 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function createSessionProviders(input: {
+/** 1 対 1 と 2 体が共有するプロバイダ（発話希望を除く。docs/design/two_ai/06 §11。WP1a で切り出した）。 */
+export type BaseProviders = Omit<SessionProviders, 'initiative'>;
+
+/**
+ * stt、tts、llm、completion の組み立て（createSessionProviders の前半）。condition を取らない。
+ * scripted_initiative_stt：台本の STT に発話希望の台本を使う（1 対 1 で SCRIPTED_INITIATIVE が none 以外、かつ reactive 以外のセッション）。
+ */
+export async function createBaseProviders(input: {
   config: OrchestratorConfig;
   time: TimeSource;
   emitter: EventEmitter;
   env?: NodeJS.ProcessEnv;
-  /** このセッションの研究条件。省略は config.condition（起動時の既定）。 */
-  condition?: Condition;
-  /** このセッションの会話の種類と方式。省略は設定の既定。 */
-  choice?: InitiativeChoice;
-}): Promise<SessionProviders> {
+  scripted_initiative_stt: boolean;
+}): Promise<BaseProviders> {
   const { config, time, emitter } = input;
-  const condition = input.condition ?? config.condition;
   const env = input.env ?? process.env;
 
   let stt: Built<SttProvider>;
   if (config.stt === 'test_double') {
-    // 台本の発話希望は候補を話しうる条件のセッションだけ（reactive のセッションの台本は変えない）。
     const mode = scriptedInitiative(env);
-    const scripted = mode !== 'none' && condition !== 'reactive';
+    const scripted = input.scripted_initiative_stt;
     // 内容更新と撤回の台本は長い文で、1文字の長さを短くする（話している間に2回の判定が走るように。実測の話速ではない）。
     const second = scripted && scriptedSecondJudgementMode(mode);
+    // 試験だけ：SCRIPTED_STT_SCRIPT_FILE（JSON の文字列の配列）で台本の STT の文を差し替える（2 体の e2e の intake の文。U4）。
+    const fileScript = !scripted && env.SCRIPTED_STT_SCRIPT_FILE ? (JSON.parse(readFileSync(env.SCRIPTED_STT_SCRIPT_FILE, 'utf8')) as string[]) : null;
     stt = {
       ok: true,
-      value: new EnergyScriptedSttProvider({ time, emitter, ...(scripted ? { stable_interim: true, script: second ? INITIATIVE_LONG_STT_SCRIPT : INITIATIVE_STT_SCRIPT } : {}), ...(second ? { ms_per_char: 90 } : {}), ...(mode === 'defer_on_input' ? { ignore_audio_before_ms: SCRIPTED_DEFER_START_MS } : {}) }),
+      value: new EnergyScriptedSttProvider({ time, emitter, ...(scripted ? { stable_interim: true, script: second ? INITIATIVE_LONG_STT_SCRIPT : INITIATIVE_STT_SCRIPT } : fileScript !== null ? { script: fileScript } : {}), ...(second ? { ms_per_char: 90 } : {}), ...(mode === 'defer_on_input' ? { ignore_audio_before_ms: SCRIPTED_DEFER_START_MS } : {}) }),
     };
   } else {
     try {
@@ -183,15 +192,6 @@ export async function createSessionProviders(input: {
   }
 
   const completion = completionFor(config.policy, llm.ok ? llm.value : null);
-  const choice: InitiativeChoice = input.choice ?? {
-    conversation_kind: config.conversation_kind,
-    conversation_kind_source: 'default',
-    timing_strategy: config.timing_strategy,
-    timing_strategy_source: 'default',
-    vocal_cue: config.vocal_cue,
-    vocal_cue_source: 'default',
-  };
-  const initiative = initiativeFor({ config, condition, time, emitter, env, choice });
   if (completion.error !== null) console.error(`[orchestrator] completion estimator unavailable: ${completion.error}`);
   const cls = (b: Built<{ provider_class: ProviderClass }>) => (b.ok ? b.value.provider_class : 'unavailable');
   const name = (b: Built<{ provider: string }>) => (b.ok ? b.value.provider : 'unavailable');
@@ -205,8 +205,129 @@ export async function createSessionProviders(input: {
     requested: { stt: config.stt, tts: config.tts, llm: config.llm },
     completion_name: completion.name,
     completion_error: completion.error,
-    initiative,
   };
+}
+
+export async function createSessionProviders(input: {
+  config: OrchestratorConfig;
+  time: TimeSource;
+  emitter: EventEmitter;
+  env?: NodeJS.ProcessEnv;
+  /** このセッションの研究条件。省略は config.condition（起動時の既定）。 */
+  condition?: Condition;
+  /** このセッションの会話の種類と方式。省略は設定の既定。 */
+  choice?: InitiativeChoice;
+}): Promise<SessionProviders> {
+  const { config, time, emitter } = input;
+  const condition = input.condition ?? config.condition;
+  const env = input.env ?? process.env;
+  // 台本の発話希望は候補を話しうる条件のセッションだけ（reactive のセッションの台本は変えない）。
+  const scripted_initiative_stt = config.stt === 'test_double' && scriptedInitiative(env) !== 'none' && condition !== 'reactive';
+  const base = await createBaseProviders({ config, time, emitter, env, scripted_initiative_stt });
+  const choice: InitiativeChoice = input.choice ?? {
+    conversation_kind: config.conversation_kind,
+    conversation_kind_source: 'default',
+    timing_strategy: config.timing_strategy,
+    timing_strategy_source: 'default',
+    vocal_cue: config.vocal_cue,
+    vocal_cue_source: 'default',
+  };
+  const initiative = initiativeFor({ config, condition, time, emitter, env, choice });
+  return { ...base, initiative };
+}
+
+/** 2 体のモードの声の変数（docs/design/two_ai/06 §11）。値は manifest に写さない。 */
+/** 用途ごとの出力の上限の既定（設定の generation.max_output_tokens が優先）。計画は 1024 では切れる（WP2 の実測で約 16384）。 */
+export const TWO_AI_DEFAULT_MAX_OUTPUT_TOKENS: Partial<Record<string, number>> = { discussion_plan: 16384, discussion_turn: 2048, ledger: 4096, correction_assist: 2048 };
+
+export const TWO_AI_VOICE_ENV = { A: 'TWO_AI_VOICE_A', B: 'TWO_AI_VOICE_B' } as const;
+
+export type TwoAiProviders =
+  | {
+      ok: true;
+      base: BaseProviders;
+      slotTts: Record<AiId, TtsProvider>;
+      /** ai_id を渡すと、その AI の範囲つき emitter で llm.* を出す（discussion_turn と話者のスロットの intake。06 §4.1）。 */
+      llmFor: (purpose: LlmPurpose, ai_id?: AiId) => LlmProvider;
+      voice_provider: 'elevenlabs' | 'gemini';
+    }
+  | { ok: false; reason: 'voices_not_set' | 'voices_identical' | string };
+
+const TWO_AI_MODEL_PURPOSES = ['intake', 'ledger', 'discussion_plan', 'discussion_turn', 'correction_assist'] as const;
+
+/**
+ * 2 体：base（台本の STT の発話希望の台本は使わない）＋スロットごとの TTS（声の変数）＋用途ごとの LLM。Condition を使わない。
+ * 声の変数（TWO_AI_VOICE_A／B）は ElevenLabs では声の ID、Gemini TTS では声の名前。どちらかが未設定か 2 つが同じなら ok: false。
+ * 台本の TTS（test_double）は声を持たないので、声の変数を求めない（配線の確認用。受け入れの証拠に数えない）。
+ */
+export async function createTwoAiProviders(input: {
+  config: OrchestratorConfig;
+  twoAi: TwoAiSessionConfig;
+  personas: TwoAiPersonas;
+  time: TimeSource;
+  emitter: EventEmitter;
+  env?: NodeJS.ProcessEnv;
+}): Promise<TwoAiProviders> {
+  const { config, twoAi, time, emitter } = input;
+  const env = input.env ?? process.env;
+  const voice_provider = config.tts === 'test_double' ? 'gemini' : chooseTtsProvider(env);
+  let slotTts: Record<AiId, TtsProvider>;
+  if (config.tts === 'test_double') {
+    slotTts = {
+      A: new WavScriptedTtsProvider({ wav_path: config.scripted_tts_wav }),
+      B: new WavScriptedTtsProvider({ wav_path: config.scripted_tts_wav }),
+    };
+  } else {
+    const a = env[TWO_AI_VOICE_ENV.A];
+    const b = env[TWO_AI_VOICE_ENV.B];
+    if (!a || !b) return { ok: false, reason: 'voices_not_set' };
+    if (a === b) return { ok: false, reason: 'voices_identical' };
+    try {
+      const make = (voice: string): TtsProvider =>
+        voice_provider === 'elevenlabs'
+          ? createElevenLabsTtsProviderFromEnv({
+              time,
+              emitter,
+              env: { ...env, ELEVENLABS_VOICE_ID: voice },
+              options: { apply_language_text_normalization: config.elevenlabs_language_normalization },
+            })
+          : createGeminiTtsProviderFromEnv({ time, emitter, env: { ...env, GEMINI_TTS_VOICE: voice } });
+      slotTts = { A: make(a), B: make(b) };
+    } catch (error) {
+      return { ok: false, reason: `tts: ${message(error)}`.slice(0, 300) };
+    }
+  }
+  const base = await createBaseProviders({ config, time, emitter, env, scripted_initiative_stt: false });
+  const cache = new Map<string, LlmProvider>();
+  const llmFor = (purpose: LlmPurpose, ai_id?: AiId): LlmProvider => {
+    const key = `${purpose}:${ai_id ?? ''}`;
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    // 話者の決まった呼び出しは llm.* の封筒に ai_id を入れる（06 §4.1：discussion_turn と、話者のスロットの intake の応答）。
+    const scoped = ai_id === undefined ? emitter : scopedEmitter(emitter, { ai_id });
+    let llm: LlmProvider;
+    if (config.llm === 'test_double') {
+      llm = new ScriptedReplyLlm({ time, emitter: scoped });
+    } else if (!env.GEMINI_API_KEY || !(TWO_AI_MODEL_PURPOSES as readonly string[]).includes(purpose)) {
+      if (!base.llm.ok) throw new Error(`llm unavailable: ${base.llm.reason}`);
+      llm = base.llm.value;
+    } else {
+      const models = twoAi.generation.models as Record<(typeof TWO_AI_MODEL_PURPOSES)[number], string>;
+      const timeout = (twoAi.generation.timeout_ms as Partial<Record<string, number>>)[purpose];
+      const maxTokens = (twoAi.generation.max_output_tokens as Partial<Record<string, number>> | undefined)?.[purpose] ?? TWO_AI_DEFAULT_MAX_OUTPUT_TOKENS[purpose];
+      llm = createGeminiProviderFromEnv({
+        time,
+        emitter: scoped,
+        model: models[purpose as (typeof TWO_AI_MODEL_PURPOSES)[number]],
+        status_name: `gemini:${purpose}`,
+        ...(timeout !== undefined ? { timeout_ms: timeout } : {}),
+        ...(maxTokens !== undefined ? { max_output_tokens: maxTokens } : {}),
+      });
+    }
+    cache.set(key, llm);
+    return llm;
+  };
+  return { ok: true, base, slotTts, llmFor, voice_provider };
 }
 
 /**

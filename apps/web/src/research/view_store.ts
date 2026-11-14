@@ -8,6 +8,8 @@ import {
   ResearchEvent,
   type EventOf,
   type ResearchNoteMessage,
+  type ResearchTwoAiArm,
+  type ResearchWoz,
 } from '@llm-vap/contracts';
 import {
   computeLatencyReport,
@@ -20,6 +22,7 @@ import { CandidateTracker, type CandidateSummary } from './candidates_view';
 import type { FeedConnection, FeedSink, ResearchFeed } from './feed';
 import { OutcomeTracker, type InterruptStats, type PrepareStats } from './rates';
 import { TimelineBuffer, type AiIndex, type TimelineView } from './timeline';
+import { substituteRedactedCards, TwoAiViewBuilder, type TwoAiViewState } from './two_ai_view';
 
 export interface ProviderRow {
   provider: string;
@@ -117,6 +120,8 @@ export interface ResearchSnapshot {
   notes: NoteRow[];
   /** 研究者のメモを送れる口か（WS のときだけ）。 */
   can_send_notes: boolean;
+  /** 2 体のモードの表示（two_ai_view.ts）。2 体のモードでなければ null（従来の置き場を出す）。 */
+  two_ai: TwoAiViewState | null;
 }
 
 class LiveState {
@@ -161,8 +166,13 @@ export class ResearchViewStore implements FeedSink {
   private live = new LiveState(null);
   private direction: DirectionInfo;
   private readonly notes = new Map<string, NoteRow>();
+  private readonly twoAi: TwoAiViewBuilder;
 
-  constructor(private readonly feed: Pick<ResearchFeed, 'kind' | 'label' | 'synthetic'> & { send?: unknown }) {
+  constructor(
+    private readonly feed: Pick<ResearchFeed, 'kind' | 'label' | 'synthetic'> & { send?: unknown },
+    options: { now?: () => number; holdMaxMs?: number } = {},
+  ) {
+    this.twoAi = new TwoAiViewBuilder(options);
     this.direction = {
       p_ai_index: ASSUMED_P_AI_INDEX,
       source: 'assumed',
@@ -184,7 +194,18 @@ export class ResearchViewStore implements FeedSink {
     });
   }
 
+  /** 画面から送った WoZ（two_ai）。sent=false は送れなかった（未接続）。 */
+  wozSubmitted(message: ResearchWoz, sent: boolean): void {
+    this.twoAi.wozSubmitted(message, sent);
+  }
+
+  /** 画面から送った条件の設定（two_ai）。 */
+  armSubmitted(message: ResearchTwoAiArm, sent: boolean): void {
+    this.twoAi.armSubmitted(message, sent);
+  }
+
   private control(message: NodeToResearch): void {
+    if (message.type !== 'research.note.ack') this.twoAi.control(message);
     if (message.type === 'research.config') {
       this.direction = {
         p_ai_index: message.p_ai_index,
@@ -232,7 +253,12 @@ export class ResearchViewStore implements FeedSink {
       }
       return;
     }
-    const parsed = ResearchEvent.safeParse(value);
+    let parsed = ResearchEvent.safeParse(value);
+    if (!parsed.success) {
+      // 研究画面への配信の伏せ字（06 §4.6）のカードは text が空。契約は空を許さないので印に置き換えて検証し直す。
+      const substituted = substituteRedactedCards(value);
+      if (substituted !== null) parsed = ResearchEvent.safeParse(substituted);
+    }
     if (!parsed.success) {
       this.invalid += 1;
       const name = (value as { event?: unknown } | null)?.event;
@@ -254,6 +280,7 @@ export class ResearchViewStore implements FeedSink {
     const at_ms = event.t_monotonic_ms;
     if (this.live.session_id !== event.session_id) this.live = new LiveState(event.session_id);
     this.live.add(event);
+    this.twoAi.event(event);
     switch (event.event) {
       case 'research.note': {
         const row = this.notes.get(event.note_id);
@@ -359,6 +386,7 @@ export class ResearchViewStore implements FeedSink {
       live: this.live.snapshot(),
       notes: [...this.notes.values()].reverse().map((n) => ({ ...n })),
       can_send_notes: typeof this.feed.send === 'function',
+      two_ai: this.twoAi.snapshot(),
     };
   }
 }

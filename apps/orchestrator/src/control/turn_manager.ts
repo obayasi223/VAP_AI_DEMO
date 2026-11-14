@@ -687,6 +687,38 @@ function step(settings: ControlSettings, previous: TurnState, inputs: TurnInputs
   return { state: s, decisions };
 }
 
+/**
+ * 2 体のモード（docs/design/two_ai/06 §5、01 §3.2）：進行役が始めた発話で、start_speech の直後と同じ初期化をする
+ * （segment を 1 つ進め、話し中にする）。step は変えない。corrected は ControlSettings.corrected（U-4 の消去）。
+ */
+export function noteExternalStart(
+  state: TurnState,
+  input: { audio_playback_id: number; now: number; received_audio_frame: number },
+  options: { corrected?: boolean } = {},
+): { state: TurnState; decisions: TurnDecision[] } {
+  const s: TurnState = { ...state };
+  s.speaking = { phase: 'starting', audio_playback_id: input.audio_playback_id, requested_at: input.now };
+  s.segment_id += 1;
+  const decisions: TurnDecision[] = [{ kind: 'advance_segment', new_segment_id: s.segment_id, at_audio_frame: input.received_audio_frame }];
+  s.utterance = null;
+  s.asr_is_final = false;
+  s.ignored_fragment = null;
+  s.invitation = NO_INVITATION;
+  s.invitation_rule_id = null;
+  s.prepare_track = null;
+  s.want_to_speak = { kind: 'none' };
+  if (options.corrected ?? true) {
+    s.asr_result = null;
+    s.last_sent_asr_result = null;
+    s.turngpt_output = 0;
+    s.completion_revision = null;
+    s.completion_floor_revision = s.asr_revision ?? -1;
+    s.prepare_retried_text = null;
+  }
+  s.mode = 'ai_speaking';
+  return { state: s, decisions };
+}
+
 /** TurnManagerFactory の形。options は契約に尺度がない fallback_energy の閾値だけ（settings.ts）。 */
 export function createTurnManager(policy: Policy, options: ControlOptions = {}): TurnManager<TurnState> & {
   settings: ControlSettings;

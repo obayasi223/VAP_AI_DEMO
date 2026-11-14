@@ -66,6 +66,18 @@ export const H1_RENDER: RenderSettings = {
   background: 0xe8ebef,
 };
 
+/**
+ * 2 体のステージの既定（docs/design/two_ai/03 §6）。ピクセル比の上限を下げて画素の負荷を抑える（見え方は人が確認）。
+ * 照明・材質・ばねは 1 体と同じ。セッションの開始時に決めて途中で変えない。
+ */
+export const TWO_AI_RENDER: Partial<RenderSettings> = {
+  minPixelRatio: 1,
+  maxPixelRatio: 1.25,
+};
+
+/** 2 体のステージのフレームの上限（Hz）の既定。1 体のページは従来どおり上限なし。 */
+export const TWO_AI_MAX_FPS = 30;
+
 export function resolveRenderSettings(overrides: Partial<RenderSettings> | 'h1' | undefined): RenderSettings {
   if (overrides === 'h1') return H1_RENDER;
   return {

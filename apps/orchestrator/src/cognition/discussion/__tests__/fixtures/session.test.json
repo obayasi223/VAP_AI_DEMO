@@ -1,0 +1,198 @@
+{
+  "config_id": "two_ai_session_test",
+  "version": 1,
+  "self_run": false,
+  "phases": {
+    "intake": {
+      "min_sec": 60,
+      "soft_sec": 90,
+      "max_sec": 120,
+      "plan_start_sec": 90
+    },
+    "plan_wait": {
+      "filler_after_ms": 0,
+      "second_filler_after_ms": 12000,
+      "max_wait_ms": 25000,
+      "on_timeout": "pause_for_woz"
+    },
+    "discussion": {
+      "target_sec": 240,
+      "close_at_sec": 220,
+      "max_sec": 260,
+      "points_overrun_max_sec": 30,
+      "avg_turn_sec_estimate": 9,
+      "closing_reserve_sec": 20,
+      "chars_per_sec_estimate": 7,
+      "stage_fracs": [
+        0.25,
+        0.25,
+        0.25,
+        0.25
+      ]
+    },
+    "response": {
+      "duration_sec": 120,
+      "overrun_max_sec": 10,
+      "silence_prompt_sec": 20,
+      "max_silence_prompts": 2
+    },
+    "next_step": {
+      "pick_max_sec": 60
+    }
+  },
+  "speakers": {
+    "intake": "A",
+    "next_step": "A",
+    "closing": "A"
+  },
+  "gaps_ms": {
+    "default": {
+      "median": 600,
+      "min": 300,
+      "max": 1200
+    },
+    "react": {
+      "median": 400,
+      "min": 200,
+      "max": 900
+    },
+    "after_point": {
+      "median": 900,
+      "min": 500,
+      "max": 1500
+    },
+    "resume_gap_ms": 400,
+    "max_wait_for_ready_ms": 1500,
+    "feed_turn_max_wait_ms": 4000
+  },
+  "interjection": {
+    "detector": {
+      "vad_threshold": null,
+      "p_now_user_min": null,
+      "p_future_user_min": null,
+      "p_combine": "and",
+      "onset_min_ms": 200,
+      "refractory_ms": 1000,
+      "fallback_dbfs": -35,
+      "fallback_onset_min_ms": 400,
+      "sub_threshold_min_ms": 100
+    },
+    "stop_max_wait_ms": null,
+    "user_floor_max_ms": 60000,
+    "false_onset_window_ms": 1500,
+    "classify": {
+      "backchannel_max_voiced_ms": 700,
+      "backchannel_max_chars": 6
+    }
+  },
+  "marker": {
+    "enabled": true,
+    "min_interval_ms": 1000,
+    "near_window_ms": 500
+  },
+  "retraction": {
+    "timing": "after_measures",
+    "template": {
+      "fact": "先ほど「{slip_statement}」と言いましたが、正しくは「{correct_statement}」でした。",
+      "inference": "そのうえで「{inference_steps}」という話をしましたが、その推論は誤った前提の上にありました。「{inference_conclusion}」という結論は取り消します。",
+      "inference_unspoken": "そのうえで「{inference_steps}」という話をする予定でしたが、その推論は誤った前提の上にありました。「{inference_conclusion}」という結論は取り消します。",
+      "process": "この話し合いでは、研究のために、AI が事実を取り違える場面をあらかじめ入れていました。"
+    },
+    "speaker": "B"
+  },
+  "acknowledgment": {
+    "templates": [
+      {
+        "id": "ack_1",
+        "text": "なるほど、ありがとうございます。"
+      }
+    ],
+    "selection": "fixed_first",
+    "duration_tolerance_ms": 300,
+    "speaker": "interrupted_ai"
+  },
+  "fixed": {
+    "bridge": "話を戻すと、",
+    "hold_bridge": "少し先に進めますね。",
+    "lines": {
+      "opening_two": "ありがとうございます。ここからは、わたしたち二人で、{user_name}さんのお話について少し話してみますね。",
+      "opening_cond": {
+        "respond_on_spot": "途中で気になったことがあれば、いつでも口を挟んでください。",
+        "respond_at_end": "最後にまとめてお話を伺う時間をとりますので、まずは聞いていてください。"
+      },
+      "plan_fillers": [
+        "少し考えをまとめますね。",
+        "もう少しだけお待ちください。"
+      ],
+      "closing_two": "わたしたちの話し合いは、ここまでにします。",
+      "closing_question": "ここまで聞いてみて、何か思ったことはありますか。",
+      "response_more": "ほかにも何かあれば、どうぞ。",
+      "intake_first_question": "今日はどんなことについて話したいですか。",
+      "intake_fact_questions": [
+        "締切や日程で、もう決まっていることはありますか。",
+        "説明会や面談など、予定しているものはありますか。"
+      ],
+      "core_readback": "{user_name}さんがいちばん引っかかっているのは、{core}、ということで合っていますか。",
+      "core_readback_no_core": "いちばん引っかかっているのは、どのあたりですか。",
+      "pick_prompt": "最後に、この中から次の一歩を一つ選んでください。",
+      "pick_confirm": "ありがとうございます。",
+      "pick_timeout": "今日はここまでにしましょう。"
+    },
+    "stage_headings": [
+      "いまの状況",
+      "選択肢を並べる",
+      "別の見方",
+      "次の一歩"
+    ],
+    "instruction_keys": {
+      "intake": "intake",
+      "discussion": {
+        "respond_on_spot": "discussion_a",
+        "respond_at_end": "discussion_b"
+      },
+      "response": "response",
+      "next_step": "next_step",
+      "end": "end"
+    }
+  },
+  "correction": {
+    "assist": true,
+    "mode": "researcher",
+    "decision_window_ms": 3000,
+    "hold_max_ms": 6000
+  },
+  "experience": {
+    "interjection_feeds_generation": false,
+    "response_mode": "fixed",
+    "feed": {
+      "max_items": 3,
+      "max_chars": 200
+    }
+  },
+  "generation": {
+    "models": {
+      "intake": "fake-model",
+      "ledger": "fake-model",
+      "discussion_plan": "fake-model",
+      "discussion_turn": "fake-model",
+      "correction_assist": "fake-model"
+    },
+    "lookahead_turns": 2,
+    "history_turns": 12,
+    "timeout_ms": {
+      "discussion_turn": 8000,
+      "discussion_plan": 30000,
+      "ledger": 10000,
+      "correction_assist": 5000
+    }
+  },
+  "safety": {
+    "banned_terms_file": "config/two_ai/banned_terms.ja.txt",
+    "person_evaluation_pairs_file": "config/two_ai/person_evaluation_pairs.ja.json"
+  },
+  "render": {
+    "max_fps": 30,
+    "pixel_ratio_max": 1.5,
+    "spring_bones": "speaker_only"
+  }
+}

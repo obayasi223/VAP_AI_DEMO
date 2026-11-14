@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "note": "旗の比較（--compare-feeds。04 T4）。C.1 の途中に反論、点の外で 1 回の割り込み。架空。",
+  "utterances": [
+    {
+      "phase": "intake",
+      "at_sec": 3,
+      "text": "博士課程に進むか、インターンに応募して就職するかで迷っています。",
+      "duration_ms": 4000
+    },
+    {
+      "phase": "intake",
+      "at_sec": 14,
+      "text": "いちばん引っかかっているのは、自分に研究の才能があるか分からないことです。",
+      "duration_ms": 4500
+    },
+    {
+      "phase": "intake",
+      "at_sec": 26,
+      "text": "インターンの締切は 2 月末で、研究科の説明会は 1 月 15 日です。",
+      "duration_ms": 4000
+    },
+    {
+      "after_point_started": "C1",
+      "offset_ms": 12000,
+      "text": "才能の話じゃなくて、締切の話なんです。",
+      "duration_ms": 2500
+    },
+    {
+      "after_stage_started": 4,
+      "offset_ms": 2000,
+      "text": "先輩に聞くのは、いいと思います。",
+      "duration_ms": 2000
+    },
+    {
+      "phase": "response",
+      "at_sec": 3,
+      "text": "特にありません。",
+      "duration_ms": 1500
+    },
+    {
+      "pick": 4,
+      "after_phase_started_ms": 5000
+    }
+  ]
+}

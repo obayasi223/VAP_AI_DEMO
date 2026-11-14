@@ -183,7 +183,7 @@ export function createGlbRig(root: THREE.Object3D, spec: GlbModelSpec): AvatarRi
     root,
     breathMorph,
     breathOutput: { chest: breathMorph.chestBone },
-    applyFrame(frame: PoseFrame, camera: THREE.Camera) {
+    applyFrame(frame: PoseFrame, lookAtWorld: THREE.Vector3) {
       for (const [role, offset] of frame.bones) {
         const bone = bones.get(role);
         if (!bone) continue;
@@ -214,10 +214,10 @@ export function createGlbRig(root: THREE.Object3D, spec: GlbModelSpec): AvatarRi
         }
       }
 
-      // 視線: 前のフレームの頭の向きでカメラへの向きを求め、そらす量を足す（VRM の lookAt と同じ）。
+      // 視線: 前のフレームの頭の向きで lookAtWorld（1 体ではカメラ）への向きを求め、そらす量を足す（VRM の lookAt と同じ）。
       eyeCenter(eyePos);
       headNode.getWorldQuaternion(_world).invert();
-      dir.copy(camera.position).sub(eyePos).applyQuaternion(_eq.copy(restHeadWorld).multiply(_world)).normalize();
+      dir.copy(lookAtWorld).sub(eyePos).applyQuaternion(_eq.copy(restHeadWorld).multiply(_world)).normalize();
       const baseYaw = Math.atan2(dir.x, dir.z) * RAD2DEG;
       const basePitch = -Math.atan2(dir.y, Math.hypot(dir.x, dir.z)) * RAD2DEG;
       inputEye.yawDeg = baseYaw * frame.eye.userWeight + frame.eye.yawDeg;

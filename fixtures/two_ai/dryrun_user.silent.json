@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "note": "試走の「本人」の台本（架空）。intake だけ話し、話し合いと応答の段は黙る（AC5(d) と最後の段で黙る回）。",
+  "utterances": [
+    {
+      "phase": "intake",
+      "at_sec": 3,
+      "text": "博士課程に進むか、インターンに応募して就職するかで迷っています。",
+      "duration_ms": 4000
+    },
+    {
+      "phase": "intake",
+      "at_sec": 14,
+      "text": "いちばん引っかかっているのは、自分に研究の才能があるか分からないことです。",
+      "duration_ms": 4500
+    },
+    {
+      "phase": "intake",
+      "at_sec": 26,
+      "text": "インターンの締切は 2 月末で、研究科の説明会は 1 月 15 日です。",
+      "duration_ms": 4000
+    },
+    {
+      "pick": 3,
+      "after_phase_started_ms": 6000
+    }
+  ]
+}

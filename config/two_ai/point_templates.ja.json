@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "points": [
+    {
+      "kind": "fact_slip",
+      "default_speaker": "B",
+      "default_trigger": { "in_stage": 1, "after_stage_turn": 1 },
+      "elaborate_turns": 2,
+      "turns": [
+        { "turn_key": "F.0", "role": "speaker", "template": "そういえば{user_name}さん、{slip_statement}って話でしたよね。", "corrected_template": "そういえば{user_name}さん、{correct_statement}って話でしたよね。", "target_chars": [30, 70] },
+        { "turn_key": "F.1", "role": "peer", "template": "それなら、{inference_step_1}。", "corrected_template": "それなら、{corrected_step_1}。", "target_chars": [20, 55] },
+        { "turn_key": "F.2", "role": "speaker", "template": "すると、{inference_step_2}。", "corrected_template": "すると、{corrected_step_2}。", "target_chars": [20, 55] }
+      ],
+      "uptake_template": "あ、{correct_statement}なんですね。失礼しました。"
+    },
+    {
+      "kind": "control_inference",
+      "default_speaker": "B",
+      "default_trigger": { "in_stage": 2, "after_stage_turn": 2 },
+      "elaborate_turns": 2,
+      "turns": [
+        { "turn_key": "K.0", "role": "speaker", "template": "そういえば{user_name}さん、{control_statement}って話でしたよね。", "corrected_template": "そういえば{user_name}さん、{control_statement}って話でしたよね。", "target_chars": [30, 70] },
+        { "turn_key": "K.1", "role": "peer", "template": "それなら、{control_step_1}。", "corrected_template": "それなら、{control_step_1}。", "target_chars": [20, 55] },
+        { "turn_key": "K.2", "role": "speaker", "template": "すると、{control_step_2}。", "corrected_template": "すると、{control_step_2}。", "target_chars": [20, 55] }
+      ],
+      "uptake_template": null
+    },
+    {
+      "kind": "framing_C",
+      "default_speaker": "A",
+      "default_trigger": { "in_stage": 3, "after_stage_turn": 0 },
+      "elaborate_turns": 2,
+      "turns": [
+        { "turn_key": "C.0", "role": "speaker", "template": "{user_name}さんの話を聞いていて、わたしは、いちばんの問題は{core_short}というより、むしろ{c_core}なんじゃないかなと思ったんです。{c_reason}", "corrected_template": "{user_name}さんの話を聞いていて、わたしは、いちばんの問題は{core_short}というより、むしろ{c_core}なんじゃないかなと思ったんです。{c_reason}", "target_chars": [60, 110] },
+        { "turn_key": "C.1", "role": "peer", "template": "なるほど、{c_core_short}ですか。それって、{user_name}さんの話のどのあたりからですか。", "corrected_template": "なるほど、{c_core_short}ですか。それって、{user_name}さんの話のどのあたりからですか。", "target_chars": [30, 60] },
+        { "turn_key": "C.2", "role": "speaker", "template": "{quote}って言っていたのが、わたしには{c_core_short}のほうに聞こえたんです。{c_elab}", "corrected_template": "{quote}って言っていたのが、わたしには{c_core_short}のほうに聞こえたんです。{c_elab}", "target_chars": [50, 100] }
+      ],
+      "uptake_template": null
+    }
+  ],
+  "board_cards": [
+    { "order": 1, "discussion_stage": 1, "depends_on": "fact_slip", "template": "{card_1}", "corrected_template": "{card_1_corrected}", "target_chars": [10, 45] },
+    { "order": 2, "discussion_stage": 2, "depends_on": "none", "template": "{card_2}", "corrected_template": "{card_2}", "target_chars": [10, 45] },
+    { "order": 3, "discussion_stage": 3, "depends_on": "framing_C", "template": "{card_3}", "corrected_template": "{card_3}", "target_chars": [10, 45] },
+    { "order": 4, "discussion_stage": 4, "depends_on": "none", "template": "{card_4}", "corrected_template": "{card_4}", "target_chars": [10, 45] }
+  ],
+  "rebuild_templates": [
+    { "turn_key": "R.0", "role": "closing_speaker", "template": "ここまでの話から、候補を並べ直しますね。{card_1}。それから、{card_2}。" },
+    { "turn_key": "R.1", "role": "peer", "template": "あとは、{card_3}。最後に、{card_4}。この四つです。" }
+  ]
+}

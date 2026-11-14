@@ -21,3 +21,4 @@ export * from './avatar_models';
 export * from './dev_measure';
 export type { Avatar, AvatarModelInfo, AvatarOptions, AvatarTelemetry, BreathMorphInfo, FrameTiming, Framing } from './runtime';
 export type { AvatarRig } from './rig';
+export { gazeGeometry, parseLayoutQuery, placeAvatar, placeCamera, resolveLayout, TWO_AI_LAYOUT, ZERO_GAZE_GEOMETRY, type GazeGeometry, type StageLayout } from './stage_layout';

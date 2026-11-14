@@ -2,11 +2,13 @@
  * 研究者向けの最小の状態表示（I1）。表示だけで、データの取得は feed.ts の口に任せる。
  * 規則: 未計測は 0 と書かず「未計測」、推定は「推定」と書く。偽データの間は常に明示する。
  * I2 で p の時系列、候補のライブ表示、準備・割り込みの率、研究者のメモを足した（LivePanels.tsx）。
- * 録音、条件切替、WoZ は波4（E3、J）の範囲で、置き場だけある。
+ * 録音、条件切替、WoZ は波4（E3、J）の範囲で、置き場だけある。2 体のモード（two_ai）のときは置き場に TwoAiPanel を出す。
  */
 import type { CostSummary, LatencyRow } from '@llm-vap/analysis';
 import { CandidatePanel, NotePanel, OutcomePanel, TimelinePanel } from './LivePanels';
+import type { WozAction } from '@llm-vap/contracts';
 import styles from './research.module.css';
+import { TwoAiPanel, type ArmFields, type SendResult } from './TwoAiPanel';
 import type { CurrentState, ResearchSnapshot } from './view_store';
 
 const CONNECTION_LABEL: Record<ResearchSnapshot['connection']['state'], string> = {
@@ -220,9 +222,13 @@ function LatencyTable({ rows }: { rows: LatencyRow[] }) {
 export function ResearchDashboard({
   snapshot,
   onSendNote,
+  onSendWoz,
+  onArmTwoAi,
 }: {
   snapshot: ResearchSnapshot;
   onSendNote?: (text: string) => { ok: true } | { ok: false; reason: string };
+  onSendWoz?: (action: WozAction, point_id: string | null, operator: string) => SendResult;
+  onArmTwoAi?: (fields: ArmFields) => SendResult;
 }) {
   const synthetic = snapshot.feed.synthetic;
   const health = snapshot.connection;
@@ -326,10 +332,21 @@ export function ResearchDashboard({
         <LatencyTable rows={snapshot.latency.rows} />
       </Section>
 
-      <section className={`${styles.card} ${styles.placeholder}`} data-testid="wave4-placeholder">
-        <h2 className={styles.heading}>録音・条件の切替・WoZ</h2>
-        <p className={styles.unmeasured}>まだありません。波4（E3 と J）でここに追加します。</p>
-      </section>
+      {snapshot.two_ai !== null ? (
+        <Section title="2 体の話し合い（条件・点・割り込み・WoZ）" synthetic={synthetic}>
+          <TwoAiPanel
+            state={snapshot.two_ai}
+            connected={snapshot.connection.state === 'open' && snapshot.can_send_notes}
+            {...(onSendWoz ? { onWoz: onSendWoz } : {})}
+            {...(onArmTwoAi ? { onArm: onArmTwoAi } : {})}
+          />
+        </Section>
+      ) : (
+        <section className={`${styles.card} ${styles.placeholder}`} data-testid="wave4-placeholder">
+          <h2 className={styles.heading}>録音・条件の切替・WoZ</h2>
+          <p className={styles.unmeasured}>まだありません。波4（E3 と J）でここに追加します。</p>
+        </section>
+      )}
     </main>
   );
 }

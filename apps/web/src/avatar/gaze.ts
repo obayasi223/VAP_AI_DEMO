@@ -4,6 +4,7 @@
  */
 import type { GazeReport, GazeTarget } from '@llm-vap/contracts';
 import type { AvatarLayer, LayerContext, PoseFrame } from './pose';
+import type { GazeGeometry } from './stage_layout';
 import { DEG2RAD, SmoothDamp, type Rng } from './util';
 
 export interface GazeOptions {
@@ -56,31 +57,50 @@ export class GazeController {
   private readonly headYaw = new SmoothDamp();
   private readonly headPitch = new SmoothDamp();
 
+  /** 目標ごとの頭の角（2 体のステージ）。null は従来（1 体）の値。 */
+  private geometry: GazeGeometry | null;
+
   constructor(
     private readonly rng: Rng,
     options: Partial<GazeOptions> = {},
+    geometry: GazeGeometry | null = null,
   ) {
     this.options = { ...DEFAULT_GAZE, ...options };
+    this.geometry = geometry;
   }
 
   get currentTarget(): GazeTarget {
     return this.target;
   }
 
+  /** ステージが読み込み後に設定する。今の目標が user／peer なら目標角を差し替える（補間で動く）。 */
+  setGeometry(geometry: GazeGeometry | null): void {
+    this.geometry = geometry;
+    if (this.target === 'user' || this.target === 'peer') this.goal = this.lookGoal(this.target);
+  }
+
+  /** user／peer の目標。眼は 0（lookAt が lookAtWorld へ向ける）、頭は幾何の角。幾何なしは従来の 0。 */
+  private lookGoal(target: 'user' | 'peer'): { eyeYaw: number; eyePitch: number; headYaw: number; headPitch: number } {
+    const head = this.geometry === null ? null : this.geometry[target];
+    return { eyeYaw: 0, eyePitch: 0, headYaw: head?.headYawDeg ?? 0, headPitch: head?.headPitchDeg ?? 0 };
+  }
+
   /** 同じ目標なら何もしない。変わったら true。 */
   setTarget(target: GazeTarget): boolean {
     if (target === this.target) return false;
     this.target = target;
-    if (target === 'user') {
-      this.goal = { eyeYaw: 0, eyePitch: 0, headYaw: 0, headPitch: 0 };
+    if (target === 'user' || target === 'peer') {
+      this.goal = this.lookGoal(target);
     } else {
       const o = this.options;
       const vary = () => 1 + (this.rng() * 2 - 1) * o.jitter;
       const yawScale = vary();
+      // 2 体: 基準は体の正面（直前の目標の頭の角ではない）。向きは相手と利用者の両方から外れる側（awaySign）。
+      const sign = this.geometry?.awaySign ?? 1;
       this.goal = {
-        eyeYaw: o.awayEyeYawDeg * yawScale,
+        eyeYaw: sign * o.awayEyeYawDeg * yawScale,
         eyePitch: o.awayEyePitchDeg * vary(),
-        headYaw: o.awayHeadYawDeg * yawScale,
+        headYaw: sign * o.awayHeadYawDeg * yawScale,
         headPitch: o.awayHeadPitchDeg * vary(),
       };
     }

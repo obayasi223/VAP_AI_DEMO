@@ -1,9 +1,9 @@
 /** 制御（E1）。J の入口は createTurnManager と userTextFor。 */
-export { createTurnManager, turnGptTimeout, userTextFor } from './turn_manager';
+export { createTurnManager, noteExternalStart, turnGptTimeout, userTextFor } from './turn_manager';
 export { INVITATION_RULES, NO_INVITATION, detectInvitation } from './invitation';
 export { judgeGaze } from './gaze';
 export { prepareTrigger, similarityGate } from './prepare';
-export { HRI2025_P_AI_INDEX, readVap, vapDirectionSettings } from './vap_direction';
+export { HRI2025_P_AI_INDEX, readVap, readVapUser, vapDirectionSettings } from './vap_direction';
 export { assessVapFreshness } from './vap_freshness';
 export { START_ACK_TIMEOUT_MS, asrSettleMs, controlSettings, vapUnavailableInvitationWaitMs, vapUnavailableStartWaitMs } from './settings';
 export { createInitialState } from './state';

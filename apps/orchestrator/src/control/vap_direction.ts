@@ -60,3 +60,12 @@ export function readVap(vap: Vap2chState, direction: VapDirectionSettings): VapV
         : vap.vad[VAD_USER_INDEX] >= direction.speaking_threshold,
   };
 }
+
+/**
+ * 2 体のモードの本人の話し始めの検出（docs/design/two_ai/06 §5、01 §2.1）が読む人の側の値。
+ * p の人の側は AI の添字の反対。vad の人の側は VAD_USER_INDEX。添字の変換はこのファイルに留める。
+ */
+export function readVapUser(vap: Vap2chState, direction: VapDirectionSettings): { p_now_user: number; p_future_user: number; vad_user: number } {
+  const u = direction.p_ai_index === 1 ? 0 : 1;
+  return { p_now_user: vap.p_now[u], p_future_user: vap.p_future[u], vad_user: vap.vad[VAD_USER_INDEX] };
+}

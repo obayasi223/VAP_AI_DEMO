@@ -25,16 +25,7 @@
  * want_to_speak（準備済みの応答と、E2a の候補）、permitted_to_speak（TurnManager の許可）、speaking（再生の報告）は
  * 別々に持つ。ここでは混ぜない。NEW は発話の許可ではない（許可は TurnManager のまま）。
  */
-import {
-  SAMPLE_RATE_HZ,
-  absent,
-  atFromBrowser,
-  decodeAudioFrame,
-  draftFromAudioReport,
-  draftFromGazeReport,
-  encodePcmFrame,
-  present,
-} from '@llm-vap/contracts';
+import { SAMPLE_RATE_HZ, absent, encodePcmFrame, present } from '@llm-vap/contracts';
 import type { AvatarReport } from '@llm-vap/contracts';
 import type {
   BrowserToNode,
@@ -42,35 +33,43 @@ import type {
   Condition,
   EventEmitter,
   LlmProvider,
-  Maybe,
   NodeToBrowser,
   Policy,
   SttResult,
   SttSession,
   TimeSource,
-  TranscriptSnapshot,
   TtsConnection,
   TurnDecision,
   TurnInputs,
   Unsubscribe,
-  Vap2chState,
   VocalCueMode,
 } from '@llm-vap/contracts';
 import { ResponsePrefetch } from '../cognition/prefetch';
 import { createTurnManager, userTextFor } from '../control';
 import type { TurnState } from '../control';
 import type { SessionLog, SessionManifestDetails } from '../logging';
-import { BrowserClockRecorder, SessionAudioRecorder, WorkerClockRecorder, sessionAudioOffManifest } from '../logging';
-import type { SessionAudioFileSystem, SessionAudioManifest, SessionAudioOptions } from '../logging';
-import { attachMaaiEventBridge } from '../maai';
+import { WorkerClockRecorder, sessionAudioOffManifest } from '../logging';
+import type { SessionAudioManifest, SessionAudioRecorder } from '../logging';
 import type { MaaiWorkerClient } from '../maai';
 import { SpeechGeneratorImpl, createResponsePromptBuilder } from '../speech';
 import type { SessionProviders } from '../app/providers';
 import { isReadyBufferMs } from '../app/maai_setup';
 import { readSessionAudioConfig } from '../app/config';
-import type { SessionAudioConfig } from '../app/config';
-import { FALLBACK_ENERGY_FLOOR_DBFS, PlaybackTracker, rmsDbfs } from './audio_state';
-import { SessionHistory, UserUtterances } from './history';
+import { PlaybackTracker } from './audio_state';
+import { SessionHistory } from './history';
+import type { ParticipantSession } from './participant_session';
+import {
+  BrowserReports,
+  CompletionTracker,
+  MaaiSessionWiring,
+  ManifestWriter,
+  TranscriptTracker,
+  UplinkAudio,
+  buildTurnInputs,
+  recordBaseProviders,
+  startSessionAudio,
+} from './session_io';
+import type { SessionAudioSetting } from './session_io';
 import { InitiativeWiring } from './initiative_wiring';
 import { NegotiationWiring, negotiatorSettings } from './negotiation_wiring';
 import { readVadUser, readVap, vapDirectionSettings } from '../control/vap_direction';
@@ -102,7 +101,7 @@ export interface SessionOptions {
   /** false なら tick のタイマーを動かさない（試験が tick() を直接呼ぶ）。既定は true。 */
   tickTimer?: boolean;
   /** 会話の音声の保存の設定。省略時は環境変数（SAVE_SESSION_AUDIO。既定は保存しない）。試験が差し替える。 */
-  sessionAudio?: SessionAudioConfig & { dir?: string; fs?: SessionAudioFileSystem; recorder?: Partial<SessionAudioOptions> };
+  sessionAudio?: SessionAudioSetting;
 }
 
 export interface SessionStatusView {
@@ -127,15 +126,8 @@ export interface SessionCounters {
 }
 
 const TTS_SAMPLE_RATE_HZ = 24000;
-/** vap.state の入力の窓（worker の1周期）。raw.worker_input がないときの代わり。 */
-const ZERO_FILL_VAP_WINDOW_FRAMES = 1280;
 
-function stripType<T extends { type: unknown }>(message: T): Omit<T, 'type'> {
-  const { type: _type, ...rest } = message;
-  return rest;
-}
-
-export class Session {
+export class Session implements ParticipantSession {
   readonly session_id: string;
   /** このセッションの研究条件（セッションごと。JSONL の condition と同じ値）。 */
   readonly condition: Condition;
@@ -159,10 +151,14 @@ export class Session {
   private readonly time: TimeSource;
   private readonly emitter: EventEmitter;
   private readonly turnManager: ReturnType<typeof createTurnManager>;
-  private readonly utterances = new UserUtterances();
   private readonly tracker = new PlaybackTracker();
-  private readonly browserClock: BrowserClockRecorder;
-  private readonly workerClock: WorkerClockRecorder;
+  /** 共有の部品（session_io。1 対 1 と 2 体で同じ処理）。 */
+  private readonly uplink: UplinkAudio;
+  private readonly reports: BrowserReports;
+  private readonly maaiWiring: MaaiSessionWiring;
+  private readonly transcriptTracker = new TranscriptTracker();
+  private readonly completion: CompletionTracker;
+  private readonly manifestWriter: ManifestWriter;
   private stt: SttSession | null = null;
   private tts: TtsConnection | null = null;
   private speech: SpeechGeneratorImpl | null = null;
@@ -185,29 +181,15 @@ export class Session {
   private manifestDetails: SessionManifestDetails | null = null;
   /** 画面が報告した使ったアバター（manifest の avatar）。未報告は null。 */
   private avatarManifest: Omit<AvatarReport, 'type'> | null = null;
-  private manifestWrite: Promise<unknown> = Promise.resolve();
   private readonly unsubscribe: Unsubscribe[] = [];
   private tickTimer: NodeJS.Timeout | null = null;
   private closed = false;
 
-  private receivedAudioFrame = 0;
-  private lastMicDbfs: number | null = null;
-  private vap: Vap2chState | null = null;
-  private vapReceivedAt: number | null = null;
-  private workerReadyAt: number | null = null;
-  private transcript: TranscriptSnapshot | null = null;
-  private completion: { p: Maybe<number>; revision: number | null } = {
-    p: absent('no_estimate_yet'),
-    revision: null,
-  };
-  private completionRequested = -1;
   private degradedReason: string | null = 'starting';
   private readonly fixedReasons: string[] = [];
   private lastStatusKey = '';
   /** 再生を始めた segment（履歴の並び）。 */
   private readonly startedInSegment = new Map<number, number>();
-  /** ネットワーク欠損でゼロ埋めされた音声の範囲（FRAMES_DROPPED）。 */
-  private readonly zeroFilledFrames: { from: number; to: number }[] = [];
 
   constructor(private readonly options: SessionOptions) {
     this.session_id = options.session_id;
@@ -232,8 +214,22 @@ export class Session {
                 ? present(options.providers.initiative.staged.conversation_kind)
                 : absent('no_staged_conversation_kind'),
           });
-    this.browserClock = new BrowserClockRecorder(this.emitter);
-    this.workerClock = new WorkerClockRecorder(this.emitter);
+    this.uplink = new UplinkAudio({ counters: this.counters, tracker: this.tracker, time: this.time });
+    this.reports = new BrowserReports({ emitter: this.emitter, time: this.time, counters: this.counters });
+    this.maaiWiring = new MaaiSessionWiring({
+      maai: options.maai,
+      unavailableReason: options.maaiUnavailableReason ?? null,
+      emitter: this.emitter,
+      workerClock: new WorkerClockRecorder(this.emitter),
+      session_id: options.session_id,
+      overlapsZeroFill: (message) => this.overlapsZeroFill(message),
+    });
+    this.completion = new CompletionTracker({ estimator: options.providers.completion });
+    this.manifestWriter = new ManifestWriter({ log: options.log });
+  }
+
+  private get receivedAudioFrame(): number {
+    return this.uplink.receivedAudioFrame;
   }
 
   /** 最初の接続で呼ぶ。プロバイダを開き、MaAI を新しいセッションへ設定し直し、server.hello を返す。 */
@@ -305,37 +301,11 @@ export class Session {
    */
   private recordProviders(): void {
     const { providers } = this.options;
-    const manifest: SessionManifestDetails['providers'] = {};
-    for (const kind of ['stt', 'tts', 'llm'] as const) {
-      const cls = providers.classes[kind];
-      const reason = this.fixedReasons.find((r) => r.startsWith(`${kind}_unavailable:`)) ?? null;
-      const provider = providers.names[kind] === 'unavailable' ? `${kind}_unavailable` : providers.names[kind];
-      manifest[kind] = { provider, provider_class: reason === null ? cls : 'unavailable', reason };
-      this.emitter.emit({
-        event: 'provider.status',
-        provider,
-        provider_class: cls === 'unavailable' ? providers.requested[kind] : cls,
-        status: reason === null ? 'ok' : 'down',
-        reason: reason === null ? absent('opened_at_session_start') : present(reason.slice(0, 300)),
-        retry_attempt: 0,
-        next_retry_ms: absent(reason === null ? 'not_retrying' : 'not_retried_in_this_session'),
-      });
-    }
-    const completion = providers.completion_name;
-    manifest.completion = {
-      provider: completion,
-      provider_class: providers.completion_error === null ? 'production' : 'unavailable',
-      reason: providers.completion_error,
-    };
-    this.emitter.emit({
-      event: 'provider.status',
-      provider: `completion:${completion}`,
-      provider_class: providers.classes.llm === 'test_double' && completion === 'llm_completion_v1' ? 'test_double' : 'production',
-      status: providers.completion_error === null ? 'ok' : 'down',
-      reason: providers.completion_error === null ? absent('created_at_session_start') : present(providers.completion_error.slice(0, 300)),
-      retry_attempt: 0,
-      next_retry_ms: absent('not_retrying'),
+    const base = recordBaseProviders(this.emitter, providers, this.fixedReasons, {
+      client: this.options.maai,
+      unavailableReason: this.options.maaiUnavailableReason ?? null,
     });
+    const manifest: SessionManifestDetails['providers'] = base.providers;
     const initiative = providers.initiative;
     if (initiative?.enabled) {
       const llm = initiative.llm;
@@ -353,12 +323,7 @@ export class Session {
       retry_attempt: 0,
       next_retry_ms: absent('not_retrying'),
     });
-    const maai = this.options.maai;
-    manifest.vap = {
-      provider: 'maai_worker',
-      provider_class: maai === null ? 'unavailable' : maai.providerClass,
-      reason: maai === null ? (this.options.maaiUnavailableReason ?? 'maai_disabled') : null,
-    };
+    manifest.vap = base.vap;
     this.manifestDetails = {
       condition: this.options.condition,
       policy_id: this.options.policy.policy_id,
@@ -401,46 +366,17 @@ export class Session {
 
   /** manifest を書く。音声の保存の有無（session_audio）は必ず載せる。 */
   private describeWithAudio(audio?: SessionAudioManifest): Promise<boolean> {
-    if (this.manifestDetails === null) return Promise.resolve(false);
-    // 書き込みは同じ一時ファイルを使うので順番に。開始直後の avatar.report と重なると rename が失敗する。
-    const write = this.manifestWrite.then(() => {
-      if (this.manifestDetails === null) return false;
-      const session_audio = audio ?? this.audioRecorder?.manifest() ?? sessionAudioOffManifest('SAVE_SESSION_AUDIO_not_set');
-      const details: SessionManifestDetails & { session_audio: SessionAudioManifest } = { ...this.manifestDetails, session_audio, avatar: this.avatarManifest };
-      return this.options.log.describe(details);
-    });
-    this.manifestWrite = write.catch(() => false);
-    return write;
+    return this.manifestWriter.describe(
+      () => this.manifestDetails,
+      () => audio ?? this.audioRecorder?.manifest() ?? sessionAudioOffManifest('SAVE_SESSION_AUDIO_not_set'),
+      () => this.avatarManifest,
+    );
   }
 
   /** 設定があるときだけ音声の保存を始める。起動ログに保存の有無を必ず出す。 */
   private startAudioRecording(): void {
-    const setting: NonNullable<SessionOptions['sessionAudio']> = this.options.sessionAudio ?? readSessionAudioConfig(process.env);
-    if (!setting.enabled) {
-      console.log(`[session ${this.session_id}] session audio: not saved (SAVE_SESSION_AUDIO is not set)`);
-      return;
-    }
-    const dir = setting.dir ?? this.options.log.paths.dir;
-    console.log(`[session ${this.session_id}] session audio: SAVING mic and AI audio to ${dir} (SAVE_SESSION_AUDIO=1; others' voices need a consent procedure first)`);
-    this.audioRecorder = new SessionAudioRecorder({
-      ...setting.recorder,
-      dir,
-      session_id: this.session_id,
-      minFreeBytes: setting.min_free_bytes,
-      ...(setting.fs ? { fs: setting.fs } : {}),
-      onProblem: (problem) => {
-        console.error(`[session ${this.session_id}] session audio: ${problem.kind}: ${problem.message}`);
-        this.emitter.emit({
-          event: 'provider.status',
-          provider: 'session_audio',
-          provider_class: 'production',
-          status: 'degraded',
-          reason: present(`${problem.kind}: ${problem.message}`.slice(0, 300)),
-          retry_attempt: 0,
-          next_retry_ms: absent('not_retrying'),
-        });
-      },
-    });
+    const setting: SessionAudioSetting = this.options.sessionAudio ?? readSessionAudioConfig(process.env);
+    this.audioRecorder = startSessionAudio(setting, { session_id: this.session_id, dir: this.options.log.paths?.dir ?? '', emitter: this.emitter });
   }
 
   /** 切断後に同じセッションへ戻ってきた。 */
@@ -672,57 +608,16 @@ export class Session {
   }
 
   private attachMaai(): void {
-    const maai = this.options.maai;
-    if (maai === null) {
-      this.fixedReasons.push(`vap_unavailable:${this.options.maaiUnavailableReason ?? 'maai_disabled'}`);
-      return;
-    }
-    this.unsubscribe.push(
-      attachMaaiEventBridge(maai, { emitter: this.emitter, clock: this.workerClock, systemChannelSource: 'written' }),
-    );
-    this.unsubscribe.push(
-      maai.subscribe({
-        onReady: (_ready, at) => {
-          this.workerReadyAt = at;
-        },
-        onError: (error, at) => {
-          // 文脈を捨てて続行した（READY は来ない）。VAP の助走を数え直す。準備前のワーカーを「準備済み」にはしない。
-          if (error.code === 'process_failed_reset' && this.workerReadyAt !== null) this.workerReadyAt = at;
-        },
-        onVapState: (message, at) => {
-          // 設定し直す前の結果（前のセッションの番号）は使わない。
-          if (this.workerReadyAt === null || message.channel_layout !== '2ch') return;
-          // ゼロ埋めの音声で計算した値は VAP として使わない（docs/known_gaps.md §12）。入力を更新しなければ、続いたときだけ stale になる。
-          if (this.overlapsZeroFill(message)) return;
-          this.vap = stripType(message) as Vap2chState;
-          this.vapReceivedAt = at;
-          this.outcome?.onVap(at, message.audio_frame, message.vad);
-        },
-        onFramesDropped: (message) => {
-          if (!message.zero_filled) return;
-          this.zeroFilledFrames.push({ from: message.from_audio_frame, to: message.from_audio_frame + message.sample_count });
-          if (this.zeroFilledFrames.length > 64) this.zeroFilledFrames.shift();
-        },
-        onAvailability: (availability) => {
-          if (!availability.vap_available) {
-            this.workerReadyAt = null;
-            this.vap = null;
-            this.vapReceivedAt = null;
-          }
-        },
-      }),
-    );
-    // 前のセッションの番号と結果を混ぜないよう、ワーカーにも新しい CONFIGURE を送る。
-    // ブラウザの audio_frame は同じページの中では 0 に戻らない（猶予切れの後に同じタブから来た場合など）。
-    void maai.reconfigure(this.session_id);
+    const attached = this.maaiWiring.attach((_state, at, message) => {
+      this.outcome?.onVap(at, message.audio_frame, message.vad);
+    });
+    if (attached.fixedReason !== null) this.fixedReasons.push(attached.fixedReason);
+    this.unsubscribe.push(...attached.unsubscribe);
   }
 
-  /** vap.state の入力の窓（worker_input の from〜audio_frame）がゼロ埋めの範囲にかかっているか。 */
+  /** vap.state の入力の窓がゼロ埋めの範囲にかかっているか（判定は MaaiSessionWiring）。 */
   private overlapsZeroFill(message: { audio_frame: number; raw: unknown }): boolean {
-    if (this.zeroFilledFrames.length === 0) return false;
-    const input = (message.raw as { worker_input?: { from_audio_frame?: unknown } } | null)?.worker_input;
-    const from = typeof input?.from_audio_frame === 'number' ? input.from_audio_frame : message.audio_frame - ZERO_FILL_VAP_WINDOW_FRAMES;
-    return this.zeroFilledFrames.some((z) => from < z.to && message.audio_frame > z.from);
+    return this.maaiWiring.overlapsZeroFill(message);
   }
 
   private recordClient(hello: ClientHello, connection: 'new_session' | 'reattached'): void {
@@ -742,25 +637,12 @@ export class Session {
 
   handleBinary(data: Uint8Array): void {
     if (this.closed) return;
-    let frame: ReturnType<typeof decodeAudioFrame>;
-    try {
-      frame = decodeAudioFrame(data);
-    } catch {
-      this.counters.bad_uplink_frames += 1;
-      return;
-    }
-    this.counters.uplink_frames += 1;
-    const end = frame.audio_frame + frame.sample_count;
-    this.receivedAudioFrame = Math.max(this.receivedAudioFrame, end);
-    this.lastMicDbfs = Math.max(FALLBACK_ENERGY_FLOOR_DBFS, rmsDbfs(frame.mic));
-    this.tracker.observeFrame(end, rmsDbfs(frame.sys));
-    this.audioRecorder?.push(frame.audio_frame, frame.mic, frame.sys, this.time.monotonicMs());
-    this.stt?.pushAudio(frame.audio_frame, frame.mic);
-    if (this.workerReadyAt !== null) this.options.maai?.sendEncodedAudio(data, frame.sample_count);
+    this.uplink.handle(data, { recorder: this.audioRecorder, stt: this.stt, maai: this.maaiWiring });
   }
 
   handleJson(message: BrowserToNode): void {
     if (this.closed) return;
+    if (this.reports.handle(message, (m) => this.send(m))) return;
     switch (message.type) {
       case 'client.hello':
         return; // 接続の層で扱う
@@ -770,21 +652,6 @@ export class Session {
         void this.describeWithAudio();
         return;
       }
-      case 'clock.ping':
-        this.send({
-          type: 'clock.pong',
-          seq: message.seq,
-          client_t_ms: message.client_t_ms,
-          server_t_ms: this.time.monotonicMs(),
-        });
-        return;
-      case 'clock.report':
-        this.browserClock.record({
-          offset_ms: message.offset_ms,
-          rtt_ms: message.rtt_ms,
-          uncertainty_ms: message.uncertainty_ms,
-        });
-        return;
       case 'playback.started': {
         const t = this.toServer(message.client_t_ms);
         this.tracker.started(message.audio_playback_id, message.generation, message.audio_frame, t);
@@ -803,114 +670,45 @@ export class Session {
         this.tracker.ended(message.audio_playback_id);
         return;
       }
-      case 'audio.report': {
-        const mapping = this.browserClock.mapping();
-        if (mapping === null) {
-          this.counters.audio_reports_before_clock += 1;
-          return;
-        }
-        this.emitter.emit(draftFromAudioReport(message), atFromBrowser(message.client_t_ms, mapping));
-        return;
-      }
-      case 'gaze.report': {
-        // 時計差の推定がないと描画の時刻（rendered_at）を orchestrator の基準へ写せない。受信時刻で代えない。
-        const mapping = this.browserClock.mapping();
-        if (mapping === null) {
-          this.counters.gaze_reports_before_clock += 1;
-          return;
-        }
-        const draft = draftFromGazeReport(message, mapping);
-        const at = message.client_t_ms.value !== null ? atFromBrowser(message.client_t_ms.value, mapping) : undefined;
-        this.emitter.emit(draft, at);
-        return;
-      }
       case 'signal.report':
         // 合図の描画の報告（記録だけ。吸気の完了は orchestrator の時計で判定する）。合図と対応しないものは数だけ残す。
-        if (!this.negotiation?.onSignalReport(message, this.browserClock.mapping())) this.counters.signal_reports_ignored += 1;
+        if (!this.negotiation?.onSignalReport(message, this.reports.browserClock.mapping())) this.counters.signal_reports_ignored += 1;
         return;
     }
   }
 
   private toServer(clientMs: number): number {
-    const mapping = this.browserClock.mapping();
-    return mapping === null ? this.time.monotonicMs() : Math.max(0, mapping.toServerMs(clientMs));
+    return this.reports.toServer(clientMs);
   }
 
   // ---- STT ---------------------------------------------------------------------
 
   private onSttResult(result: SttResult): void {
-    const text = this.utterances.update(result.segment_id, result.asr_segment_id, result.text);
-    this.history.upsertUserSegment({
-      text,
-      segment_id: result.segment_id,
-      transcript_revision: result.transcript_revision,
-      is_final: result.kind === 'final',
-      audio_frame_end: result.audio_frame_end,
-    });
-    const snapshot: TranscriptSnapshot = {
-      segment_id: result.segment_id,
-      asr_segment_id: result.asr_segment_id,
-      asr_segment_frame_start: result.asr_segment_frame_start,
-      transcript_revision: result.transcript_revision,
-      text: result.text,
-      stable_text: result.stable_text,
-      unstable_text: result.unstable_text,
-      is_final: result.kind === 'final',
-      stability: result.stability,
-      stability_source: result.stability_source,
-      audio_frame_end: result.audio_frame_end,
-      timing_precision: result.timing_precision,
-      words: result.words,
-      received_at: result.received_at,
-    };
-    this.transcript = snapshot;
+    const snapshot = this.transcriptTracker.onResult(result, this.history);
     this.outcome?.onStt(result);
-    this.requestCompletion(snapshot);
+    this.completion.request(snapshot, this.turnState, this.history, () => this.closed);
     // 判定は非同期（LLM を待たない）。増分で起動し、ターン完了の推定とは条件を共有しない（計画 §4.5）。
     this.initiative?.onSttResult(result);
-  }
-
-  /** 推定は非同期。新しい revision の結果だけを残す（E1 が segment の境界で古い値を読まない）。 */
-  private requestCompletion(snapshot: TranscriptSnapshot): void {
-    if (snapshot.segment_id < this.turnState.segment_id) return;
-    const revision = snapshot.transcript_revision;
-    this.completionRequested = revision;
-    const partial = userTextFor(this.turnState, snapshot);
-    const history = this.history.snapshot().filter((e) => !(e.role === 'user' && e.segment_id === snapshot.segment_id));
-    this.options.providers.completion
-      .estimate(history, partial, { transcript_revision: revision })
-      .then((estimate) => {
-        if (this.closed || revision < (this.completion.revision ?? -1)) return;
-        this.completion = { p: estimate.p, revision };
-      })
-      .catch(() => undefined);
   }
 
   // ---- tick --------------------------------------------------------------------
 
   private inputs(holdStart: string | null = null): TurnInputs {
-    const t = this.transcript;
-    return {
-      vap: this.vap === null ? absent('no_vap_state_since_ready') : present(this.vap),
-      vap_received_at: this.vapReceivedAt === null ? absent('no_vap_state_since_ready') : present(this.vapReceivedAt),
+    const t = this.transcriptTracker.latest;
+    return buildTurnInputs({
+      maai: this.maaiWiring,
+      maaiEnabled: this.options.maai !== null,
+      uplink: this.uplink,
+      transcript: t,
+      completion: this.completion,
       start_blocked_reason: this.startBlockedReason() ?? holdStart,
-      received_audio_frame: this.receivedAudioFrame,
-      vap_worker_started_at:
-        this.workerReadyAt === null ? absent(this.options.maai === null ? 'maai_disabled' : 'worker_not_ready') : present(this.workerReadyAt),
-      // 単位は mic の RMS の dBFS（Node が計算）。VAP ではない。
-      fallback_energy: this.lastMicDbfs === null ? absent('no_uplink_audio_yet') : present(this.lastMicDbfs),
-      transcript: t === null ? absent('no_transcript_yet') : present(t),
-      completion_p: this.completion.p,
-      completion_revision:
-        this.completion.revision === null ? absent('no_estimate_yet') : present(this.completion.revision),
-      similarity_to_prepared:
+      similarity:
         t === null || this.prefetch === null
           ? absent('no_transcript_yet')
           : this.prefetch.similarityToPrepared(userTextFor(this.turnState, t), this.turnState.segment_id),
       prefetch: this.prefetch?.input() ?? { state: 'idle' },
       playback: this.tracker.input(),
-      woz: [],
-    };
+    });
   }
 
   /** 再生を今は始められない理由。TurnManager は許可が出ても segment を進めない。 */
@@ -946,7 +744,7 @@ export class Session {
           user_speaking: previous.user_speaking,
           permitted: previous.permitted_to_speak,
           invitation_detected: previous.invitation.detected,
-          p_now_ai: this.vap === null ? null : readVap(this.vap, vapDirectionSettings(this.options.policy)).p_now_ai,
+          p_now_ai: this.maaiWiring.vap === null ? null : readVap(this.maaiWiring.vap, vapDirectionSettings(this.options.policy)).p_now_ai,
         }) ?? null;
       const inputs = this.inputs(holdStart);
       let { state, decisions } = this.turnManager.step(previous, inputs, now);
@@ -993,7 +791,7 @@ export class Session {
     const wiring = this.vocalCue;
     if (wiring === null) return;
     const state = this.turnState;
-    const vap = state.vap_freshness === 'fresh' ? this.vap : null;
+    const vap = state.vap_freshness === 'fresh' ? this.maaiWiring.vap : null;
     const view = vap === null ? null : readVap(vap, vapDirectionSettings(this.options.policy));
     const started = wiring.tick({
       now,

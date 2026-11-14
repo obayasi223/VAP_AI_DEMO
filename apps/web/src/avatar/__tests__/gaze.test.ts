@@ -2,6 +2,7 @@ import { GazeReport } from '@llm-vap/contracts';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GAZE, GAZE_SUPERSEDED_BEFORE_RENDER, GazeController, GazeLayer, GazeReporter } from '../gaze';
 import { PoseFrame } from '../pose';
+import { gazeGeometry, TWO_AI_LAYOUT } from '../stage_layout';
 import { seededRng, SmoothDamp } from '../util';
 
 function settle(controller: GazeController, ms = 2000) {
@@ -186,5 +187,83 @@ describe('GazeReporter', () => {
       ['away', false, 'page_hidden_no_raf'],
       ['user', true, 10],
     ]);
+  });
+});
+
+describe('GazeController の幾何（2 体。docs/design/two_ai/03 §2.3）', () => {
+  const geometryA = gazeGeometry(TWO_AI_LAYOUT, 'A', 1.5);
+
+  it('peer の目標で頭が幾何の角へ収束し、眼は 0（lookAt が相手の眼へ向ける）', () => {
+    const c = new GazeController(seededRng(11), {}, geometryA);
+    expect(c.setTarget('peer')).toBe(true);
+    const s = settle(c);
+    expect(s.target).toBe('peer');
+    expect(s.headYawDeg).toBeCloseTo(geometryA.peer.headYawDeg, 2);
+    expect(s.eyeYawDeg).toBeCloseTo(0, 6);
+    expect(s.awayAmount).toBe(0);
+  });
+
+  it('user の目標は幾何の角に従う（体が回っているので頭を利用者へ回す）', () => {
+    const c = new GazeController(seededRng(12), {}, geometryA);
+    c.setTarget('peer');
+    settle(c);
+    c.setTarget('user');
+    const s = settle(c);
+    expect(s.headYawDeg).toBeCloseTo(geometryA.user.headYawDeg, 2);
+    expect(s.headPitchDeg).toBeCloseTo(geometryA.user.headPitchDeg, 2);
+  });
+
+  it('読み込み後に setGeometry すると、初期の user の目標も幾何の角へ動く', () => {
+    const c = new GazeController(seededRng(13));
+    c.setGeometry(geometryA);
+    expect(settle(c).headYawDeg).toBeCloseTo(geometryA.user.headYawDeg, 2);
+  });
+
+  it('away は awaySign の側へ、体の正面を基準に（A は −）', () => {
+    const c = new GazeController(seededRng(14), {}, geometryA);
+    c.setTarget('peer');
+    settle(c);
+    c.setTarget('away');
+    const s = settle(c);
+    expect(s.headYawDeg).toBeLessThan(0);
+    expect(s.eyeYawDeg).toBeLessThan(0);
+    expect(Math.abs(s.headYawDeg)).toBeLessThanOrEqual(DEFAULT_GAZE.awayHeadYawDeg * (1 + DEFAULT_GAZE.jitter) + 1e-9);
+    expect(s.awayAmount).toBe(1);
+  });
+
+  it('幾何なしは従来の値と同じ（回帰）', () => {
+    const c = new GazeController(seededRng(2));
+    c.setTarget('away');
+    const s = settle(c);
+    // 従来の式: 目標 = 既定の大きさ × 揺らぎ（正の向き）
+    const rng = seededRng(2);
+    const vary = () => 1 + (rng() * 2 - 1) * DEFAULT_GAZE.jitter;
+    const yawScale = vary();
+    expect(s.eyeYawDeg).toBeCloseTo(DEFAULT_GAZE.awayEyeYawDeg * yawScale, 2);
+    expect(s.headYawDeg).toBeCloseTo(DEFAULT_GAZE.awayHeadYawDeg * yawScale, 2);
+    expect(s.eyePitchDeg).toBeCloseTo(DEFAULT_GAZE.awayEyePitchDeg * vary(), 2);
+  });
+
+  it('GazeLayer は peer の間もカメラ補正（lookAt）を使う', () => {
+    const c = new GazeController(seededRng(15), {}, geometryA);
+    const layer = new GazeLayer(c, 0.4);
+    c.setTarget('peer');
+    const frame = new PoseFrame();
+    for (let t = 0; t < 2000; t += 16) {
+      frame.begin();
+      layer.update({ dtMs: 16, nowMs: t }, frame);
+    }
+    expect(frame.eye.userWeight).toBe(1);
+    const head = frame.bones.get('head')!;
+    const neck = frame.bones.get('neck')!;
+    expect(((head.y + neck.y) * 180) / Math.PI).toBeCloseTo(geometryA.peer.headYawDeg, 2);
+  });
+
+  it('GazeReporter は peer も報告し、契約に合う', () => {
+    const reports: GazeReport[] = [];
+    const r = new GazeReporter((report) => reports.push(GazeReport.parse(report)));
+    r.commanded('peer', true);
+    r.rendered(42);
+    expect(reports).toEqual([{ type: 'gaze.report', target: 'peer', visible: true, client_t_ms: { value: 42 } }]);
   });
 });

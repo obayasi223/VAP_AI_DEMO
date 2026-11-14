@@ -381,6 +381,7 @@ const twoAiEventFixtures: { name: string; value: unknown }[] = [
         ended_by: 'corrected',
         stt_final_after_ms: twoAiMs(900),
         judgment_after_ms: absent('researcher_path_without_assist'),
+        credited_ms: absent('not_timeout'),
       },
       near_marker: false,
       resumed_at: absent('drop_resume'),

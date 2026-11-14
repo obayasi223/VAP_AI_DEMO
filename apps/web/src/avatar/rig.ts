@@ -19,8 +19,11 @@ export interface AvatarRig {
   readonly breathMorph: BreathMorphInfo;
   /** 吸気の層が書く名前の上書き（上胸の骨など）。 */
   readonly breathOutput: Partial<BreathOutputNames>;
-  /** PoseFrame を骨・モーフ・眼へ当てる。 */
-  applyFrame(frame: PoseFrame, camera: THREE.Camera, dtMs: number): void;
+  /**
+   * PoseFrame を骨・モーフ・眼へ当てる。lookAtWorld は眼が向く世界座標（1 体ではカメラの位置、
+   * 2 体では目標が user ならカメラ、peer なら相手の眼。docs/design/two_ai/03 §2.1）。
+   */
+  applyFrame(frame: PoseFrame, lookAtWorld: THREE.Vector3, dtMs: number): void;
   /** 最初の姿勢の後の初期化（行列の更新、髪の揺れの初期化）。 */
   settle(): void;
   /** テクスチャの補間の設定（レンダラーの上限が要る）。 */

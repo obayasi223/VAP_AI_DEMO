@@ -69,7 +69,7 @@ describe('createGlbRig の正規化（骨の軸が違っても層の向きが同
     const before = worldDir(head);
     const frame = new PoseFrame();
     frame.addBone('head', 0, 0.5, 0);
-    rig.applyFrame(frame, camera, 16);
+    rig.applyFrame(frame, camera.position, 16);
     root.updateMatrixWorld(true);
     const rotation = worldDir(head);
     const expected = before.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.5);
@@ -83,7 +83,7 @@ describe('createGlbRig の正規化（骨の軸が違っても層の向きが同
     const neckWorld = neck.getWorldQuaternion(new THREE.Quaternion()).clone();
     const frame = new PoseFrame();
     frame.addBone('neck', 0.6, 0.3, -0.2);
-    rig.applyFrame(frame, camera, 16);
+    rig.applyFrame(frame, camera.position, 16);
     root.updateMatrixWorld(true);
     expect(neck.getWorldQuaternion(new THREE.Quaternion()).angleTo(neckWorld)).toBeGreaterThan(0.1);
     expect(shoulder.getWorldQuaternion(new THREE.Quaternion()).angleTo(shoulderWorld)).toBeLessThan(1e-3);
@@ -94,7 +94,7 @@ describe('createGlbRig の正規化（骨の軸が違っても層の向きが同
     const rig = createGlbRig(root, glb);
     const frame = new PoseFrame();
     frame.addBone('leftUpperArm', 0, 0, -72 * DEG2RAD);
-    rig.applyFrame(frame, camera, 16);
+    rig.applyFrame(frame, camera.position, 16);
     root.updateMatrixWorld(true);
     const arm = rig.rawBone('leftUpperArm')!;
     const lower = rig.rawBone('leftLowerArm')!;
@@ -109,7 +109,7 @@ describe('createGlbRig の正規化（骨の軸が違っても層の向きが同
     const frame = new PoseFrame();
     frame.eye.userWeight = 0;
     frame.eye.yawDeg = 45;
-    rig.applyFrame(frame, camera, 16);
+    rig.applyFrame(frame, camera.position, 16);
     expect(rig.eyeInput().yawDeg).toBeCloseTo(45);
     expect(rig.readEye('left').yawDeg).toBeCloseTo(6);
     expect(rig.readEye('right').yawDeg).toBeCloseTo(4);

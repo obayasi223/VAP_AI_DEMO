@@ -1,0 +1,30 @@
+{
+  "note": "架空の人物「サトウさん」（就職か大学院か）。sessions/ の実会話は使っていない。合成の発話と、それから作った台帳。",
+  "utterances": [
+    { "segment_id": 1, "text": "就職するか大学院に進むかで、ずっと迷っています。" },
+    { "segment_id": 2, "text": "研究は楽しいんですけど、早く自分で稼ぎたい気持ちもあって。" },
+    { "segment_id": 3, "text": "留学も考えたんですが、費用がかかるのでやめました。" },
+    { "segment_id": 4, "text": "インターンの締切は2月末で、説明会は毎月第2土曜にあります。" },
+    { "segment_id": 5, "text": "いちばん引っかかっているのは、どっちを選んでも後悔しそうなことです。" },
+    { "segment_id": 6, "text": "指導教員にいつ切り出すかも決めないといけなくて。" }
+  ],
+  "ledger_output": {
+    "core": { "id": "core_1", "text": "どちらを選んでも後悔しそう", "evidence": [{ "span": "どっちを選んでも後悔しそう", "segment_ids": [5] }] },
+    "options": [
+      { "id": "opt_1", "text": "就職する", "evidence": [{ "span": "就職する", "segment_ids": [1] }] },
+      { "id": "opt_2", "text": "大学院に進む", "evidence": [{ "span": "大学院に進む", "segment_ids": [1] }] }
+    ],
+    "dropped_options": [
+      { "id": "drop_1", "text": "留学", "reason": "費用がかかる", "evidence": [{ "span": "留学も考えたんですが、費用がかかるのでやめました", "segment_ids": [3] }] }
+    ],
+    "facts": [
+      { "id": "fact_1", "text": "インターンの締切は2月末", "kind": "date", "slip_eligible": true, "evidence": [{ "span": "インターンの締切は2月末", "segment_ids": [4] }] },
+      { "id": "fact_2", "text": "説明会は毎月第2土曜", "kind": "date", "slip_eligible": true, "evidence": [{ "span": "説明会は毎月第2土曜", "segment_ids": [4] }] }
+    ],
+    "values": [
+      { "id": "val_1", "text": "研究は楽しい", "evidence": [{ "span": "研究は楽しい", "segment_ids": [2] }] },
+      { "id": "val_2", "text": "早く自分で稼ぎたい", "evidence": [{ "span": "早く自分で稼ぎたい", "segment_ids": [2] }] }
+    ],
+    "sensitive": []
+  }
+}

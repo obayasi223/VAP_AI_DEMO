@@ -4,7 +4,7 @@
  *  - 研究者のメモ（research.note）を今のセッションのログへ research.note イベントとして書き、ack を返す。
  * 契約は packages/contracts/src/research_rpc.ts。
  */
-import { ResearchToNode, type EventEmitter, type NodeToResearch, type Policy } from '@llm-vap/contracts';
+import { ResearchToNode, type EventEmitter, type NodeToResearch, type Policy, type ResearchTwoAiArm, type ResearchTwoAiArmAck, type ResearchWoz, type ResearchWozAck } from '@llm-vap/contracts';
 import { vapDirectionSettings } from '../control/vap_direction';
 
 export function researchConfigMessage(policy: Policy, condition: string): NodeToResearch {
@@ -23,8 +23,14 @@ export interface NoteTarget {
   emitter: EventEmitter;
 }
 
+/** 2 体のモードの server が渡す arm と WoZ の受け口（1 対 1 のモードでは渡さない）。 */
+export interface TwoAiResearchHandlers {
+  arm(message: ResearchTwoAiArm): ResearchTwoAiArmAck | Promise<ResearchTwoAiArmAck>;
+  woz(message: ResearchWoz): ResearchWozAck;
+}
+
 /** 上りの 1 テキスト枠を処理して、返す ack を返す。target は今のセッション（なければ null）。 */
-export function handleResearchMessage(text: string, target: NoteTarget | null): NodeToResearch {
+export function handleResearchMessage(text: string, target: NoteTarget | null, twoAi: TwoAiResearchHandlers | null = null): NodeToResearch | Promise<NodeToResearch> {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -45,9 +51,11 @@ export function handleResearchMessage(text: string, target: NoteTarget | null): 
   const message = parsed.data;
   // two_ai の arm と WoZ は 2 体のモードの server が受ける（docs/design/two_ai/05 §2.2）。ここ（1 対 1 のメモの口）は断る。
   if (message.type === 'research.two_ai.arm') {
+    if (twoAi !== null) return twoAi.arm(message);
     return { type: 'research.two_ai.arm.ack', arm_id: message.arm_id, status: 'rejected', detail: 'not_two_ai_mode' };
   }
   if (message.type === 'research.woz') {
+    if (twoAi !== null) return twoAi.woz(message);
     return { type: 'research.woz.ack', woz_id: message.woz_id, status: 'rejected', detail: 'not_two_ai_session', phase: null };
   }
   const note = message;

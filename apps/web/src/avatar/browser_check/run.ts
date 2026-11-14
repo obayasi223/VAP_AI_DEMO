@@ -5,6 +5,7 @@
  * VRM は Playwright の route で配信するので、リポジトリには置かない。
  * next dev はこのスクリプトが起動し、自分の子プロセスグループだけを止める。
  * 自然さの評価はできない。描画と値の変化の確認だけ。
+ * AVATAR_TWO_AI_SHOTS=1 のときは、最後に /dev/two_ai の 2 体の静止画（two_ai_shots.ts）も撮る（符号の確認だけ）。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -12,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Page } from 'playwright';
 import { GazeReport } from '@llm-vap/contracts';
+import { twoAiShots } from './two_ai_shots';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.resolve(here, '../../..');
@@ -378,6 +380,12 @@ async function main(): Promise<void> {
     await until(page, 't.frame > 3', 60000);
     const canvases = await page.evaluate(() => document.querySelectorAll('[data-testid=avatar-stage] canvas').length);
     check('canvas が1枚だけ（Strict Mode の二重実行で増えない）', canvases === 1, { canvases });
+
+    // 8. 2 体のステージ（任意。モデルは public/models にあるものを使う）。
+    if (process.env.AVATAR_TWO_AI_SHOTS === '1') {
+      const twoAi = await twoAiShots(page, `http://127.0.0.1:${PORT}`, path.join(outDir!, 'two_ai'), process.env.AVATAR_TWO_AI_QUERY ?? '');
+      for (const c of twoAi.checks) check(`two_ai: ${c.name}`, c.ok, c.detail);
+    }
   } finally {
     await writeFile(path.join(outDir!, 'results.json'), JSON.stringify(results, null, 1));
     await writeFile(path.join(outDir!, 'next.log'), nextLog);

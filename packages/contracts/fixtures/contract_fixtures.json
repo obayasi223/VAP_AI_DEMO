@@ -2598,6 +2598,10 @@
             "judgment_after_ms": {
               "value": null,
               "null_reason": "researcher_path_without_assist"
+            },
+            "credited_ms": {
+              "value": null,
+              "null_reason": "not_timeout"
             }
           },
           "near_marker": false,
@@ -4676,6 +4680,10 @@
           "judgment_after_ms": {
             "value": null,
             "null_reason": "researcher_path_without_assist"
+          },
+          "credited_ms": {
+            "value": null,
+            "null_reason": "not_timeout"
           }
         },
         "near_marker": false,

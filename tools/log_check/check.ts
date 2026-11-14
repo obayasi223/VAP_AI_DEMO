@@ -11,6 +11,8 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { EVENT_ROUTES, EVENT_NAMES, ResearchEvent, type ResearchEventName } from '@llm-vap/contracts';
 import { computeLatencyReport, summarizeCost, type CostSummary, type LatencyReport } from '@llm-vap/analysis';
+import { checkTwoAiAcceptance, type AcceptanceRow } from '../two_ai_report/acceptance';
+import { sessionFromValues, type LoadOptions } from '../two_ai_report/session';
 
 export interface InvalidLine {
   line: number;
@@ -60,12 +62,16 @@ export interface LogCheckReport {
   clock_sync: ClockSyncSummary[];
   cost: CostSummary;
   latency: LatencyReport;
+  /** 2 体のセッション（manifest.mode === 'two_ai' か封筒に two_ai がある）だけ。受け入れ基準の自動の列（docs/design/two_ai/04）。 */
+  two_ai: { rows: AcceptanceRow[]; notes: string[] } | null;
 }
 
 export interface CheckOptions {
   /** 警告も失敗として扱う。 */
   strict?: boolean;
   maxListedInvalid?: number;
+  /** 2 体の規則で読む設定と台本（既定は manifest のパスを作業ディレクトリから）。 */
+  twoAi?: LoadOptions;
 }
 
 const INCOMPLETE_LINE = 'unterminated_last_line';
@@ -274,8 +280,9 @@ export async function checkLog(input: string, options: CheckOptions = {}): Promi
     }
   }
   if (manifest !== null && manifest.condition === undefined) evidenceReasons.push('manifest に条件がない');
+  const twoAiSession = (manifest as { mode?: unknown } | null)?.mode === 'two_ai' || events.some((e) => e.two_ai !== undefined);
   // 提案条件なのに交渉が動いていないセッションは、condition が名ばかりなので数えない（session.ts の noteInactiveNegotiation）。
-  if (manifest?.condition !== undefined && manifest.condition !== 'reactive') {
+  if (!twoAiSession && manifest?.condition !== undefined && manifest.condition !== 'reactive') {
     const used = manifest.initiative?.candidates_used_for;
     if (used !== `negotiation:${manifest.condition}`) {
       const reason = manifest.initiative?.reason;
@@ -331,6 +338,16 @@ export async function checkLog(input: string, options: CheckOptions = {}): Promi
     warnings.push('vap.state があるのに clock.sync(worker_audio_frame) がない');
   }
 
+  // 2 体の規則（docs/design/two_ai/04 A と受け入れ基準の自動の列）。1 対 1 のログには掛けない（AC10）。
+  let twoAi: LogCheckReport['two_ai'] = null;
+  if (twoAiSession) {
+    const data = sessionFromValues(events, manifest as Record<string, unknown> | null, options.twoAi ?? {}, dirname(paths.events));
+    const result = checkTwoAiAcceptance(data);
+    for (const failure of result.failures) failures.push(`two_ai ${failure}`);
+    for (const note of data.notes) warnings.push(`two_ai ${note}`);
+    twoAi = { rows: result.rows, notes: data.notes };
+  }
+
   const times = events.map((e) => e.t_monotonic_ms);
   const first = events[0];
   const last = events[events.length - 1];
@@ -366,6 +383,7 @@ export async function checkLog(input: string, options: CheckOptions = {}): Promi
     clock_sync: [...clockBySource.values()],
     cost: summarizeCost(events),
     latency: computeLatencyReport(events),
+    two_ai: twoAi,
   };
 }
 
@@ -385,6 +403,11 @@ export function formatReport(report: LogCheckReport): string {
   out.push(`セッション: ${report.session_ids.join(', ') || 'なし'}、条件: ${report.conditions.join(', ') || 'なし'}`);
   if (report.wall_clock_range) out.push(`時刻: ${report.wall_clock_range.first} 〜 ${report.wall_clock_range.last}`);
   out.push(`受け入れの証拠: ${report.acceptance_evidence.eligible ? '対象' : `対象外（${report.acceptance_evidence.reasons.join('、')}）`}`);
+
+  if (report.two_ai !== null) {
+    out.push('2 体の受け入れ基準（自動の列）:');
+    for (const row of report.two_ai.rows) out.push(`  ${row.ok === null ? '—   ' : row.ok ? '合格' : '不合格'} ${row.id}: ${row.detail}`);
+  }
 
   out.push('イベント数:');
   for (const [name, count] of Object.entries(report.counts_by_event).sort()) out.push(`  ${name}: ${count}`);

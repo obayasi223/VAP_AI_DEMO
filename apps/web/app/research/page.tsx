@@ -3,7 +3,7 @@
 /**
  * 研究者画面（I1 の状態表示＋I2 のライブ表示）。データ源はクエリで選ぶ。
  *   /research                       データ源なし
- *   /research?source=fake           偽のイベント列（画面に偽データと表示する）
+ *   /research?source=fake           偽のイベント列（画面に偽データと表示する）。&mode=two_ai で 2 体のモードの偽の列
  *   /research?source=ws&url=ws://…  WS（配線は J）
  * JSONL は下のファイル選択から読む。
  */
@@ -20,10 +20,10 @@ export default function ResearchPage() {
   useEffect(() => {
     setFeed(feedFromQuery(window.location.search));
   }, []);
-  const { snapshot, sendNote } = useResearchFeed(feed);
+  const { snapshot, sendNote, sendWoz, armTwoAi } = useResearchFeed(feed);
   return (
     <>
-      <ResearchDashboard snapshot={snapshot} onSendNote={sendNote} />
+      <ResearchDashboard snapshot={snapshot} onSendNote={sendNote} onSendWoz={sendWoz} onArmTwoAi={armTwoAi} />
       <div className={styles.controls}>
         <label>
           JSONL を読む:{' '}

@@ -15,6 +15,7 @@ import type {
   EventDraft,
   EventEmitter,
   LlmProvider,
+  LlmPurpose,
   PlaybackAlignmentSource,
   PlaybackEnded,
   PlaybackPosition,
@@ -30,12 +31,15 @@ import type {
   SpeechStopOptions,
   SpokenTextPrecision,
   TimeSource,
+  TtsCharAlignment,
   TtsChunk,
   TtsConnection,
   TtsContext,
   TtsContextLoss as ContractTtsContextLoss,
+  TwoAiTurnOrigin,
   Unsubscribe,
 } from '@llm-vap/contracts';
+import { SharedPlaybackCounters } from './shared_counters';
 import { AlignmentTimeline, proportionalText } from './alignment_timeline';
 import type { ResponsePromptBuilder } from './response_prompt';
 import { SpeechTextTrack, sharedReadingOptions, type ReadingTrackOptions } from './reading';
@@ -130,6 +134,21 @@ export interface SpeechGeneratorOptions {
    * initReading の前なら解析器なしで、従来どおり（TTS の文は元の文のまま、reading なし）。
    */
   reading?: ReadingTrackOptions;
+  /** 再生 ID と世代の数え（2 体のモードで 2 スロットが共有する。06 §5）。省略時は自分専用（今と同じ）。first_playback_id と同時に渡したら counters を優先。 */
+  counters?: SharedPlaybackCounters;
+  /** 応答の LLM と用途を要求ごとに選ぶ。省略時は { llm: options.llm, purpose: 'prefetch' }（今と同じ）。 */
+  llmFor?: (request: PrepareRequest) => { llm: LlmProvider; purpose: LlmPurpose };
+}
+
+/** 保持した音声（受け止めなど。06 §5）。pcm と alignment は同じ長さの chunk の列（alignment が取れない chunk は null）。 */
+export interface CachedSpeechAudio {
+  text: string;
+  sample_rate_hz: number;
+  pcm: Int16Array[];
+  alignment: (TtsCharAlignment | null)[];
+  samples: number;
+  /** samples ÷ (sample_rate_hz / 1000)。manifest の ack_templates.synthesized_ms。 */
+  synthesized_ms: number;
 }
 
 interface PlannedStop {
@@ -187,8 +206,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
   private readonly stateListeners = new Set<(change: SpeechStateChange) => void>();
   private readonly finishedListeners = new Set<(finished: SpeechFinished) => void>();
   private readonly unsubscribe: Unsubscribe[];
-  private nextId: number;
-  private sessionGeneration = 0;
+  private readonly playback: SharedPlaybackCounters;
   private counters = {
     stale_chunks_dropped: 0,
     stale_reports_dropped: 0,
@@ -198,7 +216,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
   };
 
   constructor(private readonly options: SpeechGeneratorOptions) {
-    this.nextId = options.first_playback_id ?? 1;
+    this.playback = options.counters ?? new SharedPlaybackCounters(options.first_playback_id ?? 1);
     this.unsubscribe = [
       options.tts.onChunk((chunk) => this.handleChunk(chunk)),
       options.tts.onStatus((status) => {
@@ -220,7 +238,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
   }
 
   get generation(): number {
-    return this.sessionGeneration;
+    return this.playback.generation;
   }
 
   stats(): Readonly<SpeechGeneratorImpl['counters']> {
@@ -246,8 +264,8 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
   prepare(request: PrepareRequest): PreparedSpeech {
     this.evictForNewContext();
     const entry: Entry = {
-      id: this.nextId++,
-      generation: this.sessionGeneration,
+      id: this.playback.nextPlaybackId(),
+      generation: this.playback.generation,
       request,
       state: 'preparing',
       context: null,
@@ -279,6 +297,65 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     this.entries.set(entry.id, entry);
     // 呼び出し側が ID を受け取ってから動かす（状態の通知の順序を保つ）。
     queueMicrotask(() => void this.runPipeline(entry));
+    return { audio_playback_id: entry.id, generation: entry.generation };
+  }
+
+  /**
+   * 保持した PCM と語の時刻を、TTS を通さずに新しい再生 ID で準備する（受け止め用。TTS の文脈を使わない。06 §5）。
+   * 音声は合成の済んだ chunk として入れるので、ready の判定と発話済みの文の計算は通常の音声と同じ。
+   */
+  prepareCached(origin: TwoAiTurnOrigin, audio: CachedSpeechAudio, link: { segment_id: number; transcript_revision: number }): PreparedSpeech {
+    const entry: Entry = {
+      id: this.playback.nextPlaybackId(),
+      generation: this.playback.generation,
+      request: { segment_id: link.segment_id, transcript_revision: link.transcript_revision, text: audio.text, origin },
+      state: 'preparing',
+      context: null,
+      contextOpen: false,
+      abort: new AbortController(),
+      held: [],
+      heldSamples: 0,
+      sampleRate: null,
+      synthComplete: false,
+      nextChunkSeq: 0,
+      timeline: new AlignmentTimeline(),
+      estimatedTimeline: new AlignmentTimeline(),
+      textSent: '',
+      track: new SpeechTextTrack(this.options.reading ?? sharedReadingOptions()),
+      alignmentWordChars: 0,
+      synthesizedChars: 0,
+      synthLost: false,
+      playGeneration: null,
+      nextFrameSeq: 0,
+      pendingWords: [],
+      pendingEstimatedWords: [],
+      position: null,
+      firstWrittenAt: null,
+      startedAudioFrame: null,
+      outputLatencyMs: null,
+      plannedStop: null,
+      reportDeadline: null,
+    };
+    // AckBank は ttsTextFor と同じ変換の文を合成している。
+    entry.textSent = entry.track.push(audio.text) + entry.track.end();
+    entry.track.analyzeSent();
+    this.entries.set(entry.id, entry);
+    const context_id = ttsContextId(entry.id, entry.generation);
+    const n = audio.pcm.length;
+    for (let i = 0; i < n; i++) {
+      const alignment = audio.alignment[i] ?? null;
+      this.handleChunk({
+        context_id,
+        audio_playback_id: entry.id,
+        generation: entry.generation,
+        seq: i,
+        sample_rate_hz: audio.sample_rate_hz,
+        pcm: audio.pcm[i] as Int16Array,
+        alignment: alignment === null ? absent('cached_without_alignment') : present(alignment),
+        is_last: i === n - 1,
+      });
+    }
+    if (n === 0) this.fail(entry, 'no_audio');
     return { audio_playback_id: entry.id, generation: entry.generation };
   }
 
@@ -314,8 +391,8 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
         audio_playback_id: entry.id,
         generation: entry.generation,
       });
-      if (entry.request.origin.kind === 'candidate' || entry.request.origin.kind === 'vocal_cue') {
-        // 文が決まっている音声（候補の文、吸気の後の短い声）。LLM は呼ばない。
+      if (entry.request.origin.kind === 'candidate' || entry.request.origin.kind === 'vocal_cue' || entry.request.origin.kind === 'two_ai_turn') {
+        // 文が決まっている音声（候補の文、吸気の後の短い声、2 体の発話）。LLM は呼ばない。
         this.sendToTts(entry, entry.request.text);
       } else {
         await this.streamResponse(entry);
@@ -343,9 +420,10 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
 
   private async streamResponse(entry: Entry): Promise<void> {
     const prompt = this.options.prompt(entry.request);
-    const stream = this.options.llm.stream({
+    const chosen = this.options.llmFor?.(entry.request) ?? { llm: this.options.llm, purpose: 'prefetch' as const };
+    const stream = chosen.llm.stream({
       request_id: `prefetch-p${entry.id}-g${entry.generation}`,
-      purpose: 'prefetch',
+      purpose: chosen.purpose,
       system: prompt.system,
       messages: prompt.messages,
       response_json_schema: null,
@@ -512,7 +590,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
         return { ok: false, reason: 'another_playback_active' };
       }
     }
-    entry.playGeneration = this.sessionGeneration;
+    entry.playGeneration = this.playback.generation;
     entry.reportDeadline = this.options.time.monotonicMs() + REPORT_TIMEOUTS_MS.start;
     this.setState(entry, 'playing', null);
     try {
@@ -669,10 +747,10 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     this.setState(entry, 'stopping', reason);
     entry.reportDeadline =
       this.options.time.monotonicMs() + (immediate ? 0 : options.max_wait_ms) + REPORT_TIMEOUTS_MS.stop;
-    this.sessionGeneration += 1;
+    this.playback.bumpGeneration();
     this.options.sink.stop({
       audio_playback_id: entry.id,
-      generation: this.sessionGeneration,
+      generation: this.playback.generation,
       stop: stopMode,
       reason,
     });
@@ -858,7 +936,9 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
         ? { origin: 'candidate', candidate_id: origin.candidate_id, candidate_version: origin.candidate_version }
         : origin.kind === 'vocal_cue'
           ? { origin: 'vocal_cue', vocal_cue_kind: origin.vocal_cue_kind }
-          : { origin: 'response' }),
+          : origin.kind === 'two_ai_turn'
+            ? { origin: 'two_ai_turn', ai_id: origin.ai_id, turn_id: origin.turn_id, turn_kind: origin.turn_kind, point_id: origin.point_id }
+            : { origin: 'response' }),
     };
   }
 
@@ -950,7 +1030,7 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
       {
         type: 'playback.ended',
         audio_playback_id: entry.id,
-        generation: this.sessionGeneration,
+        generation: this.playback.generation,
         reason: 'error',
         samples_written: Math.round((entry.position?.written_ms ?? 0) * SAMPLES_PER_MS),
         samples_discarded: 0,
@@ -969,4 +1049,10 @@ export class SpeechGeneratorImpl implements SpeechGenerator {
     }
     this.entries.clear();
   }
+}
+
+/** TTS へ送る文（読みの変換をかけた文）。保持した音声（AckBank）の合成と prepareCached で同じ文を使うため。 */
+export function ttsTextFor(text: string, reading?: ReadingTrackOptions): string {
+  const track = new SpeechTextTrack(reading ?? sharedReadingOptions());
+  return track.push(text) + track.end();
 }

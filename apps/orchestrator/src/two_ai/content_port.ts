@@ -214,8 +214,10 @@ export interface DiscussionContent {
    * 判定の保留が resume なしで終わったとき（時間切れ、または補助の判定が failed）、01 が呼ぶ（進行役の行動 abandon_resume）。
    * 02 は中断したターンの残りを言い直さず、そのブロックの次のターンから続ける（訂正の後なら corrected_turns、そうでなければ中立の中身）。
    * AI 同士の間の割り込みなら interrupted_turn_id は null で、何もしない。
+   * 戻り値の credited_ms：捨てた F.1、F.2（未再生のもの）の凍結文（元の版）の文字数 ÷ chars_per_sec_estimate の和（06 §6.0、§6.1。第 5 回 M2）。
+   * executor は次の tick の DirectorInputs.content_credits で進行役へ渡し、進行役が中身の時計に 1 回だけ足す。
    */
-  abandonResume(interrupted_turn_id: string | null, reason: AbandonResumeReason): void;
+  abandonResume(interrupted_turn_id: string | null, reason: AbandonResumeReason): { credited_ms: number };
   /** interrupted_turn_id は、訂正のきっかけの割り込みで止めたターン（next_boundary や間の割り込みなら null）。 */
   applyCorrection(
     point_id: string,

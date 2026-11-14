@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "note": "試走の「本人」の台本（架空。04 T4）。① で F.0 の途中に訂正、C.1 の途中に反論、咳（兆しだけ）、印、選択。",
+  "utterances": [
+    { "phase": "intake", "at_sec": 3, "text": "博士課程に進むか、インターンに応募して就職するかで迷っています。", "duration_ms": 4000 },
+    { "phase": "intake", "at_sec": 14, "text": "いちばん引っかかっているのは、自分に研究の才能があるか分からないことです。", "duration_ms": 4500 },
+    { "phase": "intake", "at_sec": 26, "text": "インターンの締切は 2 月末で、研究科の説明会は 1 月 15 日です。", "duration_ms": 4000 },
+    { "after_point_started": "fact1", "offset_ms": 2500, "text": "いや、締切は 2 月末です。", "duration_ms": 2000 },
+    { "marker": true, "after_point_started": "ctl1", "offset_ms": 1500 },
+    { "onset_only": true, "after_point_started": "ctl1", "offset_ms": 6000, "ramp_ms": 300 },
+    { "after_point_started": "C1", "offset_ms": 12000, "text": "才能の話じゃなくて、締切の話なんです。", "duration_ms": 2500 },
+    { "marker": true, "after_point_started": "C1", "offset_ms": 20000 },
+    { "phase": "response", "at_sec": 3, "text": "締切の日付は、2 月末で合っています。", "duration_ms": 3000 },
+    { "pick": 3, "after_phase_started_ms": 6000 }
+  ]
+}

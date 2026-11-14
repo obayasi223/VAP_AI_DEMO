@@ -365,3 +365,139 @@ export const FAKE_RESEARCH_CONFIG = {
   direction_status: 'measured',
   condition: 'initiative_inhale',
 } as const;
+
+// ---- two_ai（docs/design/two_ai/03 §3.5）の偽の列。研究画面の表示確認用。値はすべて作り物 ----------------
+
+export const FAKE_TWO_AI_SESSION_ID = 'FAKE_SESSION_two_ai_not_real_data';
+
+export interface TwoAiFakeEnvelope {
+  condition?: 'respond_on_spot' | 'respond_at_end';
+  phase?: 'intake' | 'discussion' | 'response' | 'next_step' | 'end';
+  discussion_stage?: number | null;
+  ai_id?: 'A' | 'B' | null;
+  point_id?: string | null;
+  session_id?: string;
+  basis?: TimeBasis;
+}
+
+/** 下書きに two_ai の封筒をかぶせる（試験でも使う）。 */
+export function wrapTwoAiEvent(t_ms: number, draft: Record<string, unknown>, env: TwoAiFakeEnvelope = {}): unknown {
+  return {
+    ...draft,
+    schema_version: 1,
+    t_monotonic_ms: t_ms,
+    wall_clock: new Date(WALL_ORIGIN + t_ms).toISOString(),
+    session_id: env.session_id ?? FAKE_TWO_AI_SESSION_ID,
+    condition: env.condition ?? 'respond_on_spot',
+    time_basis: env.basis ?? ORCHESTRATOR,
+    two_ai: {
+      phase: env.phase ?? 'discussion',
+      discussion_stage: env.discussion_stage === undefined ? 1 : env.discussion_stage,
+      ai_id: env.ai_id ?? null,
+      point_id: env.point_id ?? null,
+      script_variant: 'original',
+    },
+  };
+}
+
+const ms = (v: number) => present(v);
+const noMs = (reason: string) => absent(reason);
+
+export function fakeTwoAiPoint(stage: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    event: 'two_ai.point',
+    point_id: 'f1',
+    point_kind: 'fact_slip',
+    speaker: 'B',
+    stage,
+    turn_id: stage === 'scheduled' ? null : 't_0012',
+    trigger: { in_stage: 1, after_stage_turn: 1 },
+    discussion_stage: 1,
+    planned_at: noMs('in_stage_trigger'),
+    content_elapsed_ms: ms(14000),
+    deviation_ms: noMs('in_stage_trigger'),
+    exposure_new_ms: noMs('not_measured'),
+    exposure_total_ms: noMs('not_measured'),
+    elaborated_turns: 0,
+    reason: 'fake',
+    ...extra,
+  };
+}
+
+export function fakeTwoAiInterjection(id: string, stage: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    event: 'two_ai.interjection',
+    interjection_id: id,
+    stage,
+    decision_source: 'vap',
+    interrupted_ai: 'B',
+    during_point_id: 'f1',
+    audio_playback_id: ms(31),
+    p_now_user: ms(0.7),
+    p_future_user: ms(0.65),
+    vad_user: ms(0.9),
+    mic_dbfs: ms(-28),
+    first_voiced_at: ms(61000),
+    latency_ms: ms(240),
+    classification: stage === 'classified' ? 'content' : null,
+    classification_basis: stage === 'classified' ? 'final' : null,
+    reason: 'fake',
+    ...extra,
+  };
+}
+
+export function fakeTwoAiBoard(version: number, mode: string, cards: { id: string; text: string; ended: boolean }[], reason = 'shown'): Record<string, unknown> {
+  return {
+    event: 'two_ai.board',
+    board_version: version,
+    mode,
+    cards: cards.map((c, i) => ({ card_id: c.id, order: i + 1, discussion_stage: Math.min(4, i + 1), variant: 'original', depends_on: 'none', text: c.text, trigger_turn_ended: c.ended })),
+    trigger_turn_id: null,
+    reason,
+    picked_card_id: null,
+  };
+}
+
+export function fakeTwoAiSuggestion(status: 'pending' | 'done' | 'failed', corrects: boolean | null): Record<string, unknown> {
+  return {
+    event: 'two_ai.correction_suggested',
+    suggestion_id: `sg_${status}_${String(corrects)}`,
+    point_id: 'f1',
+    asr_segment_ids: [4],
+    status,
+    corrects,
+    evidence_span: '',
+    method: 'fake',
+    latency_ms: status === 'done' ? ms(1700) : noMs('not_done'),
+  };
+}
+
+export function createTwoAiFakeEventScript(): unknown[] {
+  const e = wrapTwoAiEvent;
+  return [
+    e(0, { event: 'two_ai.phase_changed', from: null, to: 'intake', source: 'session_start', reason: 'fake', elapsed_in_from_ms: noMs('session_start'), planned_duration_ms: ms(240000) }, { phase: 'intake', discussion_stage: null }),
+    e(1000, { event: 'two_ai.sync_mark', seq: 1, trigger: 'intake', t_wall_ms: WALL_ORIGIN + 1000 }, { phase: 'intake', discussion_stage: null }),
+    e(20000, { event: 'two_ai.phase_changed', from: 'intake', to: 'discussion', source: 'auto_timer', reason: 'fake', elapsed_in_from_ms: ms(20000), planned_duration_ms: ms(540000) }),
+    e(20100, { event: 'two_ai.plan_wait', stage: 'started', waited_ms: 0, plan_source: null, reason: 'fake' }),
+    e(23000, { event: 'two_ai.plan_wait', stage: 'ready', waited_ms: 2900, plan_source: 'early', reason: 'fake' }),
+    e(23100, { event: 'two_ai.stage', discussion_stage: 1, edge: 'started', heading: '偽の見出し 1', turn_id: 't_0010', content_elapsed_ms: 0, discussion_elapsed_ms: 3100 }),
+    e(23100, { event: 'two_ai.sync_mark', seq: 2, trigger: 'stage_1', t_wall_ms: WALL_ORIGIN + 23100 }),
+    e(23200, fakeTwoAiPoint('scheduled', { content_elapsed_ms: noMs('not_started') })),
+    e(30000, fakeTwoAiPoint('started'), { ai_id: 'B', point_id: 'f1' }),
+    e(30000, fakeTwoAiBoard(1, 'building', [{ id: 'card_1', text: '', ended: false }])),
+    e(32000, { event: 'two_ai.marker', marker_id: 'mk_1', client_t_ms: 31000, discussion_stage: 1, ai_speaking: 'B', turn_id: 't_0012', turn_kind: 'point', during_point_id: 'f1', played_ms_in_turn: ms(2000), content_elapsed_ms: ms(9000), user_speaking: false, interjection_id: null, counted: true, handling: 'recorded_only' }, { basis: BROWSER }),
+    e(33000, fakeTwoAiInterjection('ij_1', 'onset'), { ai_id: 'B', point_id: 'f1' }),
+    e(33300, fakeTwoAiInterjection('ij_1', 'stopped'), { ai_id: 'B', point_id: 'f1' }),
+    e(36000, fakeTwoAiInterjection('ij_1', 'correction_wait'), { ai_id: 'B', point_id: 'f1' }),
+    e(36500, fakeTwoAiSuggestion('pending', null)),
+    e(37000, { event: 'render.health', fps_p5: 28, fps_median: 30, frame_ms_p95: 18, long_tasks: 0, renderer: 'FAKE renderer', avatars: 2, pixel_ratio: 1 }, { basis: BROWSER }),
+  ];
+}
+
+/** two_ai の偽の口が接続の直後に流す research.config。 */
+export const FAKE_TWO_AI_RESEARCH_CONFIG = {
+  ...FAKE_RESEARCH_CONFIG,
+  condition: 'respond_on_spot',
+  mode: 'two_ai',
+  two_ai_armed: null,
+} as const;

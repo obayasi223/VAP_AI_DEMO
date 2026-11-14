@@ -1,0 +1,325 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`--coding（AC21） > スナップショット 1`] = `
+{
+  "coding_stages.csv": "session_id,condition,stage,heading,started_t_content_ms,ended_t_content_ms,started_wall_ms,ended_wall_ms,started_monotonic_ms,ended_monotonic_ms,offset_in_audio_ms,first_turn_id,sync_flash_monotonic_ms,n_utterances,n_markers
+synthetic_respond_on_spot,respond_on_spot,1,いまの状況の整理,0,24500,1795136427443,1795136460543,27443,60543,,t_0005,27443,1,1
+synthetic_respond_on_spot,respond_on_spot,2,二人の見方,24500,57528,1795136460543,1795136493571,60543,93571,,t_0012,60543,0,0
+synthetic_respond_on_spot,respond_on_spot,3,もう一歩の掘り下げ,57528,83500,1795136493571,1795136533543,93571,133543,,t_0018,93571,1,1
+synthetic_respond_on_spot,respond_on_spot,4,次の一歩の候補,83500,91271,1795136533543,1795136540714,133543,140714,,t_0024,133543,0,0
+synthetic_respond_on_spot,respond_on_spot,response,最後の段（応答）,,,1795136544014,1795136612056,144014,212056,,t_0027,144014,1,0
+synthetic_respond_on_spot,respond_on_spot,closing,最後の段（次の一歩と終わり）,,,1795136612056,1795136646398,212056,246398,,t_0031,212056,0,0
+",
+  "coding_texts.jsonl": "{"text_ref":"stt:2","text":"いや、締切は 2 月末です。"}
+{"text_ref":"stt:3","text":"才能の話じゃなくて、締切の話なんです。"}
+{"text_ref":"stt:4","text":"締切の日付は、2 月末で合っています。"}
+",
+  "coding_utterances.csv": "session_id,condition,row_kind,row_id,phase,stage,t_content_ms,t_phase_ms,t_wall_ms,t_monotonic_ms,t_source,linked_marker_id,prev_ai_turn_id,overlap,prev_ai_id,prev_turn_kind,prev_point_id,prev_point_variant,interjection_id,outcome,near_marker,correction,counted,duration_ms,chars,text_ref
+synthetic_respond_on_spot,respond_on_spot,utterance,2,discussion,1,10129,20086,1795136437472,37472,final_minus_duration,,t_0006,false,A,point,fact1,original,ij_0001,yielded,false,switched,,2200,14,stt:2
+synthetic_respond_on_spot,respond_on_spot,marker,mk_0001,discussion,1,20643,39500,1795136456886,56886,browser_rtt,,,false,,,,,,,,,true,,,
+synthetic_respond_on_spot,respond_on_spot,utterance,3,discussion,3,69728,88285,1795136505671,105671,final_minus_duration,,t_0019,false,A,point_elaboration,C1,corrected,ij_0002,yielded,false,,,2700,19,stt:3
+synthetic_respond_on_spot,respond_on_spot,marker,mk_0002,discussion,3,79071,112628,1795136530014,130014,browser_rtt,,,false,,,,,,,,,true,,,
+synthetic_respond_on_spot,respond_on_spot,utterance,4,response,,,5871,1795136549885,149885,final_minus_duration,,t_0027,false,A,phase_line,,,,,,,,6200,19,stt:4
+",
+}
+`;
+
+exports[`--recall > 段の境界 8 行、同期の印 8 行、印と ① の onset の行が出る（AC19） 1`] = `
+[
+  {
+    "kind": "sync",
+    "offset_in_audio_ms": null,
+    "seq": 1,
+    "t_monotonic_ms": 1000,
+    "trigger": "intake",
+    "wall_clock": "2026-11-20T01:00:01.000Z",
+  },
+  {
+    "kind": "sync",
+    "offset_in_audio_ms": null,
+    "seq": 2,
+    "t_monotonic_ms": 27443,
+    "trigger": "stage_1",
+    "wall_clock": "2026-11-20T01:00:27.443Z",
+  },
+  {
+    "ai_speaking": "A",
+    "edge": "started",
+    "heading": "いまの状況の整理",
+    "id": "t_0005",
+    "kind": "stage",
+    "offset_in_audio_ms": null,
+    "point_id": null,
+    "stage": 1,
+    "t_monotonic_ms": 27443,
+    "wall_clock": "2026-11-20T01:00:27.443Z",
+  },
+  {
+    "ai_speaking": "A",
+    "id": "ij_0001",
+    "kind": "onset",
+    "offset_in_audio_ms": null,
+    "point_id": "fact1",
+    "stage": 1,
+    "t_monotonic_ms": 36722,
+    "wall_clock": "2026-11-20T01:00:36.722Z",
+  },
+  {
+    "ai_speaking": null,
+    "counted": true,
+    "id": "mk_0001",
+    "kind": "marker",
+    "offset_in_audio_ms": null,
+    "point_id": null,
+    "stage": 1,
+    "t_monotonic_ms": 56886,
+    "wall_clock": "2026-11-20T01:00:56.886Z",
+  },
+  {
+    "ai_speaking": null,
+    "edge": "ended",
+    "heading": "いまの状況の整理",
+    "id": null,
+    "kind": "stage",
+    "offset_in_audio_ms": null,
+    "point_id": null,
+    "stage": 1,
+    "t_monotonic_ms": 60543,
+    "wall_clock": "2026-11-20T01:01:00.543Z",
+  },
+  {
+    "kind": "sync",
+    "offset_in_audio_ms": null,
+    "seq": 3,
+    "t_monotonic_ms": 60543,
+    "trigger": "stage_2",
+    "wall_clock": "2026-11-20T01:01:00.543Z",
+  },
+  {
+    "ai_speaking": "A",
+    "edge": "started",
+    "heading": "二人の見方",
+    "id": "t_0012",
+    "kind": "stage",
+    "offset_in_audio_ms": null,
+    "point_id": null,
+    "stage": 2,
+    "t_monotonic_ms": 60543,
+    "wall_clock": "2026-11-20T01:01:00.543Z",
+  },
+  {
+    "ai_speaking": null,
+    "edge": "ended",
+    "heading": "二人の見方",
+    "id": null,
+    "kind": "stage",
+    "offset_in_audio_ms": null,
+    "point_id": null,
+    "stage": 2,
+    "t_monotonic_ms": 93571,
+    "wall_clock": "2026-11-20T01:01:33.571Z",
+  },
+  {
+    "kind": "sync",
+    "offset_in_audio_ms": null,
+    "seq": 4,
+    "t_monotonic_ms": 93571,
+    "trigger": "stage_3",
+    "wall_clock": "2026-11-20T01:01:33.571Z",
+  },
+  {
+    "ai_speaking": "B",
+    "edge": "started",
+    "heading": "もう一歩の掘り下げ",
+    "id": "t_0018",
+    "kind": "stage",
+    "offset_in_audio_ms": null,
+    "point_id": "C1",
+    "stage": 3,
+    "t_monotonic_ms": 93571,
+    "wall_clock": "2026-11-20T01:01:33.571Z",
+  },
+  {
+    "ai_speaking": "A",
+    "id": "ij_0002",
+    "kind": "onset",
+    "offset_in_audio_ms": null,
+    "point_id": "C1",
+    "stage": 3,
+    "t_monotonic_ms": 104921,
+    "wall_clock": "2026-11-20T01:01:44.921Z",
+  },
+  {
+    "ai_speaking": null,
+    "counted": true,
+    "id": "mk_0002",
+    "kind": "marker",
+    "offset_in_audio_ms": null,
+    "point_id": null,
+    "stage": 3,
+    "t_monotonic_ms": 130014,
+    "wall_clock": "2026-11-20T01:02:10.014Z",
+  },
+  {
+    "ai_speaking": null,
+    "edge": "ended",
+    "heading": "もう一歩の掘り下げ",
+    "id": null,
+    "kind": "stage",
+    "offset_in_audio_ms": null,
+    "point_id": null,
+    "stage": 3,
+    "t_monotonic_ms": 133543,
+    "wall_clock": "2026-11-20T01:02:13.543Z",
+  },
+  {
+    "kind": "sync",
+    "offset_in_audio_ms": null,
+    "seq": 5,
+    "t_monotonic_ms": 133543,
+    "trigger": "stage_4",
+    "wall_clock": "2026-11-20T01:02:13.543Z",
+  },
+  {
+    "ai_speaking": "B",
+    "edge": "started",
+    "heading": "次の一歩の候補",
+    "id": "t_0024",
+    "kind": "stage",
+    "offset_in_audio_ms": null,
+    "point_id": null,
+    "stage": 4,
+    "t_monotonic_ms": 133543,
+    "wall_clock": "2026-11-20T01:02:13.543Z",
+  },
+  {
+    "ai_speaking": null,
+    "edge": "ended",
+    "heading": "次の一歩の候補",
+    "id": null,
+    "kind": "stage",
+    "offset_in_audio_ms": null,
+    "point_id": null,
+    "stage": 4,
+    "t_monotonic_ms": 140714,
+    "wall_clock": "2026-11-20T01:02:20.714Z",
+  },
+  {
+    "kind": "sync",
+    "offset_in_audio_ms": null,
+    "seq": 6,
+    "t_monotonic_ms": 144014,
+    "trigger": "response",
+    "wall_clock": "2026-11-20T01:02:24.014Z",
+  },
+  {
+    "kind": "sync",
+    "offset_in_audio_ms": null,
+    "seq": 7,
+    "t_monotonic_ms": 212056,
+    "trigger": "next_step",
+    "wall_clock": "2026-11-20T01:03:32.056Z",
+  },
+  {
+    "kind": "sync",
+    "offset_in_audio_ms": null,
+    "seq": 8,
+    "t_monotonic_ms": 220927,
+    "trigger": "end",
+    "wall_clock": "2026-11-20T01:03:40.927Z",
+  },
+]
+`;
+
+exports[`two_ai_summary > Markdown に本人の発話の本文が出ない（スナップショット） 1`] = `
+"# 2 体のセッションの要約：synthetic_respond_on_spot
+
+> 受け入れの証拠に数えない（プロバイダ：llm=test_double、stt=test_double、tts=test_double。AC11）。
+
+条件：respond_on_spot　台本：demo_career（demo）　比較の証拠：可
+
+## 1. 受け入れ基準
+
+| ID | 判定 | 詳細 |
+|---|---|---|
+| envelope | 合格 | 289 件すべてに two_ai、段階は phase_changed の列と一致 |
+| AC1 | 合格 | 受け止め 2 件が定型・長さ ±150ms |
+| AC2 | 合格 | ctl1 新しい部分 14285ms、C1 新しい部分 24000ms |
+| AC3 | 合格 | switched 1、rejected 0、recorded_only 0、(h) 検査済み |
+| AC4 | 合格 | point_exposure 3 件、再計算と 1ms 以内 |
+| AC5 | — | ② だけの基準 |
+| AC6 | 合格 | 計画 45000ms、延長 0ms、本人の発話 6000ms |
+| AC7 | 合格 | 条件 respond_on_spot で一定 |
+| AC8 | 合格 | 点の開始の拍が引き金どおり |
+| AC9 | 合格 | yielded 2、backchannel 0、false_onset 0、onset_no_speech 0、logged_only 0、abandoned 0 |
+| AC10 | — | 既存の test:all と test:e2e（このログでは見ない） |
+| AC11 | — | 受け入れの証拠に数えない（llm=test_double、stt=test_double、tts=test_double） |
+| AC12 | 合格 | 旗は無効 |
+| AC13 | 合格 | 待ちなし |
+| AC14 | 合格 | 点 3 個が出た、forced 0 |
+| AC15 | 合格 | 段 1,2,3,4 |
+| AC16 | 合格 | カード 4 枚、作り直し あり |
+| AC17 | 合格 | 印 2 件（数えた 2） |
+| AC18 | 合格 | 問い 3571ms、選択 picked |
+| AC19 | 合格 | 同期の印 8 回 |
+| AC20 | 合格 | end_of_session、not_spoken、3 行 |
+| AC21 | — | --coding の書き出しで確かめる |
+| manual | — | 向き合って見えるか、受け止めの感じ、C の中身（手動） |
+
+## 2. 段階ごとの時間
+
+| 段階 | 長さ（秒） | 計画（秒） |
+|---|---|---|
+| intake | 16.4 | 60 |
+| discussion | 126.6 | 180 |
+| response | 68 | 45 |
+| next_step | 8.9 | 30 |
+| end | 25.5 | — |
+
+## 3. 点ごとの接触秒数
+
+| 点 | 種類 | 話者 | 新しい部分 ms | 総量 ms | 計画 ms | 展開 | 完了 | 版ごとの再生（元／訂正後） | 元の推論を聞いた |
+|---|---|---|---|---|---|---|---|---|---|
+| fact1 | fact_slip | A | 11214 | 11214 | 14142 | 2/2 | true | 2500／8714 | false |
+| ctl1 | control_inference | A | 14285 | 14285 | 14285 | 2/2 | true | 0／14285 | — |
+| C1 | framing_C | B | 24000 | 26857 | 24000 | 2/2 | true | 0／26857 | — |
+
+## 4. 割り込み
+
+episode 2（yielded 2、false_onset 0、onset_no_speech 0、logged_only 0）、兆しだけ 0、印の近く 0、毎分 0.95
+停止の遅れ：中央値 350ms、p90 350ms、最大 350ms（n=2）
+受け止め：2 回、長さ 2286〜2286ms、途中で切れた 0
+判定の保留：1 回（訂正 1、訂正でない 0、時間切れ 0、研究者の resume 0）、確定文 p95 500ms、判定 p95 1400ms
+
+## 5. 台本の切替と当日の撤回
+
+切替：auto_confirmed、発話の終わりから 3386ms、言い直しをやめた true
+撤回：end_of_session、セッションの中で話した true、推論の文 not_spoken（文は retraction.md）
+
+## 5b. 段と印と板
+
+| 段 | 見出し | 開始 ms | 中身の時計 ms | 印 | onset |
+|---|---|---|---|---|---|
+| 1 | いまの状況の整理 | 27443 | 0 | 1 | 1 |
+| 2 | 二人の見方 | 60543 | 24500 | 0 | 0 |
+| 3 | もう一歩の掘り下げ | 93571 | 57528 | 1 | 1 |
+| 4 | 次の一歩の候補 | 133543 | 83500 | 0 | 0 |
+
+印：2/2（時計差なし 0）　同期の印：8（intake → stage_1 → stage_2 → stage_3 → stage_4 → response → next_step → end）
+板：1:card_1(corrected)、2:card_2(corrected)、3:card_3(corrected)、4:card_4(corrected)、作り直し あり、選んだカード card_3（framing_C、4000ms）
+応答の段：計画 45 秒、実際 45 秒、延長 0ms、本人の発話 6000ms、促し 0、受け止め true
+本人の発話の件数（本文は --coding）：intake 1、discussion 2、response 1、closing 0
+
+## 6. AI の捉え方の推移
+
+記録なし
+
+## 7. WoZ
+
+なし
+
+## 8. 性能
+
+VAP の RTF p95 未計測、描画の fps p5 —、長いタスク —、AI 同士の間 中央値 600ms p90 600ms
+"
+`;

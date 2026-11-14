@@ -364,3 +364,86 @@ SAVE_SESSION_AUDIO=1 npm run dev:orchestrator
 6. 終わったら orchestrator を止めます。次の起動では `SAVE_SESSION_AUDIO=1` を付けなければ保存されません。
 
 **時刻の精度の目安**: 音声の位置と `t_monotonic_ms` の対応は、受信の遅れ（ブラウザの Worker から Node まで、数 ms〜数十 ms）を含みます。`vap.state` の組（推論の遅れを含み、数百 ms ずれる）より小さい誤差です。音声の枠は 20ms 単位です。
+
+## 10. 2 体の話し合いモード（`two_ai`）
+
+2 体の AI が本人の迷いについて話し合うモードです。設計は `docs/design/two_ai/`（体験の筋書きと受け入れ基準は 04、型は 06）。1 対 1 のモード（§1〜§9）は変わりません。
+
+> **状態（2026-11-16）**：契約、設定、台本、要約の道具、log_check の規則はできています。TwoAiSession（WP1）と server.ts の切り替えの統合は**未完**です。下の 10.1 の起動、10.4 の試走（`--synthetic` を除く）、10.5 の e2e、10.6 の本測定は、統合が済むまで **保留**（終了コード 3）で終わります。
+
+### 10.1 起動
+
+条件は URL ではなく研究画面で決めます（参加者画面に条件を出さないため）。
+
+```bash
+# ターミナル1（orchestrator）。既定の設定は config/two_ai/session.ja.json
+SESSION_MODE=two_ai TWO_AI_SCRIPT=config/two_ai/scripts/demo_career.ja.json npm run dev:orchestrator
+# 短いデモ（約 5 分。自分で試すとき）
+SESSION_MODE=two_ai TWO_AI_CONFIG=config/two_ai/session.demo_short.ja.json TWO_AI_SCRIPT=config/two_ai/scripts/demo_career.ja.json npm run dev:orchestrator
+# ターミナル2（画面）は §1 と同じ
+npm run dev:web
+```
+
+- `.env` に 2 つの声 `TWO_AI_VOICE_A` と `TWO_AI_VOICE_B` が要ります（値はここに書きません。未設定なら 2 体のセッションを作りません）。条件を起動時に固定するときだけ `TWO_AI_CONDITION=respond_on_spot|respond_at_end`（研究画面の選択が優先）。
+- 設定のファイル：`session.ja.json`（研究のセッション。撤回は測度の後、訂正は研究者）、`session.self_run.ja.json`（自分で試す。撤回はセッションの終わり、訂正は自動）、`session.demo_short.ja.json`（self_run の短い版）。自分用の変更は `config/two_ai/*.local.json` に置きます（git の対象外）。
+- 起動時に設定・台本・点の日程を検査します。不合格なら起動しません。
+
+### 10.2 画面
+
+1. 研究画面 `http://localhost:3000/research` で条件（① その場で応答／② 後でまとめて応答）と回の順番を選び、「開始を許可」を押す。**以後、条件は変えられません。**
+2. 参加者画面 `http://localhost:3000/two_ai` で「はじめる」。2 体が並び、どちらも本人の方を見ます。
+3. 訂正（取り違えの事実を本人が直したとき）は研究画面の WoZ のボタンで切り替えます（`session.ja.json`）。self_run では自動の判定が切り替え、研究画面に「自動で切り替えた」と出ます。
+
+デモの題材 `demo_career.ja.json` は架空の人物（中村 遥）です。取り違えは中立で利害の低い事実（インターンの締切。本当は 2 月末、話し合いでは 12 月末）だけで、人の評価や健康や家族の事実は使いません。自分の悩みで試すときは `config/two_ai/scripts/my_career.local.json` を作ります（04 §1-1）。
+
+### 10.3 終わった後（研究のセッションの順。変えない）
+
+```bash
+npm run report:two_ai -- sessions/<id> --post --recall     # two_ai_summary.md、post_items.md、retraction.md、recall_points.csv
+```
+
+1. 確信度と問題の核の記述。
+2. 推論への同意：`post_items.md` の 2 項目。
+3. 段ごとの再認（`post_items.md` の段ごとの文。参加者に見せない）。
+4. 刺激再生：`recall_points.csv` の段の境界で録画を止めて聞く。録画は同期の印で合わせる。
+5. **当日の撤回**：`retraction.md` を研究者が読む。両条件で必ず、訂正の有無に関係なく行います。**撤回を測度より先にしない**（推論への同意が測れなくなる）。読んだことは研究者の記録に残します。
+
+そのほかの書き出し：
+
+```bash
+npm run report:two_ai -- sessions/<①> sessions/<②> --pair                    # ① と ② を並べた two_ai_pair.md
+npm run report:two_ai -- sessions/<id> --coding                                # coding/ に H3 の符号化の材料
+npm run report:two_ai -- sessions/<①> sessions/<②> --coding --blind --out <dir>   # 盲検用（条件を空、ID を符号に）
+```
+
+`two_ai_summary.md` の 1. に受け入れ基準の自動の列が出ます。終了コード 1 は不合格の列があるという意味です。要約の数値は探索で、主張に使う前に事前登録の手順で集計し直します。`npm run log:check -- sessions/<id>` も 2 体の規則を掛けます。
+
+### 10.4 試走（ブラウザなし）
+
+```bash
+npm run dryrun:two_ai -- --both --synthetic --compare-feeds --out .dryrun/latest
+npm run dryrun:two_ai -- --condition respond_on_spot --user fixtures/two_ai/dryrun_user.respond_on_spot.json   # 統合の後
+```
+
+- `--synthetic` は合成のログ（`fixtures/two_ai/synthetic_session.ts`）で、書き出し、log_check、要約、並べ、旗の比較の流れだけを確かめます。**TwoAiSession の試走ではありません**（provider_class は test_double）。
+- `--synthetic` なしは統合の後に TwoAiSession を偽のプロバイダで通します。それまでは設定と台本の検査だけをして終了コード 3（保留）です。
+- `--providers real-llm` は LLM に課金します。承認があるときだけ使います。
+- 出力の `.dryrun/` は git の対象外です。
+
+### 10.5 ヘッドレスの e2e
+
+```bash
+npm run test:e2e:two_ai     # ポート 3472／8798（3000、8787 は使わない）
+```
+
+空きメモリ 2.5 GB 以上で、ほかの重い処理と重ねないでください（§6 と同じ）。メモリが足りないときは `E2E_MAAI=off`（VAP の停止の検査は飛ばす）。合格は配線の確認で、性能や自然さの証拠ではありません。前提（TwoAiSession、server.ts の切り替え、`/two_ai`）が揃っていなければ理由を出して終了コード 3 です。
+
+### 10.6 性能
+
+```bash
+npm run perf:two_ai:quick -- --steps                      # 早い確認（WP3c）：描画なし／1 体／2 体の RTF
+npm run perf:two_ai -- --steps                            # 本測定の手順
+npm run perf:two_ai -- one=sessions/<1 体> two=sessions/<2 体>   # 予算の表（04 §性能）で集計
+```
+
+予算【暫定】：VAP の RTF p95 < 0.7、backlog p95 < 100 ms、話し始めから AI の音が止まるまで中央値 < 600 ms・p90 < 1000 ms、描画 fps p5 ≥ 30、長いタスク 1 分あたり 5 回以下、AI 同士の間 中央値 300〜800 ms・p90 < 1500 ms、音声の欠落 0。外れたら 04 §性能の F1〜F8 を軽い順に試します。ソフトウェア描画（SwiftShader）の値は実機の GPU の値ではありません。
