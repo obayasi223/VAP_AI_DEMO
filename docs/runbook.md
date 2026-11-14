@@ -315,7 +315,7 @@ SAVE_SESSION_AUDIO=1 npm run dev:orchestrator
 
 **今回の自己実験の進め方（現在の VRM、音声の追加なし）**
 
-合図は吸気の動きと、ごく小さな息の音です。「あ、」「うん」などの声は足していません。息の音の音量は `?breath_sound=` で変えられます（既定 0.025、`0` で無音、上限 0.1）。使った音量は `manifest.json` の `avatar.breath_sound_gain` に残ります。息の音は AI の再生音とは別の経路で鳴らすので、VAP に渡す AI 側の音声と `session_audio.wav` には入りません。アバターは既定の VRM のままにします。
+合図は吸気の動きと、ごく小さな息の音です。「あ、」「うん」などの声は足していません。息の音の音量は `?breath_sound=` で変えられます（既定 0.006、`0` で無音、上限 0.1）。使った音量は `manifest.json` の `avatar.breath_sound_gain` に残ります。息の音は AI の再生音とは別の経路で鳴らすので、VAP に渡す AI 側の音声と `session_audio.wav` には入りません。アバターは既定の VRM のままにします。
 
 1. ターミナルを 3 つ使います（どれも最初に `source ~/.nvm/nvm.sh && nvm use` で Node 24 にします）。
 

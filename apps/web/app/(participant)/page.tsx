@@ -5,7 +5,8 @@
  * クエリ: ?ws=ws://localhost:8787/ws（既定は NEXT_PUBLIC_ORCHESTRATOR_WS_URL、なければ同じホストの 8787）
  *         ?model=/models/xxx.vrm
  *         ?avatar=rocketbox|none（既定は VRM。NEXT_PUBLIC_AVATAR でも指定できる。参加者画面には選択肢を出さない。docs/avatar_swap_eval.md）
- *         ?breath_sound=0.025（吸気音の音量。0 で無音）
+ *         ?breath_sound=0.006（吸気音の音量。0 で無音）
+ *         ?breath_profile=default|original|weak（吸気の動きの大きさ。比較用）
  *         ?condition=reactive|initiative_inhale|initiative_no_cue（開始画面の選択の初期値。既定は
  *           NEXT_PUBLIC_DEFAULT_CONDITION、なければ未選択で orchestrator の CONDITION に任せる）
  *         ?conversation_kind=joint_thinking|companion ?timing_strategy=llm|immediate|v2（開始画面の選択の初期値。
@@ -26,6 +27,7 @@ import {
   type ParticipantView,
 } from '../../src/session/participant';
 import { parseBreathSoundGain } from '../../src/session/breath_sound';
+import { BREATH_PROFILES, parseBreathProfile } from '../../src/avatar/breath_profile';
 import type { Condition } from '@llm-vap/contracts/common';
 import type { ConversationKind, TimingStrategy } from '@llm-vap/contracts';
 import styles from './participant.module.css';
@@ -139,6 +141,7 @@ export default function ParticipantPage() {
       avatar: () => avatarRef.current,
       onView: setView,
       breathSoundGain: parseBreathSoundGain(new URLSearchParams(window.location.search).get('breath_sound')),
+      breathProfile: parseBreathProfile(new URLSearchParams(window.location.search).get('breath_profile')),
     });
   }
 
@@ -178,6 +181,7 @@ export default function ParticipantPage() {
           return;
         }
         created = avatar;
+        avatar.setBreathParams({ prep: BREATH_PROFILES[parseBreathProfile(new URLSearchParams(window.location.search).get('breath_profile'))] });
         avatarRef.current = avatar;
         setAvatarLoad({ kind: 'done' });
         controllerRef.current?.setAvatarRecord(avatarRecord(choice, 'loaded'));

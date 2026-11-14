@@ -42,6 +42,6 @@ MaAI の README はシステム開発と共同研究について井上昂治氏�
 
 ## 3D モデル、音声（未記入）
 
-- VRM モデル（H）: `Sendagaya_Shino` などの埋め込みメタは CC0。VRoid 公式ページでの確認は未了。
+- VRM モデル（H）: `Sendagaya_Shino`（VRoid の旧サンプル、千駄ヶ谷篠）の埋め込みメタは CC0。VRoid 公式ヘルプ（https://vroid.pixiv.help/hc/ja/articles/360013482714）で CC0 であることを研究者本人がブラウザで確認（2026-11-09）。`HairSample_Female` は未確認。
 - TTS の声（D）: 未選定。
 - 外部 API の利用規約は `docs/provider_matrix.md` を参照。

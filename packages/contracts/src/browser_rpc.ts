@@ -224,6 +224,8 @@ export const AvatarReport = z.strictObject({
   error: z.string().max(300).nullable(),
   /** 吸気音の音量（ノイズの振幅の頂点。0 は無音）。 */
   breath_sound_gain: z.number().min(0).max(1),
+  /** 吸気の動きの大きさの切り替え（?breath_profile=）。省略は既定。 */
+  breath_profile: z.enum(['default', 'original', 'weak']).optional(),
   client_t_ms: NonNegativeMs,
 });
 export type AvatarReport = z.infer<typeof AvatarReport>;

@@ -1475,6 +1475,14 @@
           "minimum": 0,
           "maximum": 1
         },
+        "breath_profile": {
+          "type": "string",
+          "enum": [
+            "default",
+            "original",
+            "weak"
+          ]
+        },
         "client_t_ms": {
           "type": "number",
           "minimum": 0

@@ -25,6 +25,7 @@ import type {
 import { startBrowserAudio, type BrowserAudioSession, type LinkState, type TransportStats } from '../audio';
 import type { Avatar } from '../avatar';
 import type { AvatarRecord } from '../avatar/avatar_models';
+import type { BreathProfileId } from '../avatar/breath_profile';
 import type { BreathController, BreathPhaseEvent } from '../avatar/breath';
 import { BreathSignalReporter } from '../avatar/breath_signal';
 import { BreathSound, DEFAULT_BREATH_SOUND_GAIN } from './breath_sound';
@@ -166,6 +167,8 @@ export interface ParticipantOptions {
   onView: (view: ParticipantView) => void;
   /** 吸気音の音量（0 は無音）。省略は既定。 */
   breathSoundGain?: number;
+  /** 吸気の動きの大きさ。省略は既定。記録のために持つ（適用はアバターの生成時）。 */
+  breathProfile?: BreathProfileId;
 }
 
 export class ParticipantController {
@@ -243,7 +246,7 @@ export class ParticipantController {
 
   private sendAvatarRecord(): void {
     if (this.avatarRecord === null || this.audio === null) return;
-    this.audio.send({ type: 'avatar.report', ...this.avatarRecord, breath_sound_gain: this.breathSoundGain, client_t_ms: performance.now() });
+    this.audio.send({ type: 'avatar.report', ...this.avatarRecord, breath_sound_gain: this.breathSoundGain, breath_profile: this.options.breathProfile ?? 'default', client_t_ms: performance.now() });
   }
 
   /** アバターの onGazeReport から呼ぶ。 */

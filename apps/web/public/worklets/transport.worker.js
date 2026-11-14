@@ -19916,6 +19916,8 @@ var AvatarReport = external_exports.strictObject({
   error: external_exports.string().max(300).nullable(),
   /** 吸気音の音量（ノイズの振幅の頂点。0 は無音）。 */
   breath_sound_gain: external_exports.number().min(0).max(1),
+  /** 吸気の動きの大きさの切り替え（?breath_profile=）。省略は既定。 */
+  breath_profile: external_exports.enum(["default", "original", "weak"]).optional(),
   client_t_ms: NonNegativeMs
 });
 var BrowserToNode = external_exports.discriminatedUnion("type", [

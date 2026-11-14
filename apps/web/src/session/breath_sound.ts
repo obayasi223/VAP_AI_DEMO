@@ -6,8 +6,8 @@
  * 音量は聞いて決めた値ではなく未校正（?breath_sound= で変えられる、0 で無音）。
  */
 
-/** ノイズの振幅の頂点（0〜1）。AI の声より十分小さくなるよう置いた暫定値。 */
-export const DEFAULT_BREATH_SOUND_GAIN = 0.025;
+/** ノイズの振幅の頂点（0〜1）。本人の試用で 0.025 は大きすぎたので約 1/4 に下げた暫定値（未校正）。 */
+export const DEFAULT_BREATH_SOUND_GAIN = 0.006;
 const MAX_BREATH_SOUND_GAIN = 0.1;
 
 const BAND_START_HZ = 1800;
