@@ -10,7 +10,10 @@ import {
   MemoryEventSink,
   NodeToBrowser,
   ResearchEvent,
+  TWO_AI_CONTENT_EVENT_NAMES,
+  TWO_AI_DIRECTOR_EVENT_NAMES,
   TWO_AI_EVENT_NAMES,
+  TWO_AI_EXECUTOR_EVENT_NAMES,
   TwoAiTurnKind,
   createEventEmitter,
   present,
@@ -21,7 +24,7 @@ import { OPTIONAL_FIXTURES, VALID_FIXTURES } from '../src/fixtures';
 const twoAiFixtures = VALID_FIXTURES.events.filter((f) => (TWO_AI_EVENT_NAMES as readonly string[]).includes((f.value as { event: string }).event));
 
 describe('新しいイベント', () => {
-  it('22 種と sync_mark と render.health が EVENT_NAMES、fixture、経路を持つ', () => {
+  it('23 種と render.health が EVENT_NAMES、fixture、経路を持つ', () => {
     expect(TWO_AI_EVENT_NAMES).toHaveLength(24);
     for (const name of TWO_AI_EVENT_NAMES) {
       expect(EVENT_NAMES as readonly string[], name).toContain(name);
@@ -39,6 +42,24 @@ describe('新しいイベント', () => {
 
   it.each(twoAiFixtures.map((f) => [f.name, f.value] as const))('%s が JSON の往復で変わらない', (_n, value) => {
     expect(ResearchEvent.parse(JSON.parse(JSON.stringify(value)))).toEqual(value);
+  });
+
+  it('出し手の表（06 §4.5）：進行役 16、executor 1（sync_mark）、02 が 6', () => {
+    expect(TWO_AI_DIRECTOR_EVENT_NAMES).toHaveLength(16);
+    expect(TWO_AI_EXECUTOR_EVENT_NAMES).toEqual(['two_ai.sync_mark']);
+    expect(TWO_AI_CONTENT_EVENT_NAMES).toHaveLength(6);
+    expect(new Set(TWO_AI_EVENT_NAMES).size).toBe(24);
+  });
+
+  it('sync_mark は seq（1 以上）、trigger（06 §4.7 の 8 行）、t_wall_ms だけを持ち、経路は node', () => {
+    expect(EVENT_ROUTES['two_ai.sync_mark']).toEqual({ origin: 'node' });
+    const m = twoAiFixtures.find((f) => f.name === 'two_ai.sync_mark')!.value as Record<string, unknown>;
+    const triggers = ['intake', 'stage_1', 'stage_2', 'stage_3', 'stage_4', 'response', 'next_step', 'end'];
+    for (const trigger of triggers) expect(ResearchEvent.safeParse({ ...m, trigger }).success, trigger).toBe(true);
+    expect(ResearchEvent.safeParse({ ...m, trigger: 'discussion' }).success).toBe(false);
+    expect(ResearchEvent.safeParse({ ...m, seq: 0 }).success).toBe(false);
+    expect(ResearchEvent.safeParse({ ...m, t_wall_ms: 1.5 }).success).toBe(false);
+    expect(ResearchEvent.safeParse({ ...m, message: 'two_ai.stage' }).success).toBe(false);
   });
 
   it('retraction の lines は研究画面の伏せ字で [] になりうる', () => {

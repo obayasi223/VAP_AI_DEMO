@@ -33,6 +33,11 @@ describe('server.hello', () => {
     }
   });
 
+  it('2 体の枝で condition を省くと不合格（null を必ず送る）', () => {
+    const { condition: _c, ...noCondition } = twoAi;
+    expect(NodeToBrowser.safeParse(noCondition).success).toBe(false);
+  });
+
   it('1 対 1 の枝に two_ai を付けると不合格、2 体の枝で two_ai がないと不合格', () => {
     expect(NodeToBrowser.safeParse({ ...oneToOne, two_ai: twoAi.two_ai }).success).toBe(false);
     const { two_ai: _t, ...noBlock } = twoAi;

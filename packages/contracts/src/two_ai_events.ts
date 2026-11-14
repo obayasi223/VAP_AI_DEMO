@@ -144,8 +144,10 @@ export const TwoAiInterjectionEpisodeShape = {
     .nullable(),
   /**
    * 訂正の判定の保留（06 §6.2 の M2）。対象外の割り込みは null。
-   * ended_by：corrected 訂正が確定（resume なし）、not_correction 判定が否（ふつうの resume）、timeout 上限（hold_bridge）、
-   * woz_resume 研究者の WoZ resume、abandoned 段の終わりや中止。
+   * ended_by：corrected 訂正が確定（resume なし）、not_correction auto の判定が否（ふつうの resume）、
+   * timeout 上限か auto の判定の失敗（failed）（hold_bridge と abandon_resume。失敗かどうかは judgment_after_ms と two_ai.correction_suggested の status で分かる）、
+   * woz_resume 研究者の WoZ resume（研究者の経路の「否」）、abandoned 段の終わりや中止。
+   * 研究者の経路では、補助の判定（否も失敗も）は保留を終わらせない（06 §6.2。第 4 回 M1）。
    */
   correction_hold: z
     .strictObject({
@@ -378,17 +380,16 @@ export const TwoAiRetractionShape = {
 };
 
 /**
- * 同期の印（参加者画面の右下の白い四角。04 D、第 3 回 m4）を出させたメッセージを送った時刻（第 4 回の決定）。
- * 封筒の t_monotonic_ms が送った時刻。t_wall_ms は同じ時点の壁時計（Date.now の ms）で、録画と合わせる。
+ * 同期の印（06 §4.3、第 4 回 M4。時機の表は 06 §4.7）。参加者画面が白い四角を出すきっかけのメッセージを Node が送ったのと同じ tick に、
+ * executor が 1 回出す。封筒の t_monotonic_ms は送った時刻。再接続の直後の送り直しでは出さない。
  */
 export const TwoAiSyncMarkShape = {
-  /** セッションの通し番号（0 から）。 */
-  seq: NonNegativeInt,
-  /** 印を出させたメッセージ。 */
-  message: z.enum(['two_ai.phase', 'two_ai.stage']),
-  phase: TwoAiPhase,
-  discussion_stage: DiscussionStage.nullable(),
-  t_wall_ms: z.number().min(0),
+  /** セッションの中の通し番号（1 から）。録画の印の n 番目と、この seq が n の行を合わせる。 */
+  seq: z.number().int().min(1),
+  /** きっかけ（06 §4.7 の表の行）。 */
+  trigger: z.enum(['intake', 'stage_1', 'stage_2', 'stage_3', 'stage_4', 'response', 'next_step', 'end']),
+  /** 送った時刻の壁時計（Date.now()、ms）。録画の時刻と合わせる参考に使う。 */
+  t_wall_ms: NonNegativeInt,
 };
 
 // ---- 02 が出す --------------------------------------------------------------
@@ -481,7 +482,7 @@ export const RenderHealthShape = {
   pixel_ratio: z.number().positive(),
 };
 
-/** 01 が出すイベントの名前（06 §4.5 の表の 1 行目。render.health を除く）。 */
+/** 01 の進行役が emit の行動で出すイベントの名前（06 §4.5 の表の 1 行目。render.health を除く。06 §7.3 の TwoAiEventDraft の元）。 */
 export const TWO_AI_DIRECTOR_EVENT_NAMES = [
   'two_ai.phase_changed',
   'two_ai.turn',
@@ -499,10 +500,12 @@ export const TWO_AI_DIRECTOR_EVENT_NAMES = [
   'two_ai.marker',
   'two_ai.board_picked',
   'two_ai.retraction',
-  'two_ai.sync_mark',
 ] as const;
 
-/** 02 が出すイベントの名前（06 §4.5 の表の 2 行目）。 */
+/** executor が出すイベント（06 §4.5 の表の 2 行目。§4.7 の表のメッセージを送った tick に出す。進行役の emit は使わない）。 */
+export const TWO_AI_EXECUTOR_EVENT_NAMES = ['two_ai.sync_mark'] as const;
+
+/** 02 が出すイベントの名前（06 §4.5 の表の 3 行目）。 */
 export const TWO_AI_CONTENT_EVENT_NAMES = [
   'two_ai.ledger',
   'two_ai.plan',
@@ -512,5 +515,10 @@ export const TWO_AI_CONTENT_EVENT_NAMES = [
   'two_ai.interjection_fed',
 ] as const;
 
-/** 新しいイベントの名前すべて（22 種、第 4 回の two_ai.sync_mark、render.health）。 */
-export const TWO_AI_EVENT_NAMES = [...TWO_AI_DIRECTOR_EVENT_NAMES, ...TWO_AI_CONTENT_EVENT_NAMES, 'render.health'] as const;
+/** 新しいイベントの名前すべて（23 種と render.health。06 §4.3）。 */
+export const TWO_AI_EVENT_NAMES = [
+  ...TWO_AI_DIRECTOR_EVENT_NAMES,
+  ...TWO_AI_EXECUTOR_EVENT_NAMES,
+  ...TWO_AI_CONTENT_EVENT_NAMES,
+  'render.health',
+] as const;

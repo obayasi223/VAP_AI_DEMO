@@ -279,7 +279,7 @@ export type BoardDependency = z.infer<typeof BoardDependency>;
  * ack 定型の受け止め／resume 戻りの句＋言い直し（誤った停止では戻りの句なし）／uptake 訂正の受け入れ（凍結文）／filler 計画の待ちのつなぎ／
  * phase_line 段の始めと終わり、最後の段の問い、選ぶ案内の定型／facilitation intake の本人への応答と核の読み上げ／
  * rebuild 最後の段の板の作り直し（凍結文）／retraction 当日の撤回／
- * bridge 判定の保留の時間切れの中立のつなぎ（fixed.hold_bridge。保持した音声。中身の時計に足さない。第 4 回の決定）
+ * bridge 判定の保留が時間切れか判定の失敗で終わったときの中立のつなぎ（fixed.hold_bridge。06 §6.2。第 4 回 M3）。中身の時計を進めない（content_ms は 0）
  */
 export const TwoAiTurnKind = z.enum([
   'discussion', 'point', 'point_elaboration', 'ack', 'resume', 'uptake', 'filler', 'phase_line', 'facilitation', 'rebuild', 'retraction',

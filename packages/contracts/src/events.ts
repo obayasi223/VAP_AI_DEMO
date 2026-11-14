@@ -100,7 +100,14 @@ export const TwoAiEnvelope = z.strictObject({
   phase: TwoAiPhase,
   /** そのイベントを出した時点の話し合いの段。discussion の外は null。刺激再生と段ごとの集計に使う。 */
   discussion_stage: DiscussionStage.nullable(),
-  /** そのイベントを出した AI。セッション全体のもの（STT、VAP、段）は null。 */
+  /**
+   * そのイベントを出した AI。どの AI にも属さないものは null（06 §4.1、第 4 回 M5。log_check の規則は 04 A）：
+   * - セッション全体のもの（STT、VAP、段、印、板、同期の印）。
+   * - LLM のうち用途が ledger、discussion_plan、correction_assist のものと、02 が話者なしで出す intake のもの（02 が渡された emitter で出す）。
+   * - 2 体の両方への視線（ai_id を省いた gaze.command と、その gaze.decision、gaze.rendered）。
+   * null にならないのは、スロットの範囲つき emitter が出すもの（speech.*、signal.*、用途が discussion_turn の llm.* と、
+   * 話者のスロットが出す intake の応答の llm.*、片方の gaze.*）。
+   */
   ai_id: AiId.nullable(),
   /** 計画した点を運ぶ発話に属するとき。 */
   point_id: NonEmptyString.nullable(),

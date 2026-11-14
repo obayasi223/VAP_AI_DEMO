@@ -20,4 +20,11 @@ describe('public/worklets の生成物', () => {
     expect(text).not.toMatch(/^import /m);
     expect(text).not.toMatch(/zod/i);
   });
+
+  it('Transport Worker の束が 2 体の契約で作り直されている（06 §2。第 4 回 m-18）', async () => {
+    const text = await readFile(path.join(dir, 'transport.worker.js'), 'utf8');
+    for (const literal of ['two_ai', 'two_ai.phase', 'two_ai.board', 'two_ai.stage', 'two_ai.marker', 'two_ai.board_pick', 'render.health', 'peer']) {
+      expect(text, literal).toContain(`"${literal}"`);
+    }
+  });
 });
