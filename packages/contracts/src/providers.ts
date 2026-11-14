@@ -6,6 +6,7 @@
  */
 import type { PlaybackEnded, PlaybackPosition, PlaybackStarted } from './browser_rpc';
 import type {
+  AiId,
   JsonValue,
   LlmPurpose,
   Maybe,
@@ -16,6 +17,7 @@ import type {
   SttPart,
   TimedWord,
   TimingPrecision,
+  TwoAiTurnKind,
 } from './common';
 
 export type Unsubscribe = () => void;
@@ -300,16 +302,26 @@ export interface HistoryEntryRef {
 
 // ---- SpeechGenerator（計画 §4.3、本実装は D） --------------------------------
 
+/** 2 体の発話の出どころ（docs/design/two_ai/06 §5）。文は 02 が作るので LLM を呼ばない。 */
+export type TwoAiTurnOrigin = {
+  kind: 'two_ai_turn';
+  ai_id: AiId;
+  turn_id: string;
+  turn_kind: TwoAiTurnKind;
+  point_id: string | null;
+};
+
 export interface PrepareRequest {
   segment_id: number;
   transcript_revision: number;
-  /** 通常の応答なら入力文、候補なら発話文。 */
+  /** 通常の応答なら入力文、候補なら発話文、two_ai_turn なら話す文（LLM を呼ばない）。 */
   text: string;
   origin:
     | { kind: 'response' }
     | { kind: 'candidate'; candidate_id: string; candidate_version: number }
     /** 吸気の後の短い声（先に合成しておく。候補とは別の音声で、履歴には入れない）。 */
-    | { kind: 'vocal_cue'; vocal_cue_kind: 'pre_beginning' | 'backchannel' };
+    | { kind: 'vocal_cue'; vocal_cue_kind: 'pre_beginning' | 'backchannel' }
+    | TwoAiTurnOrigin;
 }
 
 export interface PreparedSpeech {

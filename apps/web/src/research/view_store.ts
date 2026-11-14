@@ -194,6 +194,8 @@ export class ResearchViewStore implements FeedSink {
       };
       return;
     }
+    // two_ai の arm と WoZ の ack はメモの表に関係しない（2 体の画面が扱う）。
+    if (message.type !== 'research.note.ack') return;
     if (message.note_id === null) {
       this.lastInvalid = `メモの送信が契約に合わない: ${message.status === 'logged' ? '' : message.detail}`;
       return;

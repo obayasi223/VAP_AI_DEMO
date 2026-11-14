@@ -11,18 +11,22 @@
  */
 import { z } from 'zod';
 import {
+  AiId,
   AudioFrameIndex,
   AudioPlaybackId,
   CandidateId,
   Condition,
+  DiscussionStage,
   Generation,
   Maybe,
   MonotonicMs,
   NonEmptyString,
   NonNegativeInt,
   NonNegativeMs,
+  ScriptVariant,
   SessionId,
   SystemChannelSource,
+  TwoAiPhase,
 } from './common';
 
 export const BROWSER_RPC_PROTOCOL_VERSION = 1 as const;
@@ -59,7 +63,8 @@ export type SignalPhase = z.infer<typeof SignalPhase>;
 export const SignalParameters = z.record(z.string(), z.union([z.number(), z.boolean(), z.string()]));
 export type SignalParameters = z.infer<typeof SignalParameters>;
 
-export const GazeTarget = z.enum(['user', 'away']);
+/** peer は two_ai で相手の AI を見る（docs/design/two_ai/06 §2.1）。 */
+export const GazeTarget = z.enum(['user', 'away', 'peer']);
 export type GazeTarget = z.infer<typeof GazeTarget>;
 
 export const AudioContextStateName = z.enum(['suspended', 'running', 'closed', 'interrupted']);
@@ -197,6 +202,8 @@ export const SignalReport = z.strictObject({
   state: z.enum(['started', 'ended']),
   visible: z.boolean(),
   client_t_ms: Maybe(NonNegativeMs),
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional(),
 });
 export type SignalReport = z.infer<typeof SignalReport>;
 
@@ -206,6 +213,8 @@ export const GazeReport = z.strictObject({
   target: GazeTarget,
   visible: z.boolean(),
   client_t_ms: Maybe(NonNegativeMs),
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional(),
 });
 export type GazeReport = z.infer<typeof GazeReport>;
 
@@ -227,8 +236,58 @@ export const AvatarReport = z.strictObject({
   /** 吸気の動きの大きさの切り替え（?breath_profile=）。省略は既定。 */
   breath_profile: z.enum(['default', 'original', 'weak']).optional(),
   client_t_ms: NonNegativeMs,
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional(),
+  /** two_ai の描画の設定。 */
+  render_profile: z
+    .strictObject({
+      max_fps: z.number().positive(),
+      pixel_ratio: z.number().positive(),
+      spring_bones: z.enum(['all', 'speaker_only', 'none']),
+    })
+    .optional(),
+  /** two_ai の配置。 */
+  layout: z
+    .strictObject({
+      side: z.enum(['left', 'right']),
+      body_yaw_deg: z.number(),
+      spacing_m: z.number().positive(),
+    })
+    .optional(),
 });
 export type AvatarReport = z.infer<typeof AvatarReport>;
+
+/** Browser→Node。5 秒ごと。同名のイベント render.health として記録する（two_ai。06 §2.2）。 */
+export const RenderHealth = z.strictObject({
+  type: z.literal('render.health'),
+  fps_p5: z.number().min(0),
+  fps_median: z.number().min(0),
+  frame_ms_p95: NonNegativeMs,
+  long_tasks: NonNegativeInt,
+  renderer: z.string().max(200),
+  avatars: z.number().int().min(0).max(2),
+  pixel_ratio: z.number().positive(),
+  client_t_ms: NonNegativeMs,
+});
+export type RenderHealth = z.infer<typeof RenderHealth>;
+
+/** Browser→Node。印のボタン。両条件で同じ見た目。押しても AI は止まらない（記録だけ）。 */
+export const TwoAiMarker = z.strictObject({
+  type: z.literal('two_ai.marker'),
+  marker_id: NonEmptyString,
+  client_t_ms: NonNegativeMs,
+});
+export type TwoAiMarker = z.infer<typeof TwoAiMarker>;
+
+/** Browser→Node。next_step で板から 1 枚を選ぶ。最初の 1 回だけ有効。 */
+export const TwoAiBoardPick = z.strictObject({
+  type: z.literal('two_ai.board_pick'),
+  pick_id: NonEmptyString,
+  card_id: NonEmptyString,
+  board_version: NonNegativeInt,
+  client_t_ms: NonNegativeMs,
+});
+export type TwoAiBoardPick = z.infer<typeof TwoAiBoardPick>;
 
 /** Browser→Node の JSON。 */
 export const BrowserToNode = z.discriminatedUnion('type', [
@@ -242,19 +301,50 @@ export const BrowserToNode = z.discriminatedUnion('type', [
   GazeReport,
   SignalReport,
   AvatarReport,
+  RenderHealth,
+  TwoAiMarker,
+  TwoAiBoardPick,
 ]);
 export type BrowserToNode = z.infer<typeof BrowserToNode>;
 
 // ---- Node → Browser --------------------------------------------------------
 
-export const ServerHello = z.strictObject({
+/** 1 対 1。今の形のまま。mode は省略（1 対 1 の Node は送らない。送る通信の 1 バイトも変えない）。 */
+export const ServerHelloOneToOne = z.strictObject({
   type: z.literal('server.hello'),
   protocol_version: z.literal(BROWSER_RPC_PROTOCOL_VERSION),
+  mode: z.literal('one_to_one').optional(),
   session_id: SessionId,
   condition: Condition,
   /** 偽サーバーは true。 */
   is_fake: z.boolean(),
 });
+export type ServerHelloOneToOne = z.infer<typeof ServerHelloOneToOne>;
+
+/**
+ * 2 体。条件の値を持たない。condition は null に固定する（値を送らないための項目で、条件の漏れはない）。
+ * null に固定して項目を残すのは、participant.ts の `condition: message.condition`（型 Condition | null）と
+ * page.tsx が、共用体のままでも型を変えずに通るようにするため（1 対 1 の画面のファイルを触らない）。
+ */
+export const ServerHelloTwoAi = z.strictObject({
+  type: z.literal('server.hello'),
+  protocol_version: z.literal(BROWSER_RPC_PROTOCOL_VERSION),
+  mode: z.literal('two_ai'),
+  session_id: SessionId,
+  condition: z.null(),
+  is_fake: z.boolean(),
+  two_ai: z.strictObject({
+    ai_ids: z.tuple([z.literal('A'), z.literal('B')]),
+    /** 画面の配置とモデルの鍵（03 が解釈）。人格の中身は送らない。 */
+    avatar_keys: z.strictObject({ A: NonEmptyString, B: NonEmptyString }),
+    labels: z.strictObject({ A: NonEmptyString, B: NonEmptyString }),
+    phase: TwoAiPhase,
+  }),
+});
+export type ServerHelloTwoAi = z.infer<typeof ServerHelloTwoAi>;
+
+/** mode で判別する。NodeToBrowser の type の判別共用体の要素に入れ子で置く（zod 4.6.7 で確かめた）。 */
+export const ServerHello = z.discriminatedUnion('mode', [ServerHelloOneToOne, ServerHelloTwoAi]);
 export type ServerHello = z.infer<typeof ServerHello>;
 
 export const ClockPong = z.strictObject({
@@ -272,6 +362,8 @@ export const PlaybackBegin = z.strictObject({
   audio_playback_id: AudioPlaybackId,
   generation: Generation,
   sample_rate_hz: z.number().int().positive(),
+  /** two_ai の Node は必ず付ける。ブラウザは省略を 'A' として数える。 */
+  ai_id: AiId.optional(),
 });
 export type PlaybackBegin = z.infer<typeof PlaybackBegin>;
 
@@ -323,6 +415,8 @@ export const BreathCue = z.strictObject({
   cue_id: NonEmptyString,
   candidate_id: CandidateId,
   duration_ms: z.number().int().min(1),
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional(),
 });
 export type BreathCue = z.infer<typeof BreathCue>;
 
@@ -335,6 +429,8 @@ export const BreathRelease = z.strictObject({
   cue_id: NonEmptyString,
   candidate_id: CandidateId,
   reason: BreathReleaseReason,
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional(),
 });
 export type BreathRelease = z.infer<typeof BreathRelease>;
 
@@ -342,12 +438,16 @@ export type BreathRelease = z.infer<typeof BreathRelease>;
 export const BreathPrepare = z.strictObject({
   type: z.literal('breath.prepare'),
   candidate_id: CandidateId,
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional(),
 });
 export type BreathPrepare = z.infer<typeof BreathPrepare>;
 
 export const GazeCommand = z.strictObject({
   type: z.literal('gaze.command'),
   target: GazeTarget,
+  /** two_ai では省略は「両方」。1 対 1 は送らない。 */
+  ai_id: AiId.optional(),
 });
 export type GazeCommand = z.infer<typeof GazeCommand>;
 
@@ -386,6 +486,8 @@ export const PlaybackAlignment = z.strictObject({
   source: PlaybackAlignmentSource.optional(),
   /** items に reading があるときの由来。morphological_estimate は形態素解析の辞書の推定（実測ではない）。 */
   reading_source: PlaybackReadingSource.optional(),
+  /** two_ai の Node は必ず付ける。ブラウザは省略を 'A' として数える。 */
+  ai_id: AiId.optional(),
 });
 export type PlaybackAlignment = z.infer<typeof PlaybackAlignment>;
 
@@ -396,6 +498,55 @@ export const SessionStatus = z.strictObject({
   reasons: z.array(NonEmptyString),
 });
 export type SessionStatus = z.infer<typeof SessionStatus>;
+
+// ---- two_ai（06 §2.2）。条件の値は送らない ---------------------------------
+
+/** Node→Browser。段の変わり目と、接続・再接続の直後。条件の値は送らない。 */
+export const TwoAiPhaseMessage = z.strictObject({
+  type: z.literal('two_ai.phase'),
+  phase: TwoAiPhase,
+  /** 案内の文の鍵（two_ai_copy.ts）。条件名を鍵にも使わない。案内なしは null。 */
+  instruction_key: NonEmptyString.nullable(),
+  /** 画面の名札（例 { A: 'アオイ', B: 'ハル' }）。名札を出さない段は null。 */
+  labels: z.strictObject({ A: NonEmptyString, B: NonEmptyString }).nullable(),
+});
+export type TwoAiPhaseMessage = z.infer<typeof TwoAiPhaseMessage>;
+
+/** 板の 1 枚。参加者画面に出す文を持つ（条件の値は持たない）。 */
+export const BoardCardView = z.strictObject({
+  card_id: NonEmptyString,
+  order: z.number().int().min(1).max(4),
+  discussion_stage: DiscussionStage,
+  text: NonEmptyString,
+  variant: ScriptVariant,
+});
+export type BoardCardView = z.infer<typeof BoardCardView>;
+
+/**
+ * Node→Browser。板の全体（差分ではない）。送る時機：カードを持つターンの start_turn の直後（building）、
+ * 最後の段の作り直しの最初のターンの start_turn の直後（rebuilt）、next_step の始め（pick）、選んだ後（picked）、
+ * 接続・再接続の直後（今の状態）。両条件で同じ規則。
+ */
+export const TwoAiBoardMessage = z.strictObject({
+  type: z.literal('two_ai.board'),
+  board_version: NonNegativeInt,
+  mode: z.enum(['building', 'rebuilt', 'pick', 'picked']),
+  cards: z.array(BoardCardView).max(4),
+  picked_card_id: NonEmptyString.nullable(),
+});
+export type TwoAiBoardMessage = z.infer<typeof TwoAiBoardMessage>;
+
+/** Node→Browser。段の見出し。段の始め、response の始め（all）、接続・再接続の直後。 */
+export const TwoAiStageMessage = z.strictObject({
+  type: z.literal('two_ai.stage'),
+  /** 今の段。discussion の外は null。 */
+  current: DiscussionStage.nullable(),
+  /** 4 つの見出し（条件で変えない）。 */
+  headings: z.tuple([NonEmptyString, NonEmptyString, NonEmptyString, NonEmptyString]),
+  /** current：今の段だけ強調。all：最後の段の問いのとき 4 つを並べる。none：出さない。 */
+  show: z.enum(['current', 'all', 'none']),
+});
+export type TwoAiStageMessage = z.infer<typeof TwoAiStageMessage>;
 
 /** Node→Browser の JSON。 */
 export const NodeToBrowser = z.discriminatedUnion('type', [
@@ -410,5 +561,8 @@ export const NodeToBrowser = z.discriminatedUnion('type', [
   BreathCue,
   BreathRelease,
   BreathPrepare,
+  TwoAiPhaseMessage,
+  TwoAiBoardMessage,
+  TwoAiStageMessage,
 ]);
 export type NodeToBrowser = z.infer<typeof NodeToBrowser>;

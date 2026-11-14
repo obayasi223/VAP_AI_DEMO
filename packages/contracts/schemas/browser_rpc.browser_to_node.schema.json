@@ -1287,7 +1287,8 @@
           "type": "string",
           "enum": [
             "user",
-            "away"
+            "away",
+            "peer"
           ]
         },
         "visible": {
@@ -1325,6 +1326,13 @@
               ],
               "additionalProperties": false
             }
+          ]
+        },
+        "ai_id": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B"
           ]
         }
       },
@@ -1398,6 +1406,13 @@
               ],
               "additionalProperties": false
             }
+          ]
+        },
+        "ai_id": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B"
           ]
         }
       },
@@ -1486,6 +1501,65 @@
         "client_t_ms": {
           "type": "number",
           "minimum": 0
+        },
+        "ai_id": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "render_profile": {
+          "type": "object",
+          "properties": {
+            "max_fps": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "pixel_ratio": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "spring_bones": {
+              "type": "string",
+              "enum": [
+                "all",
+                "speaker_only",
+                "none"
+              ]
+            }
+          },
+          "required": [
+            "max_fps",
+            "pixel_ratio",
+            "spring_bones"
+          ],
+          "additionalProperties": false
+        },
+        "layout": {
+          "type": "object",
+          "properties": {
+            "side": {
+              "type": "string",
+              "enum": [
+                "left",
+                "right"
+              ]
+            },
+            "body_yaw_deg": {
+              "type": "number"
+            },
+            "spacing_m": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "required": [
+            "side",
+            "body_yaw_deg",
+            "spacing_m"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -1497,6 +1571,118 @@
         "status",
         "error",
         "breath_sound_gain",
+        "client_t_ms"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "render.health"
+        },
+        "fps_p5": {
+          "type": "number",
+          "minimum": 0
+        },
+        "fps_median": {
+          "type": "number",
+          "minimum": 0
+        },
+        "frame_ms_p95": {
+          "type": "number",
+          "minimum": 0
+        },
+        "long_tasks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "renderer": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "avatars": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "pixel_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "client_t_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "fps_p5",
+        "fps_median",
+        "frame_ms_p95",
+        "long_tasks",
+        "renderer",
+        "avatars",
+        "pixel_ratio",
+        "client_t_ms"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "two_ai.marker"
+        },
+        "marker_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "client_t_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "marker_id",
+        "client_t_ms"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "two_ai.board_pick"
+        },
+        "pick_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "card_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "board_version": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "client_t_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "pick_id",
+        "card_id",
+        "board_version",
         "client_t_ms"
       ],
       "additionalProperties": false

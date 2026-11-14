@@ -2400,6 +2400,839 @@
             "value": 4
           }
         }
+      },
+      {
+        "name": "two_ai.phase_changed",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.phase_changed",
+          "from": "intake",
+          "to": "discussion",
+          "source": "auto_timer",
+          "reason": "intake_max_sec",
+          "elapsed_in_from_ms": {
+            "value": 240000
+          },
+          "planned_duration_ms": {
+            "value": 540000
+          }
+        }
+      },
+      {
+        "name": "two_ai.turn",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.turn",
+          "turn_id": "t_0012",
+          "turn_index": 12,
+          "turn_kind": "point",
+          "stage": "ended",
+          "speaker": "B",
+          "point_id": "f1",
+          "audio_playback_id": {
+            "value": 31
+          },
+          "text_origin": "frozen",
+          "gap_ms": {
+            "value": null,
+            "null_reason": "not_started_stage"
+          },
+          "gap_hint_ms": {
+            "value": 600
+          },
+          "waited_for_ready_ms": {
+            "value": null,
+            "null_reason": "not_started_stage"
+          },
+          "played_ms": {
+            "value": 5200
+          },
+          "content_ms": {
+            "value": 5200
+          },
+          "discussion_stage": 1,
+          "point_variant": "original",
+          "board_card_id": null,
+          "interrupted": false,
+          "feed_turn": false,
+          "reason": "completed"
+        }
+      },
+      {
+        "name": "two_ai.interjection",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.interjection",
+          "interjection_id": "ij_0003",
+          "stage": "classified",
+          "decision_source": "vap",
+          "interrupted_ai": "B",
+          "during_point_id": "f1",
+          "audio_playback_id": {
+            "value": 31
+          },
+          "p_now_user": {
+            "value": 0.7
+          },
+          "p_future_user": {
+            "value": 0.65
+          },
+          "vad_user": {
+            "value": 0.9
+          },
+          "mic_dbfs": {
+            "value": -28
+          },
+          "first_voiced_at": {
+            "value": 61000
+          },
+          "latency_ms": {
+            "value": 240
+          },
+          "classification": "content",
+          "classification_basis": "final",
+          "reason": "stt_final"
+        }
+      },
+      {
+        "name": "two_ai.interjection_episode",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.interjection_episode",
+          "interjection_id": "ij_0003",
+          "outcome": "yielded",
+          "false_onset_check": {
+            "window_ms": 1500,
+            "voiced_ms": 900,
+            "had_text": true
+          },
+          "decision_source": "vap",
+          "interrupted_ai": "B",
+          "during_point_id": "f1",
+          "onset_at": 61200,
+          "user_voice_start_at": {
+            "value": 61000
+          },
+          "stop_requested_at": {
+            "value": 61210
+          },
+          "stopped_at": {
+            "value": 61400
+          },
+          "stop_latency_ms": {
+            "value": 400
+          },
+          "gaze_to_user_at": {
+            "A": {
+              "value": 61250
+            },
+            "B": {
+              "value": 61250
+            }
+          },
+          "user_speech_end_at": {
+            "value": 64000
+          },
+          "ack": {
+            "ai_id": "B",
+            "template_id": "ack_1",
+            "audio_playback_id": 32,
+            "synthesized_ms": 1100,
+            "played_ms": 1100,
+            "truncated": false
+          },
+          "reonsets_during_ack": 0,
+          "correction": {
+            "point_id": "f1",
+            "trigger": "woz_researcher",
+            "timing": "in_window"
+          },
+          "correction_hold": {
+            "started_at": 65100,
+            "hold_until": 70000,
+            "ended_at": 66500,
+            "ended_by": "corrected",
+            "stt_final_after_ms": {
+              "value": 900
+            },
+            "judgment_after_ms": {
+              "value": null,
+              "null_reason": "researcher_path_without_assist"
+            }
+          },
+          "near_marker": false,
+          "resumed_at": {
+            "value": null,
+            "null_reason": "drop_resume"
+          },
+          "asr_segment_ids": [
+            4
+          ],
+          "fed": false
+        }
+      },
+      {
+        "name": "two_ai.point",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.point",
+          "point_id": "f1",
+          "point_kind": "fact_slip",
+          "speaker": "B",
+          "stage": "started",
+          "turn_id": "t_0012",
+          "trigger": {
+            "in_stage": 1,
+            "after_stage_turn": 1
+          },
+          "discussion_stage": 1,
+          "planned_at": {
+            "value": null,
+            "null_reason": "in_stage_trigger"
+          },
+          "content_elapsed_ms": {
+            "value": 14000
+          },
+          "deviation_ms": {
+            "value": null,
+            "null_reason": "in_stage_trigger"
+          },
+          "exposure_new_ms": {
+            "value": null,
+            "null_reason": "not_measured_at_start"
+          },
+          "exposure_total_ms": {
+            "value": null,
+            "null_reason": "not_measured_at_start"
+          },
+          "elaborated_turns": 0,
+          "reason": "trigger_reached"
+        }
+      },
+      {
+        "name": "two_ai.point_exposure",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.point_exposure",
+          "point_id": "c1",
+          "point_kind": "framing_C",
+          "speaker": "A",
+          "exposure_total_ms": 21000,
+          "exposure_new_ms": 19000,
+          "bridge_ms": 800,
+          "repeated_ms": 1200,
+          "repeated_ms_source": "alignment",
+          "planned_exposure_ms": {
+            "value": 19500
+          },
+          "segments": [
+            {
+              "audio_playback_id": 40,
+              "turn_id": "t_0020",
+              "turn_kind": "point",
+              "played_ms": 7000,
+              "new_ms": 7000,
+              "cut": "none",
+              "variant": "original"
+            }
+          ],
+          "elaborations_done": 2,
+          "elaborations_planned": 2,
+          "complete": true,
+          "cut_by_correction": false
+        }
+      },
+      {
+        "name": "two_ai.script",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.script",
+          "stage": "switched",
+          "point_id": "f1",
+          "trigger": "woz_researcher",
+          "reason": "researcher_confirmed",
+          "decided_at": 66500,
+          "timing": "in_window",
+          "asr_segment_ids": [
+            4
+          ],
+          "invalidated_turn_ids": [
+            "t_0014"
+          ],
+          "replaced_point_turn_ids": [
+            "t_0013"
+          ],
+          "resume_dropped": true,
+          "uptake_turn_id": "t_0015"
+        }
+      },
+      {
+        "name": "two_ai.ai_state",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.ai_state",
+          "speaker": "A",
+          "turn_id": "t_0020",
+          "state": {
+            "stance_id": "lens_a",
+            "framing_C": "introduced",
+            "fact_slip": "not_yet",
+            "fed_interjections": 0
+          },
+          "state_version": "v3"
+        }
+      },
+      {
+        "name": "two_ai.anomaly",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.anomaly",
+          "kind": "turn_not_ready",
+          "speaker": "A",
+          "detail": "fallback_used"
+        }
+      },
+      {
+        "name": "two_ai.plan_wait",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.plan_wait",
+          "stage": "ready",
+          "waited_ms": 4200,
+          "plan_source": "early",
+          "reason": "plan_ready"
+        }
+      },
+      {
+        "name": "two_ai.response_window",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.response_window",
+          "planned_ms": 120000,
+          "question_played_ms": 4300,
+          "started_at": 700000,
+          "ended_at": 820000,
+          "ended_by": "timer",
+          "overrun_ms": 0,
+          "user_speech_ms": 45000,
+          "silence_prompts": 1,
+          "correction_recorded": false,
+          "ack_given": true
+        }
+      },
+      {
+        "name": "two_ai.stage",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.stage",
+          "discussion_stage": 2,
+          "edge": "started",
+          "heading": "選択肢を並べる",
+          "turn_id": "t_0016",
+          "content_elapsed_ms": 130000,
+          "discussion_elapsed_ms": 151000
+        }
+      },
+      {
+        "name": "two_ai.board",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.board",
+          "board_version": 1,
+          "mode": "building",
+          "cards": [
+            {
+              "card_id": "card_1",
+              "order": 1,
+              "discussion_stage": 1,
+              "variant": "original",
+              "depends_on": "fact_slip",
+              "text": "締切に合わせて申し込む",
+              "trigger_turn_ended": false
+            }
+          ],
+          "trigger_turn_id": "t_0014",
+          "reason": "shown",
+          "picked_card_id": null
+        }
+      },
+      {
+        "name": "two_ai.marker",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "browser_rtt",
+            "uncertainty_ms": {
+              "value": 3
+            }
+          },
+          "event": "two_ai.marker",
+          "marker_id": "mk_0001",
+          "client_t_ms": 59000,
+          "discussion_stage": 1,
+          "ai_speaking": "B",
+          "turn_id": "t_0012",
+          "turn_kind": "point",
+          "during_point_id": "f1",
+          "played_ms_in_turn": {
+            "value": 2100
+          },
+          "content_elapsed_ms": {
+            "value": 16100
+          },
+          "user_speaking": false,
+          "interjection_id": null,
+          "counted": true,
+          "handling": "recorded_only"
+        }
+      },
+      {
+        "name": "two_ai.board_picked",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "browser_rtt",
+            "uncertainty_ms": {
+              "value": 3
+            }
+          },
+          "event": "two_ai.board_picked",
+          "pick_id": "pk_0001",
+          "outcome": "picked",
+          "card_id": "card_3",
+          "card_variant": "corrected",
+          "card_depends_on": "framing_C",
+          "board_version": 6,
+          "latency_ms": {
+            "value": 8200
+          },
+          "reason": "first_valid_pick"
+        }
+      },
+      {
+        "name": "two_ai.retraction",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.retraction",
+          "timing": "end_of_session",
+          "trigger": "end",
+          "point_ids": [
+            "f1"
+          ],
+          "ai_id": "B",
+          "audio_playback_id": {
+            "value": 90
+          },
+          "played_ms": {
+            "value": 14000
+          },
+          "script_sha256": "sha256_retraction",
+          "lines": [
+            {
+              "ai_id": "B",
+              "text": "先ほど締切を 12 月末と言いましたが、正しくは 2 月末でした。"
+            }
+          ],
+          "inference_form": "spoken"
+        }
+      },
+      {
+        "name": "two_ai.sync_mark",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.sync_mark",
+          "seq": 2,
+          "message": "two_ai.stage",
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "t_wall_ms": 1793329200000
+        }
+      },
+      {
+        "name": "two_ai.ledger",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.ledger",
+          "stage": "updated",
+          "ledger_version": 3,
+          "item_ids": [
+            "core",
+            "fact_1"
+          ],
+          "reason": "stt_final"
+        }
+      },
+      {
+        "name": "two_ai.plan",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.plan",
+          "stage": "frozen",
+          "trigger": "early",
+          "plan_id": "plan_0001",
+          "plan_hash": "sha256_plan",
+          "source": "generated",
+          "plan": {
+            "beats": []
+          },
+          "fact_slip_source": "prior",
+          "schedule_check": {
+            "ok": true,
+            "latest_point_end_sec": 300,
+            "close_at_sec": 480
+          },
+          "prompt_versions": {
+            "discussion_plan": "plan_v1"
+          },
+          "models": {
+            "discussion_plan": "model_x"
+          },
+          "latency_ms": {
+            "value": 6100
+          },
+          "reason": "plan_ok"
+        }
+      },
+      {
+        "name": "two_ai.generation",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.generation",
+          "turn_id": "t_0016",
+          "beat_id": "b_05",
+          "stage": "generated",
+          "prompt_version": "turn_v1",
+          "model": "model_x",
+          "latency_ms": {
+            "value": 1300
+          },
+          "chars": 62,
+          "fed_interjection_ids": [],
+          "feed_turn": false,
+          "c_ban_lifted": false,
+          "reason": "ok"
+        }
+      },
+      {
+        "name": "two_ai.safety_blocked",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.safety_blocked",
+          "rule": "person_evaluation",
+          "stage": "turn",
+          "text": "（作り物の文）",
+          "action": "regenerate"
+        }
+      },
+      {
+        "name": "two_ai.correction_suggested",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.correction_suggested",
+          "suggestion_id": "sg_0001",
+          "point_id": "f1",
+          "asr_segment_ids": [
+            4
+          ],
+          "status": "done",
+          "corrects": true,
+          "evidence_span": "2 月末です",
+          "method": "llm_judge_v1",
+          "latency_ms": {
+            "value": 1700
+          }
+        }
+      },
+      {
+        "name": "two_ai.interjection_fed",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "event": "two_ai.interjection_fed",
+          "interjection_id": "ij_0003",
+          "asr_segment_ids": [
+            4
+          ],
+          "chars": 18,
+          "accepted": true,
+          "excluded_reason": null,
+          "invalidated_turn_ids": [],
+          "target": "after_point_block"
+        }
+      },
+      {
+        "name": "render.health",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "browser_rtt",
+            "uncertainty_ms": {
+              "value": 3
+            }
+          },
+          "event": "render.health",
+          "fps_p5": 48,
+          "fps_median": 60,
+          "frame_ms_p95": 21,
+          "long_tasks": 0,
+          "renderer": "ANGLE (test)",
+          "avatars": 2,
+          "pixel_ratio": 1
+        }
+      },
+      {
+        "name": "speech.ended/two_ai_turn",
+        "value": {
+          "schema_version": 1,
+          "t_monotonic_ms": 1234.5,
+          "wall_clock": "2026-11-08T03:00:00.000Z",
+          "session_id": "s_0001",
+          "condition": "respond_on_spot",
+          "time_basis": {
+            "source": "orchestrator",
+            "uncertainty_ms": {
+              "value": 0
+            }
+          },
+          "audio_playback_id": 11,
+          "audio_frame": 64000,
+          "started_at": 2000,
+          "first_pcm_written_at": 1980,
+          "output_latency_ms": {
+            "value": 20
+          },
+          "spoken_text": "それは月額",
+          "spoken_text_precision": "alignment_char",
+          "samples_written": 12800,
+          "event": "speech.ended",
+          "ended_at": 7200,
+          "origin": "two_ai_turn",
+          "ai_id": "B",
+          "turn_id": "t_0012",
+          "turn_kind": "point",
+          "point_id": "f1"
+        }
       }
     ],
     "vap_state": [
@@ -2806,6 +3639,38 @@
             "value": 820
           }
         }
+      },
+      {
+        "name": "render.health",
+        "value": {
+          "type": "render.health",
+          "fps_p5": 48,
+          "fps_median": 60,
+          "frame_ms_p95": 21,
+          "long_tasks": 0,
+          "renderer": "ANGLE (test)",
+          "avatars": 2,
+          "pixel_ratio": 1,
+          "client_t_ms": 5000
+        }
+      },
+      {
+        "name": "two_ai.marker",
+        "value": {
+          "type": "two_ai.marker",
+          "marker_id": "mk_0001",
+          "client_t_ms": 59000
+        }
+      },
+      {
+        "name": "two_ai.board_pick",
+        "value": {
+          "type": "two_ai.board_pick",
+          "pick_id": "pk_0001",
+          "card_id": "card_3",
+          "board_version": 6,
+          "client_t_ms": 801000
+        }
       }
     ],
     "browser_rpc.node_to_browser": [
@@ -2931,6 +3796,76 @@
           "reasons": [
             "vap_stale"
           ]
+        }
+      },
+      {
+        "name": "server.hello/two_ai",
+        "value": {
+          "type": "server.hello",
+          "protocol_version": 1,
+          "mode": "two_ai",
+          "session_id": "s_0002",
+          "condition": null,
+          "is_fake": false,
+          "two_ai": {
+            "ai_ids": [
+              "A",
+              "B"
+            ],
+            "avatar_keys": {
+              "A": "avatar_a",
+              "B": "avatar_b"
+            },
+            "labels": {
+              "A": "アオイ",
+              "B": "ハル"
+            },
+            "phase": "intake"
+          }
+        }
+      },
+      {
+        "name": "two_ai.phase",
+        "value": {
+          "type": "two_ai.phase",
+          "phase": "discussion",
+          "instruction_key": "discussion_a",
+          "labels": {
+            "A": "アオイ",
+            "B": "ハル"
+          }
+        }
+      },
+      {
+        "name": "two_ai.board",
+        "value": {
+          "type": "two_ai.board",
+          "board_version": 2,
+          "mode": "building",
+          "cards": [
+            {
+              "card_id": "card_1",
+              "order": 1,
+              "discussion_stage": 1,
+              "text": "締切に合わせて申し込む",
+              "variant": "original"
+            }
+          ],
+          "picked_card_id": null
+        }
+      },
+      {
+        "name": "two_ai.stage",
+        "value": {
+          "type": "two_ai.stage",
+          "current": 2,
+          "headings": [
+            "状況",
+            "選択肢",
+            "別の見方",
+            "次の一歩"
+          ],
+          "show": "current"
         }
       }
     ],
@@ -3510,6 +4445,1343 @@
       "optional_keys": [
         "discarded_chunks",
         "discarded_samples"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.phase_changed/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.phase_changed",
+        "from": "intake",
+        "to": "discussion",
+        "source": "auto_timer",
+        "reason": "intake_max_sec",
+        "elapsed_in_from_ms": {
+          "value": 240000
+        },
+        "planned_duration_ms": {
+          "value": 540000
+        },
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.turn/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.turn",
+        "turn_id": "t_0012",
+        "turn_index": 12,
+        "turn_kind": "point",
+        "stage": "ended",
+        "speaker": "B",
+        "point_id": "f1",
+        "audio_playback_id": {
+          "value": 31
+        },
+        "text_origin": "frozen",
+        "gap_ms": {
+          "value": null,
+          "null_reason": "not_started_stage"
+        },
+        "gap_hint_ms": {
+          "value": 600
+        },
+        "waited_for_ready_ms": {
+          "value": null,
+          "null_reason": "not_started_stage"
+        },
+        "played_ms": {
+          "value": 5200
+        },
+        "content_ms": {
+          "value": 5200
+        },
+        "discussion_stage": 1,
+        "point_variant": "original",
+        "board_card_id": null,
+        "interrupted": false,
+        "feed_turn": false,
+        "reason": "completed",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.interjection/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.interjection",
+        "interjection_id": "ij_0003",
+        "stage": "classified",
+        "decision_source": "vap",
+        "interrupted_ai": "B",
+        "during_point_id": "f1",
+        "audio_playback_id": {
+          "value": 31
+        },
+        "p_now_user": {
+          "value": 0.7
+        },
+        "p_future_user": {
+          "value": 0.65
+        },
+        "vad_user": {
+          "value": 0.9
+        },
+        "mic_dbfs": {
+          "value": -28
+        },
+        "first_voiced_at": {
+          "value": 61000
+        },
+        "latency_ms": {
+          "value": 240
+        },
+        "classification": "content",
+        "classification_basis": "final",
+        "reason": "stt_final",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.interjection_episode/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.interjection_episode",
+        "interjection_id": "ij_0003",
+        "outcome": "yielded",
+        "false_onset_check": {
+          "window_ms": 1500,
+          "voiced_ms": 900,
+          "had_text": true
+        },
+        "decision_source": "vap",
+        "interrupted_ai": "B",
+        "during_point_id": "f1",
+        "onset_at": 61200,
+        "user_voice_start_at": {
+          "value": 61000
+        },
+        "stop_requested_at": {
+          "value": 61210
+        },
+        "stopped_at": {
+          "value": 61400
+        },
+        "stop_latency_ms": {
+          "value": 400
+        },
+        "gaze_to_user_at": {
+          "A": {
+            "value": 61250
+          },
+          "B": {
+            "value": 61250
+          }
+        },
+        "user_speech_end_at": {
+          "value": 64000
+        },
+        "ack": {
+          "ai_id": "B",
+          "template_id": "ack_1",
+          "audio_playback_id": 32,
+          "synthesized_ms": 1100,
+          "played_ms": 1100,
+          "truncated": false
+        },
+        "reonsets_during_ack": 0,
+        "correction": {
+          "point_id": "f1",
+          "trigger": "woz_researcher",
+          "timing": "in_window"
+        },
+        "correction_hold": {
+          "started_at": 65100,
+          "hold_until": 70000,
+          "ended_at": 66500,
+          "ended_by": "corrected",
+          "stt_final_after_ms": {
+            "value": 900
+          },
+          "judgment_after_ms": {
+            "value": null,
+            "null_reason": "researcher_path_without_assist"
+          }
+        },
+        "near_marker": false,
+        "resumed_at": {
+          "value": null,
+          "null_reason": "drop_resume"
+        },
+        "asr_segment_ids": [
+          4
+        ],
+        "fed": false,
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.point/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.point",
+        "point_id": "f1",
+        "point_kind": "fact_slip",
+        "speaker": "B",
+        "stage": "started",
+        "turn_id": "t_0012",
+        "trigger": {
+          "in_stage": 1,
+          "after_stage_turn": 1
+        },
+        "discussion_stage": 1,
+        "planned_at": {
+          "value": null,
+          "null_reason": "in_stage_trigger"
+        },
+        "content_elapsed_ms": {
+          "value": 14000
+        },
+        "deviation_ms": {
+          "value": null,
+          "null_reason": "in_stage_trigger"
+        },
+        "exposure_new_ms": {
+          "value": null,
+          "null_reason": "not_measured_at_start"
+        },
+        "exposure_total_ms": {
+          "value": null,
+          "null_reason": "not_measured_at_start"
+        },
+        "elaborated_turns": 0,
+        "reason": "trigger_reached",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.point_exposure/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.point_exposure",
+        "point_id": "c1",
+        "point_kind": "framing_C",
+        "speaker": "A",
+        "exposure_total_ms": 21000,
+        "exposure_new_ms": 19000,
+        "bridge_ms": 800,
+        "repeated_ms": 1200,
+        "repeated_ms_source": "alignment",
+        "planned_exposure_ms": {
+          "value": 19500
+        },
+        "segments": [
+          {
+            "audio_playback_id": 40,
+            "turn_id": "t_0020",
+            "turn_kind": "point",
+            "played_ms": 7000,
+            "new_ms": 7000,
+            "cut": "none",
+            "variant": "original"
+          }
+        ],
+        "elaborations_done": 2,
+        "elaborations_planned": 2,
+        "complete": true,
+        "cut_by_correction": false,
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.script/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.script",
+        "stage": "switched",
+        "point_id": "f1",
+        "trigger": "woz_researcher",
+        "reason": "researcher_confirmed",
+        "decided_at": 66500,
+        "timing": "in_window",
+        "asr_segment_ids": [
+          4
+        ],
+        "invalidated_turn_ids": [
+          "t_0014"
+        ],
+        "replaced_point_turn_ids": [
+          "t_0013"
+        ],
+        "resume_dropped": true,
+        "uptake_turn_id": "t_0015",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.ai_state/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.ai_state",
+        "speaker": "A",
+        "turn_id": "t_0020",
+        "state": {
+          "stance_id": "lens_a",
+          "framing_C": "introduced",
+          "fact_slip": "not_yet",
+          "fed_interjections": 0
+        },
+        "state_version": "v3",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.anomaly/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.anomaly",
+        "kind": "turn_not_ready",
+        "speaker": "A",
+        "detail": "fallback_used",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.plan_wait/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.plan_wait",
+        "stage": "ready",
+        "waited_ms": 4200,
+        "plan_source": "early",
+        "reason": "plan_ready",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.response_window/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.response_window",
+        "planned_ms": 120000,
+        "question_played_ms": 4300,
+        "started_at": 700000,
+        "ended_at": 820000,
+        "ended_by": "timer",
+        "overrun_ms": 0,
+        "user_speech_ms": 45000,
+        "silence_prompts": 1,
+        "correction_recorded": false,
+        "ack_given": true,
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.stage/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.stage",
+        "discussion_stage": 2,
+        "edge": "started",
+        "heading": "選択肢を並べる",
+        "turn_id": "t_0016",
+        "content_elapsed_ms": 130000,
+        "discussion_elapsed_ms": 151000,
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.board/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.board",
+        "board_version": 1,
+        "mode": "building",
+        "cards": [
+          {
+            "card_id": "card_1",
+            "order": 1,
+            "discussion_stage": 1,
+            "variant": "original",
+            "depends_on": "fact_slip",
+            "text": "締切に合わせて申し込む",
+            "trigger_turn_ended": false
+          }
+        ],
+        "trigger_turn_id": "t_0014",
+        "reason": "shown",
+        "picked_card_id": null,
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.marker/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "browser_rtt",
+          "uncertainty_ms": {
+            "value": 3
+          }
+        },
+        "event": "two_ai.marker",
+        "marker_id": "mk_0001",
+        "client_t_ms": 59000,
+        "discussion_stage": 1,
+        "ai_speaking": "B",
+        "turn_id": "t_0012",
+        "turn_kind": "point",
+        "during_point_id": "f1",
+        "played_ms_in_turn": {
+          "value": 2100
+        },
+        "content_elapsed_ms": {
+          "value": 16100
+        },
+        "user_speaking": false,
+        "interjection_id": null,
+        "counted": true,
+        "handling": "recorded_only",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.board_picked/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "browser_rtt",
+          "uncertainty_ms": {
+            "value": 3
+          }
+        },
+        "event": "two_ai.board_picked",
+        "pick_id": "pk_0001",
+        "outcome": "picked",
+        "card_id": "card_3",
+        "card_variant": "corrected",
+        "card_depends_on": "framing_C",
+        "board_version": 6,
+        "latency_ms": {
+          "value": 8200
+        },
+        "reason": "first_valid_pick",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.retraction/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.retraction",
+        "timing": "end_of_session",
+        "trigger": "end",
+        "point_ids": [
+          "f1"
+        ],
+        "ai_id": "B",
+        "audio_playback_id": {
+          "value": 90
+        },
+        "played_ms": {
+          "value": 14000
+        },
+        "script_sha256": "sha256_retraction",
+        "lines": [
+          {
+            "ai_id": "B",
+            "text": "先ほど締切を 12 月末と言いましたが、正しくは 2 月末でした。"
+          }
+        ],
+        "inference_form": "spoken",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.sync_mark/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.sync_mark",
+        "seq": 2,
+        "message": "two_ai.stage",
+        "phase": "discussion",
+        "discussion_stage": 1,
+        "t_wall_ms": 1793329200000,
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.ledger/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.ledger",
+        "stage": "updated",
+        "ledger_version": 3,
+        "item_ids": [
+          "core",
+          "fact_1"
+        ],
+        "reason": "stt_final",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.plan/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.plan",
+        "stage": "frozen",
+        "trigger": "early",
+        "plan_id": "plan_0001",
+        "plan_hash": "sha256_plan",
+        "source": "generated",
+        "plan": {
+          "beats": []
+        },
+        "fact_slip_source": "prior",
+        "schedule_check": {
+          "ok": true,
+          "latest_point_end_sec": 300,
+          "close_at_sec": 480
+        },
+        "prompt_versions": {
+          "discussion_plan": "plan_v1"
+        },
+        "models": {
+          "discussion_plan": "model_x"
+        },
+        "latency_ms": {
+          "value": 6100
+        },
+        "reason": "plan_ok",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.generation/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.generation",
+        "turn_id": "t_0016",
+        "beat_id": "b_05",
+        "stage": "generated",
+        "prompt_version": "turn_v1",
+        "model": "model_x",
+        "latency_ms": {
+          "value": 1300
+        },
+        "chars": 62,
+        "fed_interjection_ids": [],
+        "feed_turn": false,
+        "c_ban_lifted": false,
+        "reason": "ok",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.safety_blocked/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.safety_blocked",
+        "rule": "person_evaluation",
+        "stage": "turn",
+        "text": "（作り物の文）",
+        "action": "regenerate",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.correction_suggested/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.correction_suggested",
+        "suggestion_id": "sg_0001",
+        "point_id": "f1",
+        "asr_segment_ids": [
+          4
+        ],
+        "status": "done",
+        "corrects": true,
+        "evidence_span": "2 月末です",
+        "method": "llm_judge_v1",
+        "latency_ms": {
+          "value": 1700
+        },
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.interjection_fed/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.interjection_fed",
+        "interjection_id": "ij_0003",
+        "asr_segment_ids": [
+          4
+        ],
+        "chars": 18,
+        "accepted": true,
+        "excluded_reason": null,
+        "invalidated_turn_ids": [],
+        "target": "after_point_block",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "render.health/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "browser_rtt",
+          "uncertainty_ms": {
+            "value": 3
+          }
+        },
+        "event": "render.health",
+        "fps_p5": 48,
+        "fps_median": 60,
+        "frame_ms_p95": 21,
+        "long_tasks": 0,
+        "renderer": "ANGLE (test)",
+        "avatars": 2,
+        "pixel_ratio": 1,
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "speech.ended/two_ai_turn/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "audio_playback_id": 11,
+        "audio_frame": 64000,
+        "started_at": 2000,
+        "first_pcm_written_at": 1980,
+        "output_latency_ms": {
+          "value": 20
+        },
+        "spoken_text": "それは月額",
+        "spoken_text_precision": "alignment_char",
+        "samples_written": 12800,
+        "event": "speech.ended",
+        "ended_at": 7200,
+        "origin": "two_ai_turn",
+        "ai_id": "B",
+        "turn_id": "t_0012",
+        "turn_kind": "point",
+        "point_id": "f1",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "events",
+      "name": "stt.final/two_ai_envelope",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_at_end",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "text": "月額料金の話なんですけど",
+        "stable_text": "月額料金の話",
+        "unstable_text": "なんですけど",
+        "parts": [
+          {
+            "text": "月額料金の話",
+            "stability": {
+              "value": 0.9
+            }
+          },
+          {
+            "text": "なんですけど",
+            "stability": {
+              "value": 0.01
+            }
+          }
+        ],
+        "segment_id": 3,
+        "asr_segment_id": 7,
+        "asr_segment_frame_start": 16000,
+        "transcript_revision": 42,
+        "stability": {
+          "value": 0.8
+        },
+        "stability_source": "provider",
+        "audio_frame_end": 48000,
+        "timing_precision": "result_end_offset",
+        "words": {
+          "value": null,
+          "null_reason": "interim_words_unavailable"
+        },
+        "stream_id": "stream_1",
+        "provider": "google_stt_v2",
+        "model_version": "chirp_3",
+        "event": "stt.final",
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": null,
+          "point_id": null,
+          "script_variant": "original"
+        }
+      },
+      "optional_keys": [
+        "two_ai"
+      ]
+    },
+    {
+      "schema": "browser_rpc.node_to_browser",
+      "name": "server.hello/one_to_one_mode",
+      "value": {
+        "type": "server.hello",
+        "protocol_version": 1,
+        "mode": "one_to_one",
+        "session_id": "s_0001",
+        "condition": "reactive",
+        "is_fake": true
+      },
+      "optional_keys": [
+        "mode"
+      ]
+    },
+    {
+      "schema": "browser_rpc.node_to_browser",
+      "name": "gaze.command/peer",
+      "value": {
+        "type": "gaze.command",
+        "target": "peer",
+        "ai_id": "A"
+      },
+      "optional_keys": [
+        "ai_id"
+      ]
+    },
+    {
+      "schema": "browser_rpc.node_to_browser",
+      "name": "playback.begin/ai_id",
+      "value": {
+        "type": "playback.begin",
+        "audio_playback_id": 11,
+        "generation": 3,
+        "sample_rate_hz": 16000,
+        "ai_id": "B"
+      },
+      "optional_keys": [
+        "ai_id"
+      ]
+    },
+    {
+      "schema": "browser_rpc.node_to_browser",
+      "name": "playback.alignment/ai_id",
+      "value": {
+        "type": "playback.alignment",
+        "audio_playback_id": 11,
+        "generation": 3,
+        "items": [
+          {
+            "text": "はい",
+            "start_ms": 0,
+            "end_ms": 350,
+            "granularity": "word"
+          }
+        ],
+        "ai_id": "B"
+      },
+      "optional_keys": [
+        "ai_id"
+      ]
+    },
+    {
+      "schema": "browser_rpc.node_to_browser",
+      "name": "breath.cue/ai_id",
+      "value": {
+        "type": "breath.cue",
+        "cue_id": "cue_0001",
+        "candidate_id": "c_0007",
+        "duration_ms": 450,
+        "ai_id": "A"
+      },
+      "optional_keys": [
+        "ai_id"
+      ]
+    },
+    {
+      "schema": "browser_rpc.node_to_browser",
+      "name": "breath.release/ai_id",
+      "value": {
+        "type": "breath.release",
+        "cue_id": "cue_0001",
+        "candidate_id": "c_0007",
+        "reason": "deferred",
+        "ai_id": "A"
+      },
+      "optional_keys": [
+        "ai_id"
+      ]
+    },
+    {
+      "schema": "browser_rpc.node_to_browser",
+      "name": "breath.prepare/ai_id",
+      "value": {
+        "type": "breath.prepare",
+        "candidate_id": "c_0007",
+        "ai_id": "A"
+      },
+      "optional_keys": [
+        "ai_id"
+      ]
+    },
+    {
+      "schema": "browser_rpc.browser_to_node",
+      "name": "gaze.report/peer",
+      "value": {
+        "type": "gaze.report",
+        "target": "peer",
+        "visible": true,
+        "client_t_ms": {
+          "value": 820
+        },
+        "ai_id": "B"
+      },
+      "optional_keys": [
+        "ai_id"
+      ]
+    },
+    {
+      "schema": "browser_rpc.browser_to_node",
+      "name": "signal.report/ai_id",
+      "value": {
+        "type": "signal.report",
+        "candidate_id": "c_0007",
+        "phase": "inhale",
+        "state": "started",
+        "visible": true,
+        "client_t_ms": {
+          "value": 800
+        },
+        "ai_id": "A"
+      },
+      "optional_keys": [
+        "ai_id"
+      ]
+    },
+    {
+      "schema": "browser_rpc.browser_to_node",
+      "name": "avatar.report/two_ai",
+      "value": {
+        "type": "avatar.report",
+        "avatar_id": "avatar_a",
+        "kind": "vrm",
+        "model_url": null,
+        "source": "default",
+        "status": "loaded",
+        "error": null,
+        "breath_sound_gain": 0.2,
+        "client_t_ms": 300,
+        "ai_id": "A",
+        "render_profile": {
+          "max_fps": 30,
+          "pixel_ratio": 1,
+          "spring_bones": "speaker_only"
+        },
+        "layout": {
+          "side": "left",
+          "body_yaw_deg": 20,
+          "spacing_m": 1.2
+        }
+      },
+      "optional_keys": [
+        "ai_id",
+        "render_profile",
+        "layout"
       ]
     }
   ],
@@ -4437,6 +6709,147 @@
           "value": null,
           "null_reason": "stream_ended_before_b_output"
         }
+      }
+    },
+    "two_ai server.hello must not carry a condition value": {
+      "schema": "browser_rpc.node_to_browser",
+      "value": {
+        "type": "server.hello",
+        "protocol_version": 1,
+        "mode": "two_ai",
+        "session_id": "s_0002",
+        "condition": "respond_on_spot",
+        "is_fake": false,
+        "two_ai": {
+          "ai_ids": [
+            "A",
+            "B"
+          ],
+          "avatar_keys": {
+            "A": "avatar_a",
+            "B": "avatar_b"
+          },
+          "labels": {
+            "A": "アオイ",
+            "B": "ハル"
+          },
+          "phase": "intake"
+        }
+      }
+    },
+    "two_ai server.hello needs mode": {
+      "schema": "browser_rpc.node_to_browser",
+      "value": {
+        "type": "server.hello",
+        "protocol_version": 1,
+        "session_id": "s_0002",
+        "condition": null,
+        "is_fake": false,
+        "two_ai": {
+          "ai_ids": [
+            "A",
+            "B"
+          ],
+          "avatar_keys": {
+            "A": "avatar_a",
+            "B": "avatar_b"
+          },
+          "labels": {
+            "A": "アオイ",
+            "B": "ハル"
+          },
+          "phase": "intake"
+        }
+      }
+    },
+    "two_ai envelope is strict": {
+      "schema": "events",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.phase_changed",
+        "from": "intake",
+        "to": "discussion",
+        "source": "auto_timer",
+        "reason": "intake_max_sec",
+        "elapsed_in_from_ms": {
+          "value": 240000
+        },
+        "planned_duration_ms": {
+          "value": 540000
+        },
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1",
+          "script_variant": "original",
+          "typo": 1
+        }
+      }
+    },
+    "two_ai envelope needs every field": {
+      "schema": "events",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.phase_changed",
+        "from": "intake",
+        "to": "discussion",
+        "source": "auto_timer",
+        "reason": "intake_max_sec",
+        "elapsed_in_from_ms": {
+          "value": 240000
+        },
+        "planned_duration_ms": {
+          "value": 540000
+        },
+        "two_ai": {
+          "phase": "discussion",
+          "discussion_stage": 1,
+          "ai_id": "B",
+          "point_id": "f1"
+        }
+      }
+    },
+    "gaze.command target must be known": {
+      "schema": "browser_rpc.node_to_browser",
+      "value": {
+        "type": "gaze.command",
+        "target": "ceiling",
+        "ai_id": "A"
+      }
+    },
+    "discussion_stage is 1..4": {
+      "schema": "browser_rpc.node_to_browser",
+      "value": {
+        "type": "two_ai.stage",
+        "current": 5,
+        "headings": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "show": "current"
       }
     },
     "hri2025 value cannot change": {

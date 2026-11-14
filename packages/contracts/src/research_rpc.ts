@@ -10,7 +10,17 @@
  * どちらの端も TypeScript なので JSON Schema は生成しない（Python は読まない）。
  */
 import { z } from 'zod';
-import { MonotonicMs, NonEmptyString, NonNegativeMs, Probability, TranscriptRevision, WallClock } from './common';
+import {
+  AiId,
+  MonotonicMs,
+  NonEmptyString,
+  NonNegativeMs,
+  Probability,
+  TranscriptRevision,
+  TwoAiCondition,
+  TwoAiPhase,
+  WallClock,
+} from './common';
 import { Policy } from './policy';
 import { Invitation, VapFreshness } from './turn';
 
@@ -29,7 +39,71 @@ export const ResearchNoteMessage = z.strictObject({
 });
 export type ResearchNoteMessage = z.infer<typeof ResearchNoteMessage>;
 
-export const ResearchToNode = z.discriminatedUnion('type', [ResearchNoteMessage]);
+// ---- two_ai（docs/design/two_ai/06 §3）-----------------------------------------
+
+export const WozAction = z.enum(['stop', 'face_user', 'yield', 'resume', 'correction', 'advance_phase', 'abort']);
+export type WozAction = z.infer<typeof WozAction>;
+
+/** 上り：次のセッションの条件と台本を決める。セッション中は断る。 */
+export const ResearchTwoAiArm = z.strictObject({
+  type: z.literal('research.two_ai.arm'),
+  arm_id: NonEmptyString,
+  condition: TwoAiCondition,
+  script_id: NonEmptyString,
+  /** null は設定ファイルの値を使う。 */
+  interjection_feeds_generation: z.boolean().nullable(),
+  session_index: z.union([z.literal(1), z.literal(2)]).nullable(),
+  counterbalance_label: NonEmptyString.nullable(),
+  operator: NonEmptyString,
+  client_wall_clock: WallClock,
+});
+export type ResearchTwoAiArm = z.infer<typeof ResearchTwoAiArm>;
+
+/** 上り：WoZ。point_id は correction のときだけ値を持つ。 */
+export const ResearchWoz = z.strictObject({
+  type: z.literal('research.woz'),
+  woz_id: NonEmptyString,
+  action: WozAction,
+  point_id: NonEmptyString.nullable(),
+  operator: NonEmptyString,
+  client_wall_clock: WallClock,
+});
+export type ResearchWoz = z.infer<typeof ResearchWoz>;
+
+export const ResearchTwoAiArmAck = z.strictObject({
+  type: z.literal('research.two_ai.arm.ack'),
+  arm_id: NonEmptyString.nullable(),
+  status: z.enum(['armed', 'rejected', 'invalid']),
+  /** rejected の理由：session_running、not_two_ai_mode、unknown_script、voices_not_set。 */
+  detail: NonEmptyString,
+});
+export type ResearchTwoAiArmAck = z.infer<typeof ResearchTwoAiArmAck>;
+
+export const ResearchWozAck = z.strictObject({
+  type: z.literal('research.woz.ack'),
+  woz_id: NonEmptyString.nullable(),
+  /** recorded は「受けて記録したが流れは変えない」（② の stop 以外の記録だけの操作、応答の段の correction）。 */
+  status: z.enum(['applied', 'recorded', 'rejected', 'no_session', 'invalid']),
+  /** 理由：condition_respond_at_end、not_two_ai_session、phase、no_ai_speaking、unknown_point、point_not_started、already_switched など。 */
+  detail: NonEmptyString,
+  phase: TwoAiPhase.nullable(),
+});
+export type ResearchWozAck = z.infer<typeof ResearchWozAck>;
+
+/** woz.override の detail（JsonValue）に入れる形（two_ai/woz.ts が検証してから書く）。 */
+export const TwoAiWozDetail = z.strictObject({
+  woz_id: NonEmptyString,
+  status: z.enum(['applied', 'recorded', 'rejected']),
+  reason: NonEmptyString,
+  phase: TwoAiPhase,
+  ai_speaking: AiId.nullable(),
+  point_id: NonEmptyString.nullable(),
+  /** ② の stop は protocol_deviation。それ以外は null。 */
+  condition_note: z.literal('protocol_deviation').nullable(),
+});
+export type TwoAiWozDetail = z.infer<typeof TwoAiWozDetail>;
+
+export const ResearchToNode = z.discriminatedUnion('type', [ResearchNoteMessage, ResearchTwoAiArm, ResearchWoz]);
 export type ResearchToNode = z.infer<typeof ResearchToNode>;
 
 export const ResearchConfigMessage = z.strictObject({
@@ -39,6 +113,17 @@ export const ResearchConfigMessage = z.strictObject({
   p_ai_index: z.union([z.literal(0), z.literal(1)]),
   direction_status: z.enum(['provisional', 'measured']),
   condition: NonEmptyString,
+  /** two_ai で足した任意の 2 項目（06 §3）。古い Node は送らない。 */
+  mode: z.enum(['one_to_one', 'two_ai']).optional(),
+  two_ai_armed: z
+    .strictObject({
+      arm_id: NonEmptyString,
+      condition: TwoAiCondition,
+      script_id: NonEmptyString,
+      interjection_feeds_generation: z.boolean().nullable(),
+    })
+    .nullable()
+    .optional(),
 });
 export type ResearchConfigMessage = z.infer<typeof ResearchConfigMessage>;
 
@@ -59,7 +144,7 @@ export const ResearchNoteAck = z.discriminatedUnion('status', [
 ]);
 export type ResearchNoteAck = z.infer<typeof ResearchNoteAck>;
 
-export const NodeToResearch = z.union([ResearchConfigMessage, ResearchNoteAck]);
+export const NodeToResearch = z.union([ResearchConfigMessage, ResearchNoteAck, ResearchTwoAiArmAck, ResearchWozAck]);
 export type NodeToResearch = z.infer<typeof NodeToResearch>;
 
 // ---- 開発用の調整画面（/tune、追加のみ） ------------------------------------------

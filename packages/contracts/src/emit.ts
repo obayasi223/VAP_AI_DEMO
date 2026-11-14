@@ -4,7 +4,7 @@
  * 仮実装は MemoryEventSink と ConsoleEventSink。
  */
 import type { TimeSource } from './clock';
-import type { Condition } from './common';
+import type { AiId, DiscussionStage, ScriptVariant, SessionCondition, TwoAiPhase } from './common';
 import {
   EVENT_SCHEMA_VERSION,
   ResearchEvent,
@@ -27,6 +27,15 @@ export type EventDraft = DistributiveOmit<ResearchEvent, EnvelopeField>;
 export interface EmitOptions {
   /** 既定は時刻源の現在値。 */
   at?: { t_monotonic_ms: number; time_basis: TimeBasis };
+  /** 範囲つき emitter（two_ai/scoped_emitter.ts）が入れる。two_ai_context がなければ無視。 */
+  two_ai?: { ai_id: AiId | null; point_id: string | null };
+}
+
+/** two_ai の封筒のうち、セッションの状態から決まる部分（06 §4.1）。 */
+export interface TwoAiEmitContext {
+  phase: TwoAiPhase;
+  discussion_stage: DiscussionStage | null;
+  script_variant: ScriptVariant;
 }
 
 export interface EventEmitter {
@@ -46,7 +55,9 @@ export interface EmitterConfig {
   time: TimeSource;
   session_id: string;
   /** 条件はセッションの途中で切り替わりうる（I2）ので関数で受ける。 */
-  condition: () => Condition;
+  condition: () => SessionCondition;
+  /** two_ai のときだけ渡す。省略か null を返すと封筒に two_ai を入れない（今と同じ出力）。 */
+  two_ai_context?: () => TwoAiEmitContext | null;
   sink: EventSink;
   /**
    * 契約に合わないイベントの扱い。既定は throw（欠落を隠さない）。
@@ -61,6 +72,7 @@ const ORCHESTRATOR_BASIS: TimeBasis = { source: 'orchestrator', uncertainty_ms: 
 export function createEventEmitter(config: EmitterConfig): EventEmitter {
   return {
     emit(draft, options) {
+      const twoAi = config.two_ai_context?.() ?? null;
       const candidate = {
         ...draft,
         schema_version: EVENT_SCHEMA_VERSION,
@@ -69,6 +81,18 @@ export function createEventEmitter(config: EmitterConfig): EventEmitter {
         session_id: config.session_id,
         condition: config.condition(),
         time_basis: options?.at?.time_basis ?? ORCHESTRATOR_BASIS,
+        // 鍵ごと足さない（two_ai: undefined も置かない）ので、two_ai_context がなければ今と同じ出力になる。
+        ...(twoAi === null
+          ? {}
+          : {
+              two_ai: {
+                phase: twoAi.phase,
+                discussion_stage: twoAi.discussion_stage,
+                ai_id: options?.two_ai?.ai_id ?? null,
+                point_id: options?.two_ai?.point_id ?? null,
+                script_variant: twoAi.script_variant,
+              },
+            }),
       };
       const parsed = ResearchEvent.safeParse(candidate);
       if (!parsed.success) {

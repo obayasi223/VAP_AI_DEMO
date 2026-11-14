@@ -11,6 +11,8 @@ export * from './policy';
 export * from './candidates';
 export * from './turn';
 export * from './events';
+export * from './two_ai_events';
+export * from './two_ai_config';
 export * from './emit';
 export * from './forwarding';
 export * from './providers';

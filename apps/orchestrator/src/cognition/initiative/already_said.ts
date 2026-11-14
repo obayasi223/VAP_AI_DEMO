@@ -51,7 +51,8 @@ export function matchSpoken(
 export function findAlreadySaid(utterance: string, entries: readonly HistoryEntry[], threshold: number): AlreadySaidMatch | null {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i]!;
-    if (entry.role !== 'assistant') continue;
+    // 2 体の発話（two_ai）は発話希望の照合の対象にしない（1 対 1 の履歴には現れない）。
+    if (entry.role !== 'assistant' || entry.origin.kind === 'two_ai_turn') continue;
     const match = matchSpoken(utterance, entry.text, {
       threshold,
       audio_playback_id: entry.audio_playback_id,

@@ -42,7 +42,15 @@ export function handleResearchMessage(text: string, target: NoteTarget | null): 
       detail: first ? `${first.path.join('.') || '(root)'}: ${first.message}` : 'contract_violation',
     };
   }
-  const note = parsed.data;
+  const message = parsed.data;
+  // two_ai の arm と WoZ は 2 体のモードの server が受ける（docs/design/two_ai/05 §2.2）。ここ（1 対 1 のメモの口）は断る。
+  if (message.type === 'research.two_ai.arm') {
+    return { type: 'research.two_ai.arm.ack', arm_id: message.arm_id, status: 'rejected', detail: 'not_two_ai_mode' };
+  }
+  if (message.type === 'research.woz') {
+    return { type: 'research.woz.ack', woz_id: message.woz_id, status: 'rejected', detail: 'not_two_ai_session', phase: null };
+  }
+  const note = message;
   if (target === null) {
     return { type: 'research.note.ack', note_id: note.note_id, status: 'no_session', detail: 'no_active_session' };
   }

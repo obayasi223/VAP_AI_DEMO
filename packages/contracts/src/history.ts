@@ -2,8 +2,8 @@
  * 会話履歴の参照・更新インターフェース（保存の本体は J）。
  * AI の発話は実際に声として出た箇所だけを入れる（仕様§2-4、§5）。予定していた全文を入れる口は用意しない。
  */
-import type { SpokenTextPrecision } from './common';
-import type { Unsubscribe } from './providers';
+import type { AiId, SpokenTextPrecision } from './common';
+import type { TwoAiTurnOrigin, Unsubscribe } from './providers';
 
 export interface UserHistoryEntry {
   role: 'user';
@@ -23,7 +23,10 @@ export interface AssistantHistoryEntry {
   interrupted: boolean;
   origin:
     | { kind: 'response' }
-    | { kind: 'candidate'; candidate_id: string; candidate_version: number };
+    | { kind: 'candidate'; candidate_id: string; candidate_version: number }
+    | TwoAiTurnOrigin;
+  /** two_ai のときだけ。 */
+  ai_id?: AiId;
 }
 
 export type HistoryEntry = UserHistoryEntry | AssistantHistoryEntry;

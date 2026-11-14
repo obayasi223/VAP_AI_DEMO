@@ -59,6 +59,34 @@ export const EVENT_ROUTES = {
   'negotiation.decision': { origin: 'node' },
   'negotiation.cue_reaction': { origin: 'node' },
   'turn.outcome': { origin: 'node' },
+  // ---- two_ai（docs/design/two_ai/06 §4.5）。すべて研究画面へも配信する（redactForResearch を通す。01 の配線）。
+  'two_ai.phase_changed': { origin: 'node' },
+  'two_ai.turn': { origin: 'node' },
+  'two_ai.interjection': { origin: 'node' },
+  'two_ai.interjection_episode': { origin: 'node' },
+  'two_ai.point': { origin: 'node' },
+  'two_ai.point_exposure': { origin: 'node' },
+  'two_ai.script': { origin: 'node' },
+  'two_ai.ai_state': { origin: 'node' },
+  'two_ai.anomaly': { origin: 'node' },
+  'two_ai.plan_wait': { origin: 'node' },
+  'two_ai.response_window': { origin: 'node' },
+  'two_ai.stage': { origin: 'node' },
+  'two_ai.board': { origin: 'node' },
+  // 時刻は client_t_ms を時計差で写す（browser_rtt。audio.report と同じ経路）。時計差がなければ受信の時刻で orchestrator。
+  'two_ai.marker': { origin: 'browser', via: ['two_ai.marker'] },
+  // timeout の行は進行役の時刻（Node）だが、picked と rejected は Browser の選択の時刻を写す。
+  'two_ai.board_picked': { origin: 'browser', via: ['two_ai.board_pick'] },
+  'two_ai.retraction': { origin: 'node' },
+  // 同期の印のメッセージを送った時刻（Node）。第 4 回の決定。
+  'two_ai.sync_mark': { origin: 'node' },
+  'two_ai.ledger': { origin: 'node' },
+  'two_ai.plan': { origin: 'node' },
+  'two_ai.generation': { origin: 'node' },
+  'two_ai.safety_blocked': { origin: 'node' },
+  'two_ai.correction_suggested': { origin: 'node' },
+  'two_ai.interjection_fed': { origin: 'node' },
+  'render.health': { origin: 'browser', via: ['render.health'] },
 } as const satisfies Record<ResearchEventName, EventRoute>;
 
 /** ローカル時刻を orchestrator の基準へ写す関数と、その由来。J が clock.sync の推定から作る。 */

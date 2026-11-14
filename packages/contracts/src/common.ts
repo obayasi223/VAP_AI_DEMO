@@ -143,7 +143,14 @@ export type ProviderClass = z.infer<typeof ProviderClass>;
 export const ProviderHealth = z.enum(['ok', 'degraded', 'down']);
 export type ProviderHealth = z.infer<typeof ProviderHealth>;
 
-export const LlmPurpose = z.enum(['prefetch', 'initiative', 'completion']);
+/**
+ * 既存の 3 つに two_ai の 6 つを足す（docs/design/two_ai/06 §1）。
+ * next_step は使わなくなった（最後の段は LLM を使わない）。値は予約として残す。
+ */
+export const LlmPurpose = z.enum([
+  'prefetch', 'initiative', 'completion',
+  'intake', 'ledger', 'discussion_plan', 'discussion_turn', 'correction_assist', 'next_step',
+]);
 export type LlmPurpose = z.infer<typeof LlmPurpose>;
 
 /** STT の時刻の精度（計画 §3.6）。 */
@@ -234,3 +241,77 @@ export const TimedWord = z.strictObject({
   audio_frame_end: AudioFrameIndex,
 });
 export type TimedWord = z.infer<typeof TimedWord>;
+
+// ---- 2 体の AI の話し合い（two_ai。docs/design/two_ai/06_型の確定版.md §1）----------------
+
+export const AiId = z.enum(['A', 'B']);
+export type AiId = z.infer<typeof AiId>;
+
+/** 2 体のモードの条件。① respond_on_spot ／ ② respond_at_end。Condition には足さない。 */
+export const TwoAiCondition = z.enum(['respond_on_spot', 'respond_at_end']);
+export type TwoAiCondition = z.infer<typeof TwoAiCondition>;
+
+/** 封筒の condition。1 対 1 の Condition はそのまま。 */
+export const SessionCondition = z.union([Condition, TwoAiCondition]);
+export type SessionCondition = z.infer<typeof SessionCondition>;
+
+export const TwoAiPhase = z.enum(['intake', 'discussion', 'response', 'next_step', 'end']);
+export type TwoAiPhase = z.infer<typeof TwoAiPhase>;
+
+export const ScriptVariant = z.enum(['original', 'corrected']);
+export type ScriptVariant = z.infer<typeof ScriptVariant>;
+
+/** framing_C 別の捉え方／fact_slip 事実の取り違え＋その上の 2 段の推論／control_inference 真の事実からの同じ形の 2 段の推論（対照）。 */
+export const PointKind = z.enum(['framing_C', 'fact_slip', 'control_inference']);
+export type PointKind = z.infer<typeof PointKind>;
+
+/** 話し合いの段（1〜4）。phase（intake など）とは別。イベントの lifecycle の項目 stage と区別するため、項目名は discussion_stage。 */
+export const DiscussionStage = z.number().int().min(1).max(4);
+export type DiscussionStage = z.infer<typeof DiscussionStage>;
+
+/** 候補の板のカードが何に依存するか。 */
+export const BoardDependency = z.enum(['fact_slip', 'framing_C', 'control_inference', 'none']);
+export type BoardDependency = z.infer<typeof BoardDependency>;
+
+/**
+ * 2 体の発話の種類。
+ * discussion 生のターン／point 点の最初のターン（C.0、F.0、K.0）／point_elaboration 点の展開（C.1、C.2、F.1、F.2、K.1、K.2）／
+ * ack 定型の受け止め／resume 戻りの句＋言い直し（誤った停止では戻りの句なし）／uptake 訂正の受け入れ（凍結文）／filler 計画の待ちのつなぎ／
+ * phase_line 段の始めと終わり、最後の段の問い、選ぶ案内の定型／facilitation intake の本人への応答と核の読み上げ／
+ * rebuild 最後の段の板の作り直し（凍結文）／retraction 当日の撤回／
+ * bridge 判定の保留の時間切れの中立のつなぎ（fixed.hold_bridge。保持した音声。中身の時計に足さない。第 4 回の決定）
+ */
+export const TwoAiTurnKind = z.enum([
+  'discussion', 'point', 'point_elaboration', 'ack', 'resume', 'uptake', 'filler', 'phase_line', 'facilitation', 'rebuild', 'retraction',
+  'bridge',
+]);
+export type TwoAiTurnKind = z.infer<typeof TwoAiTurnKind>;
+
+/** 発話の文の出どころ。llm 生成／fallback 凍結済みの代わりの文／frozen 凍結した点／fixed 設定の定型／cached 保持した音声 */
+export const TwoAiTextOrigin = z.enum(['llm', 'fallback', 'frozen', 'fixed', 'cached']);
+export type TwoAiTextOrigin = z.infer<typeof TwoAiTextOrigin>;
+
+export const UtteranceClass = z.enum(['content', 'backchannel', 'unknown']);
+export type UtteranceClass = z.infer<typeof UtteranceClass>;
+
+/**
+ * 点の引き金。
+ * in_stage：その段の k 本目の拍の後（k = 0 は段の最初）。4 段の台本の既定。拍の数で決まるので、時計に依らず ① と ② で同じ。
+ * after_turn：話し合いの通しの拍の数。at_sec／at_frac：中身の時計 content_elapsed_ms で評価する。at_frac は discussion.target_sec に対する割合。
+ */
+export const PointTrigger = z.union([
+  z.strictObject({ in_stage: DiscussionStage, after_stage_turn: z.number().int().min(0) }),
+  z.strictObject({ after_turn: z.number().int().min(1) }),
+  z.strictObject({ at_sec: z.number().min(0) }),
+  z.strictObject({ at_frac: z.number().gt(0).lt(1) }),
+]);
+export type PointTrigger = z.infer<typeof PointTrigger>;
+
+/** 各 AI の捉え方の状態（02 の stance.ts が更新）。unavailable は点が作れなかった。 */
+export const TwoAiAiState = z.strictObject({
+  stance_id: NonEmptyString,
+  framing_C: z.enum(['not_yet', 'introduced', 'elaborating', 'done', 'unavailable']),
+  fact_slip: z.enum(['not_yet', 'said', 'corrected', 'retracted', 'unavailable']),
+  fed_interjections: NonNegativeInt,
+});
+export type TwoAiAiState = z.infer<typeof TwoAiAiState>;

@@ -19755,7 +19755,17 @@ var JsonValue = external_exports.json();
 var SystemChannelSource = external_exports.enum(["written", "scheduled"]);
 var ProviderClass = external_exports.enum(["production", "development", "test_double"]);
 var ProviderHealth = external_exports.enum(["ok", "degraded", "down"]);
-var LlmPurpose = external_exports.enum(["prefetch", "initiative", "completion"]);
+var LlmPurpose = external_exports.enum([
+  "prefetch",
+  "initiative",
+  "completion",
+  "intake",
+  "ledger",
+  "discussion_plan",
+  "discussion_turn",
+  "correction_assist",
+  "next_step"
+]);
 var TimingPrecision = external_exports.enum([
   "word_offset",
   "result_end_offset",
@@ -19777,6 +19787,42 @@ var TimedWord = external_exports.strictObject({
   text: external_exports.string(),
   audio_frame_start: AudioFrameIndex,
   audio_frame_end: AudioFrameIndex
+});
+var AiId = external_exports.enum(["A", "B"]);
+var TwoAiCondition = external_exports.enum(["respond_on_spot", "respond_at_end"]);
+var SessionCondition = external_exports.union([Condition, TwoAiCondition]);
+var TwoAiPhase = external_exports.enum(["intake", "discussion", "response", "next_step", "end"]);
+var ScriptVariant = external_exports.enum(["original", "corrected"]);
+var PointKind = external_exports.enum(["framing_C", "fact_slip", "control_inference"]);
+var DiscussionStage = external_exports.number().int().min(1).max(4);
+var BoardDependency = external_exports.enum(["fact_slip", "framing_C", "control_inference", "none"]);
+var TwoAiTurnKind = external_exports.enum([
+  "discussion",
+  "point",
+  "point_elaboration",
+  "ack",
+  "resume",
+  "uptake",
+  "filler",
+  "phase_line",
+  "facilitation",
+  "rebuild",
+  "retraction",
+  "bridge"
+]);
+var TwoAiTextOrigin = external_exports.enum(["llm", "fallback", "frozen", "fixed", "cached"]);
+var UtteranceClass = external_exports.enum(["content", "backchannel", "unknown"]);
+var PointTrigger = external_exports.union([
+  external_exports.strictObject({ in_stage: DiscussionStage, after_stage_turn: external_exports.number().int().min(0) }),
+  external_exports.strictObject({ after_turn: external_exports.number().int().min(1) }),
+  external_exports.strictObject({ at_sec: external_exports.number().min(0) }),
+  external_exports.strictObject({ at_frac: external_exports.number().gt(0).lt(1) })
+]);
+var TwoAiAiState = external_exports.strictObject({
+  stance_id: NonEmptyString,
+  framing_C: external_exports.enum(["not_yet", "introduced", "elaborating", "done", "unavailable"]),
+  fact_slip: external_exports.enum(["not_yet", "said", "corrected", "retracted", "unavailable"]),
+  fed_interjections: NonNegativeInt
 });
 
 // ../../packages/contracts/src/browser_rpc.ts
@@ -19802,7 +19848,7 @@ var AudioLatency = external_exports.strictObject({
 });
 var SignalPhase = external_exports.enum(["inhale", "ready", "relax", "pre_speech"]);
 var SignalParameters = external_exports.record(external_exports.string(), external_exports.union([external_exports.number(), external_exports.boolean(), external_exports.string()]));
-var GazeTarget = external_exports.enum(["user", "away"]);
+var GazeTarget = external_exports.enum(["user", "away", "peer"]);
 var AudioContextStateName = external_exports.enum(["suspended", "running", "closed", "interrupted"]);
 var VisibilityName = external_exports.enum(["visible", "hidden"]);
 var ClientHello = external_exports.strictObject({
@@ -19897,13 +19943,17 @@ var SignalReport = external_exports.strictObject({
   phase: SignalPhase,
   state: external_exports.enum(["started", "ended"]),
   visible: external_exports.boolean(),
-  client_t_ms: Maybe(NonNegativeMs)
+  client_t_ms: Maybe(NonNegativeMs),
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional()
 });
 var GazeReport = external_exports.strictObject({
   type: external_exports.literal("gaze.report"),
   target: GazeTarget,
   visible: external_exports.boolean(),
-  client_t_ms: Maybe(NonNegativeMs)
+  client_t_ms: Maybe(NonNegativeMs),
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional()
 });
 var AvatarReport = external_exports.strictObject({
   type: external_exports.literal("avatar.report"),
@@ -19918,6 +19968,43 @@ var AvatarReport = external_exports.strictObject({
   breath_sound_gain: external_exports.number().min(0).max(1),
   /** 吸気の動きの大きさの切り替え（?breath_profile=）。省略は既定。 */
   breath_profile: external_exports.enum(["default", "original", "weak"]).optional(),
+  client_t_ms: NonNegativeMs,
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional(),
+  /** two_ai の描画の設定。 */
+  render_profile: external_exports.strictObject({
+    max_fps: external_exports.number().positive(),
+    pixel_ratio: external_exports.number().positive(),
+    spring_bones: external_exports.enum(["all", "speaker_only", "none"])
+  }).optional(),
+  /** two_ai の配置。 */
+  layout: external_exports.strictObject({
+    side: external_exports.enum(["left", "right"]),
+    body_yaw_deg: external_exports.number(),
+    spacing_m: external_exports.number().positive()
+  }).optional()
+});
+var RenderHealth = external_exports.strictObject({
+  type: external_exports.literal("render.health"),
+  fps_p5: external_exports.number().min(0),
+  fps_median: external_exports.number().min(0),
+  frame_ms_p95: NonNegativeMs,
+  long_tasks: NonNegativeInt,
+  renderer: external_exports.string().max(200),
+  avatars: external_exports.number().int().min(0).max(2),
+  pixel_ratio: external_exports.number().positive(),
+  client_t_ms: NonNegativeMs
+});
+var TwoAiMarker = external_exports.strictObject({
+  type: external_exports.literal("two_ai.marker"),
+  marker_id: NonEmptyString,
+  client_t_ms: NonNegativeMs
+});
+var TwoAiBoardPick = external_exports.strictObject({
+  type: external_exports.literal("two_ai.board_pick"),
+  pick_id: NonEmptyString,
+  card_id: NonEmptyString,
+  board_version: NonNegativeInt,
   client_t_ms: NonNegativeMs
 });
 var BrowserToNode = external_exports.discriminatedUnion("type", [
@@ -19930,16 +20017,36 @@ var BrowserToNode = external_exports.discriminatedUnion("type", [
   AudioReport,
   GazeReport,
   SignalReport,
-  AvatarReport
+  AvatarReport,
+  RenderHealth,
+  TwoAiMarker,
+  TwoAiBoardPick
 ]);
-var ServerHello = external_exports.strictObject({
+var ServerHelloOneToOne = external_exports.strictObject({
   type: external_exports.literal("server.hello"),
   protocol_version: external_exports.literal(BROWSER_RPC_PROTOCOL_VERSION),
+  mode: external_exports.literal("one_to_one").optional(),
   session_id: SessionId,
   condition: Condition,
   /** 偽サーバーは true。 */
   is_fake: external_exports.boolean()
 });
+var ServerHelloTwoAi = external_exports.strictObject({
+  type: external_exports.literal("server.hello"),
+  protocol_version: external_exports.literal(BROWSER_RPC_PROTOCOL_VERSION),
+  mode: external_exports.literal("two_ai"),
+  session_id: SessionId,
+  condition: external_exports.null(),
+  is_fake: external_exports.boolean(),
+  two_ai: external_exports.strictObject({
+    ai_ids: external_exports.tuple([external_exports.literal("A"), external_exports.literal("B")]),
+    /** 画面の配置とモデルの鍵（03 が解釈）。人格の中身は送らない。 */
+    avatar_keys: external_exports.strictObject({ A: NonEmptyString, B: NonEmptyString }),
+    labels: external_exports.strictObject({ A: NonEmptyString, B: NonEmptyString }),
+    phase: TwoAiPhase
+  })
+});
+var ServerHello = external_exports.discriminatedUnion("mode", [ServerHelloOneToOne, ServerHelloTwoAi]);
 var ClockPong = external_exports.strictObject({
   type: external_exports.literal("clock.pong"),
   seq: NonNegativeInt,
@@ -19951,7 +20058,9 @@ var PlaybackBegin = external_exports.strictObject({
   type: external_exports.literal("playback.begin"),
   audio_playback_id: AudioPlaybackId,
   generation: Generation,
-  sample_rate_hz: external_exports.number().int().positive()
+  sample_rate_hz: external_exports.number().int().positive(),
+  /** two_ai の Node は必ず付ける。ブラウザは省略を 'A' として数える。 */
+  ai_id: AiId.optional()
 });
 var PlaybackStopMode = external_exports.discriminatedUnion("mode", [
   external_exports.strictObject({ mode: external_exports.literal("immediate") }),
@@ -19981,22 +20090,30 @@ var BreathCue = external_exports.strictObject({
   type: external_exports.literal("breath.cue"),
   cue_id: NonEmptyString,
   candidate_id: CandidateId,
-  duration_ms: external_exports.number().int().min(1)
+  duration_ms: external_exports.number().int().min(1),
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional()
 });
 var BreathReleaseReason = external_exports.enum(["speech_started", "deferred", "withdrawn"]);
 var BreathRelease = external_exports.strictObject({
   type: external_exports.literal("breath.release"),
   cue_id: NonEmptyString,
   candidate_id: CandidateId,
-  reason: BreathReleaseReason
+  reason: BreathReleaseReason,
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional()
 });
 var BreathPrepare = external_exports.strictObject({
   type: external_exports.literal("breath.prepare"),
-  candidate_id: CandidateId
+  candidate_id: CandidateId,
+  /** two_ai のときだけ。省略は 'A'（gaze.command だけは省略＝両方）。 */
+  ai_id: AiId.optional()
 });
 var GazeCommand = external_exports.strictObject({
   type: external_exports.literal("gaze.command"),
-  target: GazeTarget
+  target: GazeTarget,
+  /** two_ai では省略は「両方」。1 対 1 は送らない。 */
+  ai_id: AiId.optional()
 });
 var AlignmentItem = external_exports.strictObject({
   text: external_exports.string(),
@@ -20019,12 +20136,45 @@ var PlaybackAlignment = external_exports.strictObject({
   items: external_exports.array(AlignmentItem),
   source: PlaybackAlignmentSource.optional(),
   /** items に reading があるときの由来。morphological_estimate は形態素解析の辞書の推定（実測ではない）。 */
-  reading_source: PlaybackReadingSource.optional()
+  reading_source: PlaybackReadingSource.optional(),
+  /** two_ai の Node は必ず付ける。ブラウザは省略を 'A' として数える。 */
+  ai_id: AiId.optional()
 });
 var SessionStatus = external_exports.strictObject({
   type: external_exports.literal("session.status"),
   degraded: external_exports.boolean(),
   reasons: external_exports.array(NonEmptyString)
+});
+var TwoAiPhaseMessage = external_exports.strictObject({
+  type: external_exports.literal("two_ai.phase"),
+  phase: TwoAiPhase,
+  /** 案内の文の鍵（two_ai_copy.ts）。条件名を鍵にも使わない。案内なしは null。 */
+  instruction_key: NonEmptyString.nullable(),
+  /** 画面の名札（例 { A: 'アオイ', B: 'ハル' }）。名札を出さない段は null。 */
+  labels: external_exports.strictObject({ A: NonEmptyString, B: NonEmptyString }).nullable()
+});
+var BoardCardView = external_exports.strictObject({
+  card_id: NonEmptyString,
+  order: external_exports.number().int().min(1).max(4),
+  discussion_stage: DiscussionStage,
+  text: NonEmptyString,
+  variant: ScriptVariant
+});
+var TwoAiBoardMessage = external_exports.strictObject({
+  type: external_exports.literal("two_ai.board"),
+  board_version: NonNegativeInt,
+  mode: external_exports.enum(["building", "rebuilt", "pick", "picked"]),
+  cards: external_exports.array(BoardCardView).max(4),
+  picked_card_id: NonEmptyString.nullable()
+});
+var TwoAiStageMessage = external_exports.strictObject({
+  type: external_exports.literal("two_ai.stage"),
+  /** 今の段。discussion の外は null。 */
+  current: DiscussionStage.nullable(),
+  /** 4 つの見出し（条件で変えない）。 */
+  headings: external_exports.tuple([NonEmptyString, NonEmptyString, NonEmptyString, NonEmptyString]),
+  /** current：今の段だけ強調。all：最後の段の問いのとき 4 つを並べる。none：出さない。 */
+  show: external_exports.enum(["current", "all", "none"])
 });
 var NodeToBrowser = external_exports.discriminatedUnion("type", [
   ServerHello,
@@ -20037,7 +20187,10 @@ var NodeToBrowser = external_exports.discriminatedUnion("type", [
   SessionStatus,
   BreathCue,
   BreathRelease,
-  BreathPrepare
+  BreathPrepare,
+  TwoAiPhaseMessage,
+  TwoAiBoardMessage,
+  TwoAiStageMessage
 ]);
 
 // ../../packages/contracts/src/binary.ts

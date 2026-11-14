@@ -258,6 +258,8 @@ export function prepareLog(events: ResearchEvent[]): PreparedLog {
         break;
       }
       case 'speech.started':
+        // 1 対 1 の調整の再生。2 体の発話（two_ai_turn）は対象にしない。
+        if (e.origin === 'two_ai_turn') break;
         speechById.set(e.audio_playback_id, {
           id: e.audio_playback_id,
           started: e.t_monotonic_ms,

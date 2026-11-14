@@ -445,7 +445,7 @@ export class NegotiationWiring {
   private reconcilePending(finished: SpeechFinished, now: number): void {
     const threshold = this.options.repeat_guard?.already_said_min_similarity;
     // 吸気の後の短い声は already_said の照合の対象にしない（session からは呼ばないが、型の上でも除く）。
-    if (threshold === undefined || finished.no_audio || finished.spoken_text === '' || finished.origin.kind === 'vocal_cue') return;
+    if (threshold === undefined || finished.no_audio || finished.spoken_text === '' || finished.origin.kind === 'vocal_cue' || finished.origin.kind === 'two_ai_turn') return;
     const ledger = this.options.initiative.ledger;
     for (const record of ledger.list()) {
       if (record.state === 'SPEAKING') continue;

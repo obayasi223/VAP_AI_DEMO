@@ -102,7 +102,8 @@ export function createFakeFeed(options: { stepMs?: number } = {}): ResearchFeed 
     },
     send(message) {
       const sink = activeSink;
-      if (sink === null) return false;
+      // 偽データの口はメモだけを受ける（two_ai の arm と WoZ は送らない）。
+      if (sink === null || message.type !== 'research.note') return false;
       setTimeout(() =>
         sink.event({
           type: 'research.note.ack',

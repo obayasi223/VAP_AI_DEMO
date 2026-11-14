@@ -15,12 +15,13 @@ import {
 } from './browser_rpc';
 import { CandidateCause, CandidateRejectReason, CandidateState, ContentWithdrawKind, ConversationKind, OfferView, TimingVerdict, VocalCueKind, WithdrawEvidenceSource } from './candidates';
 import {
+  AiId,
   AsrSegmentId,
   AudioFrameIndex,
   AudioPlaybackId,
   CandidateId,
   CandidateVersion,
-  Condition,
+  DiscussionStage,
   JsonValue,
   LlmPurpose,
   Maybe,
@@ -34,7 +35,9 @@ import {
   Probability,
   ProviderClass,
   ProviderHealth,
+  ScriptVariant,
   SegmentId,
+  SessionCondition,
   SessionId,
   SpokenTextPrecision,
   SttPart,
@@ -44,10 +47,38 @@ import {
   TimedWord,
   TimingPrecision,
   TranscriptRevision,
+  TwoAiPhase,
+  TwoAiTurnKind,
   Verified,
   WallClock,
 } from './common';
 import { GazeDecisionPayload, PrepareTrigger, TurnAllowedPayload, VapFreshness } from './turn';
+import {
+  RenderHealthShape,
+  TwoAiAiStateShape,
+  TwoAiAnomalyShape,
+  TwoAiBoardPickedShape,
+  TwoAiBoardShape,
+  TwoAiCorrectionSuggestedShape,
+  TwoAiGenerationShape,
+  TwoAiInterjectionEpisodeShape,
+  TwoAiInterjectionFedShape,
+  TwoAiInterjectionShape,
+  TwoAiLedgerShape,
+  TwoAiMarkerShape,
+  TwoAiPhaseChangedShape,
+  TwoAiPlanShape,
+  TwoAiPlanWaitShape,
+  TwoAiPointExposureShape,
+  TwoAiPointShape,
+  TwoAiResponseWindowShape,
+  TwoAiRetractionShape,
+  TwoAiSafetyBlockedShape,
+  TwoAiScriptShape,
+  TwoAiStageShape,
+  TwoAiSyncMarkShape,
+  TwoAiTurnShape,
+} from './two_ai_events';
 import { Vap1chState, Vap2chState } from './vap';
 
 export const EVENT_SCHEMA_VERSION = 1 as const;
@@ -64,14 +95,30 @@ export const TimeBasis = z.strictObject({
 });
 export type TimeBasis = z.infer<typeof TimeBasis>;
 
+/** two_ai のセッションだけが封筒に持つ項目（docs/design/two_ai/06 §4.1）。 */
+export const TwoAiEnvelope = z.strictObject({
+  phase: TwoAiPhase,
+  /** そのイベントを出した時点の話し合いの段。discussion の外は null。刺激再生と段ごとの集計に使う。 */
+  discussion_stage: DiscussionStage.nullable(),
+  /** そのイベントを出した AI。セッション全体のもの（STT、VAP、段）は null。 */
+  ai_id: AiId.nullable(),
+  /** 計画した点を運ぶ発話に属するとき。 */
+  point_id: NonEmptyString.nullable(),
+  script_variant: ScriptVariant,
+});
+export type TwoAiEnvelope = z.infer<typeof TwoAiEnvelope>;
+
 /** 全イベント共通（計画 §3.5）。 */
 const Envelope = {
   schema_version: z.literal(EVENT_SCHEMA_VERSION),
   t_monotonic_ms: MonotonicMs,
   wall_clock: WallClock,
   session_id: SessionId,
-  condition: Condition,
+  /** 1 対 1 は Condition、two_ai は TwoAiCondition。1 対 1 の値は変わらない。 */
+  condition: SessionCondition,
   time_basis: TimeBasis,
+  /** two_ai のセッションだけ。古いログと 1 対 1 は持たない（任意項目の例外。00 の「AI の識別子」）。 */
+  two_ai: TwoAiEnvelope.optional(),
 };
 
 export const ENVELOPE_FIELDS = [
@@ -81,6 +128,7 @@ export const ENVELOPE_FIELDS = [
   'session_id',
   'condition',
   'time_basis',
+  'two_ai',
 ] as const;
 export type EnvelopeField = (typeof ENVELOPE_FIELDS)[number];
 
@@ -788,6 +836,15 @@ function speechEvent<Name extends string, Shape extends z.ZodRawShape>(name: Nam
       origin: z.literal('vocal_cue'),
       vocal_cue_kind: VocalCueKind,
     }),
+    /** 2 体の発話（受け止め、点、生のターン、段の台詞、作り直し、撤回など）。intake の LLM の応答だけは response。 */
+    eventSchema(name, {
+      ...shape,
+      origin: z.literal('two_ai_turn'),
+      ai_id: AiId,
+      turn_id: NonEmptyString,
+      turn_kind: TwoAiTurnKind,
+      point_id: NonEmptyString.nullable(),
+    }),
   ]);
 }
 
@@ -1088,6 +1145,34 @@ export interface TuneTurnOutcomes {
   note: string | null;
 }
 
+// ---- 2 体の AI の話し合い（two_ai。中身は two_ai_events.ts）-------------------
+
+export const TwoAiPhaseChangedEvent = eventSchema('two_ai.phase_changed', TwoAiPhaseChangedShape);
+export const TwoAiTurnEvent = eventSchema('two_ai.turn', TwoAiTurnShape);
+export const TwoAiInterjectionEvent = eventSchema('two_ai.interjection', TwoAiInterjectionShape);
+export const TwoAiInterjectionEpisodeEvent = eventSchema('two_ai.interjection_episode', TwoAiInterjectionEpisodeShape);
+export const TwoAiPointEvent = eventSchema('two_ai.point', TwoAiPointShape);
+export const TwoAiPointExposureEvent = eventSchema('two_ai.point_exposure', TwoAiPointExposureShape);
+export const TwoAiScriptEvent = eventSchema('two_ai.script', TwoAiScriptShape);
+export const TwoAiAiStateEvent = eventSchema('two_ai.ai_state', TwoAiAiStateShape);
+export const TwoAiAnomalyEvent = eventSchema('two_ai.anomaly', TwoAiAnomalyShape);
+export const TwoAiPlanWaitEvent = eventSchema('two_ai.plan_wait', TwoAiPlanWaitShape);
+export const TwoAiResponseWindowEvent = eventSchema('two_ai.response_window', TwoAiResponseWindowShape);
+export const TwoAiStageEvent = eventSchema('two_ai.stage', TwoAiStageShape);
+export const TwoAiBoardEvent = eventSchema('two_ai.board', TwoAiBoardShape);
+export const TwoAiMarkerEvent = eventSchema('two_ai.marker', TwoAiMarkerShape);
+export const TwoAiBoardPickedEvent = eventSchema('two_ai.board_picked', TwoAiBoardPickedShape);
+export const TwoAiRetractionEvent = eventSchema('two_ai.retraction', TwoAiRetractionShape);
+export const TwoAiSyncMarkEvent = eventSchema('two_ai.sync_mark', TwoAiSyncMarkShape);
+export const TwoAiLedgerEvent = eventSchema('two_ai.ledger', TwoAiLedgerShape);
+export const TwoAiPlanEvent = eventSchema('two_ai.plan', TwoAiPlanShape);
+export const TwoAiGenerationEvent = eventSchema('two_ai.generation', TwoAiGenerationShape);
+export const TwoAiSafetyBlockedEvent = eventSchema('two_ai.safety_blocked', TwoAiSafetyBlockedShape);
+export const TwoAiCorrectionSuggestedEvent = eventSchema('two_ai.correction_suggested', TwoAiCorrectionSuggestedShape);
+export const TwoAiInterjectionFedEvent = eventSchema('two_ai.interjection_fed', TwoAiInterjectionFedShape);
+/** Browser の render.health メッセージの記録（06 §4.4）。 */
+export const RenderHealthEvent = eventSchema('render.health', RenderHealthShape);
+
 // ---- 全体 ------------------------------------------------------------------
 
 export const ResearchEvent = z.discriminatedUnion('event', [
@@ -1131,6 +1216,30 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   GazeRenderedEvent,
   ResearchNoteEvent,
   TurnOutcomeEvent,
+  TwoAiPhaseChangedEvent,
+  TwoAiTurnEvent,
+  TwoAiInterjectionEvent,
+  TwoAiInterjectionEpisodeEvent,
+  TwoAiPointEvent,
+  TwoAiPointExposureEvent,
+  TwoAiScriptEvent,
+  TwoAiAiStateEvent,
+  TwoAiAnomalyEvent,
+  TwoAiPlanWaitEvent,
+  TwoAiResponseWindowEvent,
+  TwoAiStageEvent,
+  TwoAiBoardEvent,
+  TwoAiMarkerEvent,
+  TwoAiBoardPickedEvent,
+  TwoAiRetractionEvent,
+  TwoAiSyncMarkEvent,
+  TwoAiLedgerEvent,
+  TwoAiPlanEvent,
+  TwoAiGenerationEvent,
+  TwoAiSafetyBlockedEvent,
+  TwoAiCorrectionSuggestedEvent,
+  TwoAiInterjectionFedEvent,
+  RenderHealthEvent,
 ]);
 export type ResearchEvent = z.infer<typeof ResearchEvent>;
 export type ResearchEventName = ResearchEvent['event'];
@@ -1177,6 +1286,30 @@ export const EVENT_NAMES = [
   'negotiation.decision',
   'negotiation.cue_reaction',
   'turn.outcome',
+  'two_ai.phase_changed',
+  'two_ai.turn',
+  'two_ai.interjection',
+  'two_ai.interjection_episode',
+  'two_ai.point',
+  'two_ai.point_exposure',
+  'two_ai.script',
+  'two_ai.ai_state',
+  'two_ai.anomaly',
+  'two_ai.plan_wait',
+  'two_ai.response_window',
+  'two_ai.stage',
+  'two_ai.board',
+  'two_ai.marker',
+  'two_ai.board_picked',
+  'two_ai.retraction',
+  'two_ai.sync_mark',
+  'two_ai.ledger',
+  'two_ai.plan',
+  'two_ai.generation',
+  'two_ai.safety_blocked',
+  'two_ai.correction_suggested',
+  'two_ai.interjection_fed',
+  'render.health',
 ] as const satisfies readonly ResearchEventName[];
 
 export type EventOf<N extends ResearchEventName> = Extract<ResearchEvent, { event: N }>;

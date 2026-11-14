@@ -47,7 +47,8 @@
           "type": "string",
           "enum": [
             "user",
-            "away"
+            "away",
+            "peer"
           ]
         }
       },
@@ -637,7 +638,8 @@
                     "type": "string",
                     "enum": [
                       "user",
-                      "away"
+                      "away",
+                      "peer"
                     ]
                   },
                   "reason": {
