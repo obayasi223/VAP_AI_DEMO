@@ -3,6 +3,7 @@
  *
  *   npx tsx tools/two_ai_eval/run.ts --conditions respond_on_spot --sessions 3 --out <dir>
  *   npx tsx --env-file=.env tools/two_ai_eval/run.ts --real --conditions respond_on_spot,respond_at_end --out <dir>
+ *   npx tsx tools/two_ai_eval/run.ts --overlap sustain --seed 101 --out <dir>   重なりの中の検出を有効にした設定の写しで回す
  *
  * 経路：ヘッドレス Chromium（偽マイク＝合成の本人役の声と、咳・息・相づち。stimuli.ts）→ /two_ai → WS → TwoAiSession → 実 MaAI →
  * 台本（既定）か実の LLM／STT／TTS → 2 体の再生。SAVE_SESSION_AUDIO=1 で 2ch の録音（ch1 = マイク、ch2 = AI の再生音）を残し、
@@ -39,6 +40,11 @@ const { values: args } = parseArgs({
     viewport: { type: 'string', default: '1280x720' },
     /** ブラウザのプロセス木の nice 値（04 §性能の代替 F5。0 は変えない）。 */
     nice: { type: 'string', default: '0' },
+    /**
+     * 重なりの中の検出（interjection.detector.overlap）。off は設定のまま。sustain は持続の経路を有効にする。
+     * JSON（例 {"enabled":true,"p_now_user_min":0.45}）なら設定の overlap に重ねる。設定の写しを出力の下に書いて使う。
+     */
+    overlap: { type: 'string', default: 'off' },
   },
 });
 
@@ -91,6 +97,19 @@ function reniceBrowser(micPath: string, nice: number): void {
   console.log(`  reniced ${pids.length} browser processes to ${nice}`);
 }
 
+/** --overlap の設定の写し（off は元のファイルのまま）。 */
+async function overlapConfig(runDir: string): Promise<string> {
+  if (args.overlap === 'off') return args.config;
+  const raw = JSON.parse(readFileSync(path.resolve(repoRoot, args.config), 'utf8')) as Record<string, any>;
+  const base = raw.interjection.detector.overlap ?? { enabled: false, p_now_user_min: null, p_future_user_min: null, sustain_ms: 700, sustain_p_now_mean_min: 0.4, mic_dbfs_min: null };
+  const over = args.overlap === 'sustain' ? { enabled: true } : (JSON.parse(args.overlap) as Record<string, unknown>);
+  raw.interjection.detector.overlap = { ...base, ...over };
+  const file = path.join(runDir, 'session.overlap.json');
+  await writeFile(file, JSON.stringify(raw, null, 2));
+  console.log(`  overlap: ${JSON.stringify(raw.interjection.detector.overlap)}`);
+  return file;
+}
+
 async function runOne(condition: 'respond_on_spot' | 'respond_at_end', runIdx: number, seed: number): Promise<Record<string, unknown>> {
   const { chromium } = await import('playwright');
   const { readConfig } = await import('../../apps/orchestrator/src/app/config');
@@ -103,6 +122,7 @@ async function runOne(condition: 'respond_on_spot' | 'respond_at_end', runIdx: n
   const [s0, s1] = args.spacing.split(',').map(Number) as [number, number];
   const mix = Object.fromEntries(args.mix.split(',').map((kv) => kv.split(':')).map(([k, v]) => [k, Number(v)])) as BuildOptions['mix'];
   const stim = await buildStimuli({ outDir: path.join(runDir, 'stimuli'), seed, startS: 80, endS: TIMEOUT_S, spacing: [s0, s1], mix, totalS: TIMEOUT_S + 120, speechOwnOnly: args.real });
+  const configPath = await overlapConfig(runDir);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     SESSIONS_DIR: sessionsDir,
@@ -111,7 +131,7 @@ async function runOne(condition: 'respond_on_spot' | 'respond_at_end', runIdx: n
     ALLOWED_ORIGINS: `http://127.0.0.1:${WEB_PORT}`,
     SESSION_MODE: 'two_ai',
     TWO_AI_CONDITION: condition,
-    TWO_AI_CONFIG: args.config,
+    TWO_AI_CONFIG: configPath,
     TWO_AI_SCRIPT: args.script,
     SAVE_SESSION_AUDIO: '1',
     SCRIPTED_TTS_WAV: stim.ttsWav,
@@ -159,7 +179,7 @@ async function runOne(condition: 'respond_on_spot' | 'respond_at_end', runIdx: n
     await maai.stop('eval_done').catch(() => undefined);
   }
   const dir = newestSessionDir(sessionsDir);
-  const summary = { query: args.query, viewport: args.viewport, nice: Number(args.nice), condition, run: runIdx, seed, session_dir: dir, ended: sessionEnded(dir), wall_s: Math.round((Date.now() - started) / 1000), truth: stim.truth, record, real: args.real };
+  const summary = { overlap: args.overlap, config: configPath, query: args.query, viewport: args.viewport, nice: Number(args.nice), condition, run: runIdx, seed, session_dir: dir, ended: sessionEnded(dir), wall_s: Math.round((Date.now() - started) / 1000), truth: stim.truth, record, real: args.real };
   await writeFile(path.join(runDir, 'run.json'), JSON.stringify(summary, null, 2));
   console.log(`[${condition} #${runIdx}] ended=${summary.ended} wall=${summary.wall_s}s dir=${dir}`);
   return summary;

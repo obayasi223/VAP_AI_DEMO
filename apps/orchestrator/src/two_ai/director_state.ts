@@ -25,7 +25,7 @@ import type {
 import type { GazeTarget } from '@llm-vap/contracts';
 import type { CorrectionSuggestion, DiscussionTurn, PendingPointView, PlanStatus } from './content_port';
 import type { ExposureSegment } from './exposure';
-import type { InterjectionSignal } from './interjection';
+import type { AttemptStats, AttemptUpdate, InterjectionSignal } from './interjection';
 import type { WozInputTwoAi } from './woz';
 
 export type DirectorSub =
@@ -133,6 +133,22 @@ export interface InterjectionTrack {
   outcome: 'yielded' | 'backchannel' | 'false_onset' | 'abandoned' | null;
 }
 
+/**
+ * 本人の話し始めの試み（two_ai.interjection_attempt の材料）。声が終わり（stats）、結びついた episode が閉じたら出して消す。
+ */
+export interface AttemptTrack {
+  attempt_id: string;
+  started_at: number;
+  overlapped: { ai_id: AiId; turn_id: string; turn_kind: TwoAiTurnKind; audio_playback_id: number; point_id: string | null } | null;
+  /** 重なっていたターンの終わり。 */
+  ai_end: { at: number; reason: 'completed' | 'stopped' | 'other' } | null;
+  interjection_id: string | null;
+  /** 結びついた割り込みが AI の再生を止めに行った（stop_requested）。 */
+  stop_requested: boolean;
+  episode_outcome: 'yielded' | 'backchannel' | 'false_onset' | 'onset_no_speech' | 'logged_only' | 'abandoned' | null;
+  stats: AttemptStats | null;
+}
+
 export interface PointProgress {
   point_id: string;
   kind: PointKind;
@@ -180,6 +196,9 @@ export interface DirectorState {
   last_speaker: AiId | null;
   interjection: InterjectionTrack | null;
   interjection_count: number;
+  /** 出す前の試み（声が続いているか、episode が閉じていない）。 */
+  attempts: AttemptTrack[];
+  attempt_count: number;
   gaze: Record<AiId, GazeTarget>;
   points: Record<string, PointProgress>;
   points_forced: boolean;
@@ -276,6 +295,8 @@ export interface DirectorInputs {
   slots: Record<AiId, SlotView>;
   playback_events: PlaybackObservation[];
   interjection: InterjectionSignal;
+  /** 検出器の試みの始まりと終わり（拡張。無ければ試みを記録しない）。 */
+  interjection_attempt?: AttemptUpdate | null;
   user: { speaking: boolean; permitted_to_speak: boolean; started_ack: number | null; voiced_ms_since_onset: number; last_voice_at: number | null };
   user_utterance: { segment_id: number; is_final: boolean; classification: UtteranceClass; basis: 'final' | 'interim' | 'none'; asr_segment_ids: number[] } | null;
   turn_arrivals: TurnArrival[];
@@ -349,6 +370,8 @@ export function initialDirectorState(init: { condition: TwoAiCondition; correcti
     last_speaker: null,
     interjection: null,
     interjection_count: 0,
+    attempts: [],
+    attempt_count: 0,
     gaze: { A: 'user', B: 'user' },
     points: {},
     points_forced: false,

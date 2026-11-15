@@ -281,6 +281,8 @@ export class TwoAiSession implements ParticipantSession {
       fallback_dbfs: det.fallback_dbfs,
       fallback_onset_min_ms: det.fallback_onset_min_ms,
       sub_threshold_min_ms: det.sub_threshold_min_ms,
+      overlap: { ...det.overlap },
+      attempt_merge_gap_ms: config.interjection.attempt.merge_gap_ms,
     };
     this.stopMaxWaitMs = config.interjection.stop_max_wait_ms ?? (options.policy.policy_id === 'ja' ? options.policy.turn.stop_boundary_max_ms : 200);
     this.headings = options.script.script.stages ?? config.fixed.stage_headings;
@@ -874,6 +876,7 @@ export class TwoAiSession implements ParticipantSession {
       for (const decision of decisions) this.dispatchTurn(decision, now);
       // 進行役。
       const dInputs = this.directorInputs(det.signal, now);
+      dInputs.interjection_attempt = det.attempt;
       const before = this.dstate;
       this.actionCtx = { phase: before.phase, discussion_stage: before.discussion_stage, script_variant: before.script_variant };
       const result = this.director.step(this.dstate, dInputs, now);

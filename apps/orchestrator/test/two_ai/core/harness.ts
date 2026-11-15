@@ -6,6 +6,7 @@
  * - 02：discussion の台本を順に返す。fact_slip の点のブロックは abandonResume で残りを捨て、捨てた分の見込みを credited_ms で返す。
  *   applyCorrection は uptake を返し、F の残りを訂正後の版に替える（準備済みの F は cancelled_turn_ids）。
  * - TurnManager：offer_ack の音声は、本人が話していないときに started_ack として 1 回始まる。
+ * - 検出器の試み：user.speaking の始まりで started、終わりの tick で ended（切れ目でつながない。onset は interject の tick）。
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -111,6 +112,8 @@ export class Sim {
   /** request_next_turn に答えない（文が届かない状況）。 */
   withholdNext = false;
   onsetNext: { first_voiced_at?: number } | null = null;
+  /** 検出器の試みの模擬。 */
+  private attempt: { started_at: number; last: number; voiced: number; overlap: number; onset: { at: number; rule: 'p_threshold' } | null } | null = null;
 
   constructor(
     readonly config: TwoAiSessionConfig,
@@ -343,8 +346,26 @@ export class Sim {
     inputs.user = { speaking: this.user.speaking, permitted_to_speak: false, started_ack: this.ackStartedThisTick, voiced_ms_since_onset: this.user.voiced_ms, last_voice_at: this.user.speaking ? this.now : null };
     inputs.user_utterance = this.utterance;
     this.utterance = null;
+    if (this.user.speaking) {
+      if (this.attempt === null) {
+        this.attempt = { started_at: this.now, last: this.now, voiced: 0, overlap: 0, onset: null };
+        inputs.interjection_attempt = { kind: 'started', started_at: this.now, ai_playing: this.playing !== null };
+      } else {
+        this.attempt.voiced += TICK;
+        if (this.playing !== null) this.attempt.overlap += TICK;
+        this.attempt.last = this.now;
+      }
+    } else if (this.attempt !== null) {
+      const a = this.attempt;
+      inputs.interjection_attempt = {
+        kind: 'ended',
+        stats: { started_at: a.started_at, ended_at: a.last, voiced_ms: a.voiced, overlap_ms: a.overlap, ai_playing_at_start: false, p_now_user_max: 0.8, p_future_user_max: 0.8, vad_user_max: 0.9, mic_dbfs_max: -20, onset: a.onset },
+      };
+      this.attempt = null;
+    }
     if (this.onsetNext !== null) {
-      inputs.interjection = { kind: 'onset', source: 'vap', first_voiced_at: this.onsetNext.first_voiced_at ?? this.now - 200, detected_at: this.now, p_now_user: 0.8, p_future_user: 0.8, vad_user: 0.9, mic_dbfs: -20 };
+      inputs.interjection = { kind: 'onset', source: 'vap', rule: 'p_threshold', first_voiced_at: this.onsetNext.first_voiced_at ?? this.now - 200, detected_at: this.now, p_now_user: 0.8, p_future_user: 0.8, vad_user: 0.9, mic_dbfs: -20 };
+      if (this.attempt !== null && this.attempt.onset === null) this.attempt.onset = { at: this.now, rule: 'p_threshold' };
       this.onsetNext = null;
     } else {
       inputs.interjection = { kind: 'none', voiced: this.user.speaking };
@@ -374,6 +395,11 @@ export class Sim {
   interject(): void {
     this.user = { speaking: true, voiced_ms: 0 };
     this.onsetNext = {};
+  }
+
+  /** onset に届かない声（sub_threshold）。 */
+  voiceWithoutOnset(): void {
+    this.user = { speaking: true, voiced_ms: 0 };
   }
 
   stopTalking(): void {

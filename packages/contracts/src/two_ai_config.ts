@@ -139,7 +139,32 @@ export const TwoAiSessionConfig = z
         fallback_dbfs: z.number(),
         fallback_onset_min_ms: NonNegativeMs,
         sub_threshold_min_ms: NonNegativeMs,
+        /**
+         * AI の声と重なっている間だけの onset の判定（docs/two_ai_tech_eval.md「重なりの中の検出」）。enabled: false で従来どおり。
+         * p_now_user_min／p_future_user_min：重なりの中の閾値（null は通常の値）。
+         * sustain_ms：声の連続がこの長さ続き、連続の中の p_now_user の平均が sustain_p_now_mean_min 以上なら p の閾値を見ずに onset
+         *   （null で使わない）。相づち・咳・息は短く、AI の声のエコーは p_now_user が低いので届かない。
+         * mic_dbfs_min：重なりの中の追加の経路に mic の音量の下限を課す（エコーの対策。null は課さない）。
+         * 省いた設定は enabled: false（従来の判定）。
+         */
+        overlap: z
+          .strictObject({
+            enabled: z.boolean(),
+            p_now_user_min: Probability.nullable(),
+            p_future_user_min: Probability.nullable(),
+            sustain_ms: NonNegativeMs.nullable(),
+            sustain_p_now_mean_min: Probability,
+            mic_dbfs_min: z.number().nullable(),
+          })
+          .default({ enabled: false, p_now_user_min: null, p_future_user_min: null, sustain_ms: 700, sustain_p_now_mean_min: 0.4, mic_dbfs_min: null }),
       }),
+      /**
+       * 試み（two_ai.interjection_attempt）のまとめ方。merge_gap_ms 未満の声の切れ目は同じ試みにつなぐ。
+       * 重なっていた AI のターンが試みの始まりから self_finish_window_ms 以内に自分で話し終えたら ai_finished_self（止めそこねと分ける）。
+       */
+      attempt: z
+        .strictObject({ merge_gap_ms: NonNegativeMs, self_finish_window_ms: NonNegativeMs })
+        .default({ merge_gap_ms: 300, self_finish_window_ms: 1500 }),
       /** null は policy.turn.stop_boundary_max_ms。 */
       stop_max_wait_ms: NonNegativeMs.nullable(),
       /** 超えたら two_ai.anomaly(user_floor_long)。打ち切りは WoZ の resume。 */
