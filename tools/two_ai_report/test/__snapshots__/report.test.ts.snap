@@ -8,7 +8,7 @@ synthetic_respond_on_spot,respond_on_spot,2,二人の見方,24500,57528,17951364
 synthetic_respond_on_spot,respond_on_spot,3,もう一歩の掘り下げ,57528,83500,1795136493571,1795136533543,93571,133543,,t_0018,93571,1,1
 synthetic_respond_on_spot,respond_on_spot,4,次の一歩の候補,83500,91271,1795136533543,1795136540714,133543,140714,,t_0024,133543,0,0
 synthetic_respond_on_spot,respond_on_spot,response,最後の段（応答）,,,1795136544014,1795136612056,144014,212056,,t_0027,144014,1,0
-synthetic_respond_on_spot,respond_on_spot,closing,最後の段（次の一歩と終わり）,,,1795136612056,1795136646398,212056,246398,,t_0031,212056,0,0
+synthetic_respond_on_spot,respond_on_spot,closing,最後の段（次の一歩と終わり）,,,1795136612056,1795136656541,212056,256541,,t_0031,212056,0,0
 ",
   "coding_texts.jsonl": "{"text_ref":"stt:2","text":"いや、締切は 2 月末です。"}
 {"text_ref":"stt:3","text":"才能の話じゃなくて、締切の話なんです。"}
@@ -274,7 +274,7 @@ exports[`two_ai_summary > Markdown に本人の発話の本文が出ない（ス
 | discussion | 126.6 | 180 |
 | response | 68 | 45 |
 | next_step | 8.9 | 30 |
-| end | 25.5 | — |
+| end | 35.6 | — |
 
 ## 3. 点ごとの接触秒数
 
