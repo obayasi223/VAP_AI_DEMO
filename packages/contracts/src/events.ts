@@ -62,6 +62,7 @@ import {
   TwoAiCorrectionSuggestedShape,
   TwoAiGenerationShape,
   TwoAiInterjectionEpisodeShape,
+  TwoAiInterjectionAttemptShape,
   TwoAiInterjectionFedShape,
   TwoAiInterjectionShape,
   TwoAiLedgerShape,
@@ -1158,6 +1159,7 @@ export const TwoAiPhaseChangedEvent = eventSchema('two_ai.phase_changed', TwoAiP
 export const TwoAiTurnEvent = eventSchema('two_ai.turn', TwoAiTurnShape);
 export const TwoAiInterjectionEvent = eventSchema('two_ai.interjection', TwoAiInterjectionShape);
 export const TwoAiInterjectionEpisodeEvent = eventSchema('two_ai.interjection_episode', TwoAiInterjectionEpisodeShape);
+export const TwoAiInterjectionAttemptEvent = eventSchema('two_ai.interjection_attempt', TwoAiInterjectionAttemptShape);
 export const TwoAiPointEvent = eventSchema('two_ai.point', TwoAiPointShape);
 export const TwoAiPointExposureEvent = eventSchema('two_ai.point_exposure', TwoAiPointExposureShape);
 export const TwoAiScriptEvent = eventSchema('two_ai.script', TwoAiScriptShape);
@@ -1227,6 +1229,7 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   TwoAiTurnEvent,
   TwoAiInterjectionEvent,
   TwoAiInterjectionEpisodeEvent,
+  TwoAiInterjectionAttemptEvent,
   TwoAiPointEvent,
   TwoAiPointExposureEvent,
   TwoAiScriptEvent,
@@ -1297,6 +1300,7 @@ export const EVENT_NAMES = [
   'two_ai.turn',
   'two_ai.interjection',
   'two_ai.interjection_episode',
+  'two_ai.interjection_attempt',
   'two_ai.point',
   'two_ai.point_exposure',
   'two_ai.script',

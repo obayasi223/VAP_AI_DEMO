@@ -76,8 +76,17 @@
       "refractory_ms": 1000,
       "fallback_dbfs": -35,
       "fallback_onset_min_ms": 400,
-      "sub_threshold_min_ms": 100
+      "sub_threshold_min_ms": 100,
+      "overlap": {
+        "enabled": false,
+        "p_now_user_min": null,
+        "p_future_user_min": null,
+        "sustain_ms": 700,
+        "sustain_p_now_mean_min": 0.4,
+        "mic_dbfs_min": null
+      }
     },
+    "attempt": { "merge_gap_ms": 300, "self_finish_window_ms": 1500 },
     "stop_max_wait_ms": null,
     "user_floor_max_ms": 60000,
     "false_onset_window_ms": 1500,

@@ -105,6 +105,10 @@ export class TwoAiLogBuilder {
   private pb = 100;
   private asr = 0;
   private ij = 0;
+  private attemptSeq = 0;
+  /** onset の時点で話していたターン（試みの記録 two_ai.interjection_attempt の overlapped）。 */
+  private curTurn: { turn_id: string; kind: TwoAiTurnKind } | null = null;
+  private readonly onsetCtx = new Map<string, { ai: AiId; point: string | null; pb: number; at: number; mode: 'stop' | 'ignore'; turn: { turn_id: string; kind: TwoAiTurnKind } | null }>();
   private mk = 0;
   private syncSeq = 0;
   private boardVersion = 0;
@@ -250,6 +254,7 @@ export class TwoAiLogBuilder {
       this.emit('two_ai.board', { board_version: this.boardVersion, mode: 'building', cards: this.board.map((c) => ({ ...c })), trigger_turn_id: turn_id, reason: 'shown', picked_card_id: null }, { at: startAt });
     }
     const full = speechMs(spec.text);
+    this.curTurn = { turn_id, kind: spec.kind };
     let interjection_id: string | null = null;
     let user_seg: number | null = null;
     let played = full;
@@ -408,6 +413,7 @@ export class TwoAiLogBuilder {
     this.ij += 1;
     const id = `ij_${String(this.ij).padStart(4, '0')}`;
     this.emit('two_ai.interjection', this.ijPayload(id, 'onset', mode === 'stop' ? ai : null, point, pb, null), { at });
+    this.onsetCtx.set(id, { ai, point, pb, at, mode, turn: this.curTurn });
     if (mode === 'stop') this.emit('two_ai.interjection', this.ijPayload(id, 'stop_requested', ai, point, pb, null), { at: at + 10 });
     else this.emit('two_ai.interjection', this.ijPayload(id, 'ignored_by_condition', null, point, pb, null), { at: at + 10 });
     return id;
@@ -492,6 +498,35 @@ export class TwoAiLogBuilder {
       asr_segment_ids: e.asr_segment_ids,
       fed: e.fed ?? false,
     }, { at: e.at ?? this.t });
+    // 試みの記録（両条件。episode と 1 対 1。止めそこねは無い合成のログ）。
+    const ctx = this.onsetCtx.get(e.interjection_id);
+    if (ctx === undefined) return;
+    this.attemptSeq += 1;
+    const start = e.user_voice_start_at ?? ctx.at - 250;
+    const end = e.user_speech_end_at ?? start + (e.voiced_ms ?? 1200);
+    const outcome =
+      e.outcome === 'yielded' ? (ctx.mode === 'stop' ? 'stopped' : 'held') : e.outcome === 'false_onset' || e.outcome === 'onset_no_speech' ? 'non_speech' : e.outcome;
+    this.emit('two_ai.interjection_attempt', {
+      attempt_id: `at_${String(this.attemptSeq).padStart(4, '0')}`,
+      outcome,
+      started_at: start,
+      ended_at: end,
+      voiced_ms: Math.max(0, end - start),
+      overlap_ms: e.stopped_at !== null ? Math.max(0, e.stopped_at - start) : Math.max(0, end - start),
+      overlapped: ctx.turn === null ? null : { ai_id: ctx.ai, turn_id: ctx.turn.turn_id, turn_kind: ctx.turn.kind, audio_playback_id: ctx.pb, point_id: ctx.point },
+      ai_end_after_ms: e.stopped_at !== null ? present(e.stopped_at - start) : absent('not_ended_in_attempt'),
+      ai_end_reason: e.stopped_at !== null ? 'stopped' : null,
+      p_now_user_max: present(0.7),
+      p_future_user_max: present(0.65),
+      vad_user_max: present(0.9),
+      mic_dbfs_max: present(-28),
+      onset_rule: 'p_threshold',
+      onset_at: present(ctx.at),
+      detect_latency_ms: present(Math.max(0, ctx.at - start)),
+      interjection_id: e.interjection_id,
+      episode_outcome: e.outcome,
+      self_finish_window_ms: 1500,
+    }, { at: e.at ?? this.t, ai_id: ctx.ai, point_id: ctx.point });
   }
 
   marker(at: number, counted = true, extra: Record<string, unknown> = {}): string {

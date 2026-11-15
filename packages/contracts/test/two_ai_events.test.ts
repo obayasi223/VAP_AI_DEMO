@@ -24,8 +24,8 @@ import { OPTIONAL_FIXTURES, VALID_FIXTURES } from '../src/fixtures';
 const twoAiFixtures = VALID_FIXTURES.events.filter((f) => (TWO_AI_EVENT_NAMES as readonly string[]).includes((f.value as { event: string }).event));
 
 describe('新しいイベント', () => {
-  it('23 種と render.health が EVENT_NAMES、fixture、経路を持つ', () => {
-    expect(TWO_AI_EVENT_NAMES).toHaveLength(24);
+  it('24 種（23 種＋試みの記録）と render.health が EVENT_NAMES、fixture、経路を持つ', () => {
+    expect(TWO_AI_EVENT_NAMES).toHaveLength(25);
     for (const name of TWO_AI_EVENT_NAMES) {
       expect(EVENT_NAMES as readonly string[], name).toContain(name);
       expect(twoAiFixtures.some((f) => (f.value as { event: string }).event === name), name).toBe(true);
@@ -44,11 +44,11 @@ describe('新しいイベント', () => {
     expect(ResearchEvent.parse(JSON.parse(JSON.stringify(value)))).toEqual(value);
   });
 
-  it('出し手の表（06 §4.5）：進行役 16、executor 1（sync_mark）、02 が 6', () => {
-    expect(TWO_AI_DIRECTOR_EVENT_NAMES).toHaveLength(16);
+  it('出し手の表（06 §4.5）：進行役 17（試みの記録を含む）、executor 1（sync_mark）、02 が 6', () => {
+    expect(TWO_AI_DIRECTOR_EVENT_NAMES).toHaveLength(17);
     expect(TWO_AI_EXECUTOR_EVENT_NAMES).toEqual(['two_ai.sync_mark']);
     expect(TWO_AI_CONTENT_EVENT_NAMES).toHaveLength(6);
-    expect(new Set(TWO_AI_EVENT_NAMES).size).toBe(24);
+    expect(new Set(TWO_AI_EVENT_NAMES).size).toBe(25);
   });
 
   it('sync_mark は seq（1 以上）、trigger（06 §4.7 の 8 行）、t_wall_ms だけを持ち、経路は node', () => {
@@ -65,6 +65,29 @@ describe('新しいイベント', () => {
   it('retraction の lines は研究画面の伏せ字で [] になりうる', () => {
     const r = twoAiFixtures.find((f) => f.name === 'two_ai.retraction')!.value as object;
     expect(ResearchEvent.safeParse({ ...r, lines: [] }).success).toBe(true);
+  });
+
+  it('interjection_attempt：結果の 8 種、重なりの無い試み、閾値に届かない試みの形', () => {
+    expect(EVENT_ROUTES['two_ai.interjection_attempt']).toEqual({ origin: 'node' });
+    const a = twoAiFixtures.find((f) => f.name === 'two_ai.interjection_attempt')!.value as Record<string, unknown>;
+    for (const outcome of ['stopped', 'held', 'sub_threshold', 'ai_finished_self', 'backchannel', 'non_speech', 'logged_only', 'abandoned']) {
+      expect(ResearchEvent.safeParse({ ...a, outcome }).success, outcome).toBe(true);
+    }
+    expect(ResearchEvent.safeParse({ ...a, outcome: 'missed' }).success).toBe(false);
+    const sub = {
+      ...a,
+      outcome: 'sub_threshold',
+      onset_rule: null,
+      onset_at: { value: null, null_reason: 'no_onset' },
+      detect_latency_ms: { value: null, null_reason: 'no_onset' },
+      interjection_id: null,
+      episode_outcome: null,
+    };
+    expect(ResearchEvent.safeParse(sub).success).toBe(true);
+    const noOverlap = { ...sub, overlapped: null, ai_end_after_ms: { value: null, null_reason: 'no_ai_speaking' }, ai_end_reason: null };
+    expect(ResearchEvent.safeParse(noOverlap).success).toBe(true);
+    expect(ResearchEvent.safeParse({ ...a, onset_rule: 'lowered' }).success).toBe(false);
+    expect(ResearchEvent.safeParse({ ...a, voiced_ms: -1 }).success).toBe(false);
   });
 
   it('marker の handling は recorded_only だけ', () => {

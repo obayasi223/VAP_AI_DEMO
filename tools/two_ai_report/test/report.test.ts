@@ -143,6 +143,43 @@ describe('--coding（AC21）', () => {
     expect(out.texts[0]!.text_ref.startsWith(`${code}:stt:`)).toBe(true);
   });
 
+  it('試みの表（coding_attempts.csv）：止まらなかった試みも 1 行ずつ。--blind では書かない', () => {
+    for (const condition of ['respond_on_spot', 'respond_at_end'] as const) {
+      const d = data({ condition });
+      const eps = d.events.filter((e) => e.event === 'two_ai.interjection_episode').length;
+      // 閾値に届かなかった試みを 1 つ足す（合成のログは止めそこねを作らない）。
+      const ref = d.events.find((e) => e.event === 'two_ai.interjection_attempt')!;
+      const t = ref.t_monotonic_ms + 1;
+      d.events.push({
+        ...ref,
+        t_monotonic_ms: t + 1500,
+        attempt_id: 'at_sub',
+        outcome: 'sub_threshold',
+        started_at: t,
+        ended_at: t + 1400,
+        voiced_ms: 1400,
+        onset_rule: null,
+        onset_at: { value: null, null_reason: 'no_onset' },
+        detect_latency_ms: { value: null, null_reason: 'no_onset' },
+        interjection_id: null,
+        episode_outcome: null,
+      } as never);
+      const out = buildCoding(d);
+      expect(out.attempts).toHaveLength(eps + 1);
+      const sub = out.attempts.find((r) => r.attempt_id === 'at_sub')!;
+      expect(sub).toMatchObject({ outcome: 'sub_threshold', interjection_id: null, span_ms: 1400, onset_rule: null, detect_latency_ms: null, phase: 'discussion' });
+      const first = out.attempts.find((r) => r.attempt_id !== 'at_sub')!;
+      expect(first.outcome).toBe(condition === 'respond_on_spot' ? 'stopped' : 'logged_only');
+      const files = codingFiles(out);
+      expect(files['coding_attempts.csv'].split('\n')[0]).toContain('outcome');
+      expect(files['coding_attempts.csv']).toContain('sub_threshold');
+      for (const tx of USER_TEXTS) expect(files['coding_attempts.csv']).not.toContain(tx);
+      expect(buildCoding(d, { blind: true }).attempts).toEqual([]);
+      const summary = buildSummary(d);
+      expect(summary.interjections.attempts?.by_outcome.sub_threshold).toBe(1);
+    }
+  });
+
   it('スナップショット', () => {
     expect(codingFiles(buildCoding(data({ condition: 'respond_on_spot' })))).toMatchSnapshot();
   });
@@ -162,7 +199,7 @@ describe('cli（runReport）', () => {
     const b = await writeSyntheticSession(join(dir, 'b'), buildSyntheticSession({ condition: 'respond_at_end' }));
     const result = await runReport([a, b], { pair: true, recall: true, post: true, coding: true });
     expect(result.ok).toBe(true);
-    for (const name of ['two_ai_summary.json', 'two_ai_summary.md', 'recall_points.csv', 'post_items.md', 'retraction.md', 'coding/coding_utterances.csv']) {
+    for (const name of ['two_ai_summary.json', 'two_ai_summary.md', 'recall_points.csv', 'post_items.md', 'retraction.md', 'coding/coding_utterances.csv', 'coding/coding_attempts.csv']) {
       expect(result.written).toContain(join(a, name));
     }
     expect(await readFile(join(a, 'two_ai_pair.md'), 'utf8')).toContain('AC2(d)');
@@ -171,5 +208,6 @@ describe('cli（runReport）', () => {
     expect(csvText).not.toContain('respond_on_spot');
     expect(csvText).not.toContain('synthetic_');
     expect(blind.written).toContain(join(dir, 'blind', 'coding_texts.jsonl'));
+    expect(blind.written).not.toContain(join(dir, 'blind', 'coding_attempts.csv'));
   });
 });

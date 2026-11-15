@@ -179,6 +179,15 @@ export function buildSummary(data: TwoAiSessionData) {
     stop_latency_ms: stops.length === 0 ? null : stat(stops),
     per_min: discussionMin > 0 ? Math.round((episodes.filter((e) => phaseOf(e) === 'discussion').length / discussionMin) * 100) / 100 : 0,
     by_point: byPoint,
+    /** 話し始めの試み（two_ai.interjection_attempt）の結果ごとの数。止まらなかった試みも含む。古いログは null。 */
+    attempts: (() => {
+      const at = ofType(ev, 'two_ai.interjection_attempt');
+      if (at.length === 0) return null;
+      const by: Record<string, number> = {};
+      for (const a of at) by[a.outcome] = (by[a.outcome] ?? 0) + 1;
+      const overlapped = at.filter((a) => a.overlapped !== null && a.overlapped.turn_kind !== 'ack');
+      return { n: at.length, by_outcome: by, during_ai: overlapped.length, during_ai_sub_threshold: overlapped.filter((a) => a.outcome === 'sub_threshold').length, during_ai_finished_self: overlapped.filter((a) => a.outcome === 'ai_finished_self').length };
+    })(),
   };
   const acks = episodes.map((e) => e.ack).filter((a): a is NonNullable<typeof a> => a !== null);
   const acknowledgments = {
@@ -287,6 +296,9 @@ export function renderSummaryMarkdown(s: TwoAiSummary): string {
   for (const p of s.points) out.push(`| ${p.point_id} | ${fmt(p.kind)} | ${fmt(p.speaker)} | ${fmt(p.exposure_new_ms)} | ${fmt(p.exposure_total_ms)} | ${fmt(p.planned_exposure_ms)} | ${fmt(p.elaborations_done)}/${fmt(p.elaborations_planned)} | ${p.unavailable ? '作れなかった' : fmt(p.complete)}${p.forced ? '（forced）' : ''} | ${p.played_ms_by_variant.original}／${p.played_ms_by_variant.corrected} | ${fmt(p.heard_original_inference)} |`);
   const ij = s.interjections;
   out.push('', '## 4. 割り込み', '', `episode ${ij.episodes}（yielded ${ij.yielded}、false_onset ${ij.false_onset}、onset_no_speech ${ij.onset_no_speech}、logged_only ${ij.logged_only}）、兆しだけ ${ij.sub_threshold}、印の近く ${ij.near_marker}、毎分 ${ij.per_min}`);
+  if (ij.attempts) {
+    out.push(`話し始めの試み：${ij.attempts.n}（${Object.entries(ij.attempts.by_outcome).map(([k, v]) => `${k} ${v}`).join('、')}）。AI の話の中で始まった ${ij.attempts.during_ai} のうち、閾値に届かず ${ij.attempts.during_ai_sub_threshold}、AI が自分で話し終えた ${ij.attempts.during_ai_finished_self}`);
+  }
   out.push(`停止の遅れ：${ij.stop_latency_ms ? `中央値 ${ij.stop_latency_ms.median}ms、p90 ${ij.stop_latency_ms.p90}ms、最大 ${ij.stop_latency_ms.max}ms（n=${ij.stop_latency_ms.n}）` : '—'}`);
   out.push(`受け止め：${s.acknowledgments.n} 回、長さ ${s.acknowledgments.played_ms ? `${s.acknowledgments.played_ms.min}〜${s.acknowledgments.played_ms.max}ms` : '—'}、途中で切れた ${s.acknowledgments.truncated}`);
   if (ij.correction_hold) out.push(`判定の保留：${ij.correction_hold.n} 回（訂正 ${ij.correction_hold.corrected}、訂正でない ${ij.correction_hold.not_correction}、時間切れ ${ij.correction_hold.timeout}、研究者の resume ${ij.correction_hold.woz_resume}）、確定文 p95 ${fmt(ij.correction_hold.stt_final_after_ms_p95)}ms、判定 p95 ${fmt(ij.correction_hold.judgment_after_ms_p95)}ms`);

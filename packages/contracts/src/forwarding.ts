@@ -64,6 +64,7 @@ export const EVENT_ROUTES = {
   'two_ai.turn': { origin: 'node' },
   'two_ai.interjection': { origin: 'node' },
   'two_ai.interjection_episode': { origin: 'node' },
+  'two_ai.interjection_attempt': { origin: 'node' },
   'two_ai.point': { origin: 'node' },
   'two_ai.point_exposure': { origin: 'node' },
   'two_ai.script': { origin: 'node' },

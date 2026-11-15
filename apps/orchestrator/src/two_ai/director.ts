@@ -25,6 +25,7 @@ import type {
 } from '@llm-vap/contracts';
 import type { AbandonResumeReason, CorrectionSuggestion } from './content_port';
 import type {
+  AttemptTrack,
   DirectorInputs,
   DirectorState,
   DiscussionTurnView,
@@ -167,7 +168,9 @@ class Step {
     this.onAckStarted();
     this.handleMarkers();
     this.trackUtterance();
+    this.onAttemptStarted();
     this.onInterjectionSignal();
+    this.onAttemptEnded();
     this.handleWoz();
     this.handleSuggestions();
     switch (this.s.phase) {
@@ -190,6 +193,7 @@ class Step {
     this.rejectPicksOutside();
     this.checkFallback();
     this.tryStart();
+    this.flushAttempts();
   }
 
   // ---- 共通の道具 --------------------------------------------------------------
@@ -532,6 +536,11 @@ class Step {
   }
 
   private onEnded(f: FloorHolder, obs: Extract<PlaybackObservation, { kind: 'ended' }>): void {
+    for (const a of this.s.attempts) {
+      if (a.overlapped?.audio_playback_id === f.audio_playback_id && a.ai_end === null) {
+        a.ai_end = { at: this.now, reason: obs.reason === 'completed' ? 'completed' : obs.reason === 'stopped' ? 'stopped' : 'other' };
+      }
+    }
     this.s.floor = null;
     this.s.last_turn_ended_at = this.now;
     this.s.last_speaker = f.ai_id;
@@ -805,7 +814,111 @@ class Step {
       return;
     }
     if (sig.kind !== 'onset' || this.s.phase !== 'discussion') return;
+    const before = this.s.interjection;
     this.startInterjection({ source: sig.source, first_voiced_at: sig.first_voiced_at, detected_at: sig.detected_at, p_now_user: sig.p_now_user, p_future_user: sig.p_future_user, vad_user: sig.vad_user, mic_dbfs: sig.mic_dbfs });
+    const opened = this.s.interjection;
+    if (before === null && opened !== null) {
+      const a = this.s.attempts.filter((x) => x.stats === null && x.interjection_id === null).at(-1);
+      if (a !== undefined) {
+        a.interjection_id = opened.interjection_id;
+        a.stop_requested = opened.stop_requested_at !== null;
+      }
+    }
+  }
+
+  // ---- 試み（two_ai.interjection_attempt）---------------------------------------
+
+  /** 話し合いの段で、開いている割り込みが無いときに始まった声を試みにする（開いている割り込みの中の声はその一部）。 */
+  private onAttemptStarted(): void {
+    const u = this.inp.interjection_attempt;
+    if (u === undefined || u === null || u.kind !== 'started') return;
+    if (this.s.phase !== 'discussion' || this.s.interjection !== null) return;
+    const f = this.s.floor;
+    this.s.attempt_count += 1;
+    this.s.attempts.push({
+      attempt_id: `at${this.s.attempt_count}`,
+      started_at: u.started_at,
+      overlapped: f !== null ? { ai_id: f.ai_id, turn_id: f.turn_id, turn_kind: f.turn_kind, audio_playback_id: f.audio_playback_id, point_id: f.point_id } : null,
+      ai_end: null,
+      interjection_id: null,
+      stop_requested: false,
+      episode_outcome: null,
+      stats: null,
+    });
+  }
+
+  private onAttemptEnded(): void {
+    const u = this.inp.interjection_attempt;
+    if (u === undefined || u === null || u.kind !== 'ended') return;
+    const a = this.s.attempts.find((x) => x.stats === null && x.started_at === u.stats.started_at);
+    if (a !== undefined) a.stats = u.stats;
+  }
+
+  /** 声が終わり、結びついた episode が閉じた試みを出す。 */
+  private flushAttempts(): void {
+    if (this.s.attempts.length === 0) return;
+    const keep: AttemptTrack[] = [];
+    for (const a of this.s.attempts) {
+      const st = a.stats;
+      const waiting = a.interjection_id !== null && a.episode_outcome === null && this.s.interjection?.interjection_id === a.interjection_id;
+      if (st === null || waiting) {
+        keep.push(a);
+        continue;
+      }
+      if (st.onset === null && a.interjection_id === null && st.voiced_ms < this.cfg.interjection.detector.sub_threshold_min_ms) continue;
+      this.emitAttempt(a, st);
+    }
+    this.s.attempts = keep;
+  }
+
+  private emitAttempt(a: AttemptTrack, st: NonNullable<AttemptTrack['stats']>): void {
+    const window = this.cfg.interjection.attempt.self_finish_window_ms;
+    const aiEnd = a.ai_end;
+    const selfFinished = a.overlapped !== null && aiEnd !== null && aiEnd.reason === 'completed' && (aiEnd.at - a.started_at <= window || a.stop_requested);
+    const outcome: Extract<TwoAiEventDraft, { event: 'two_ai.interjection_attempt' }>['outcome'] = selfFinished
+      ? 'ai_finished_self'
+      : st.onset === null && a.interjection_id === null
+        ? 'sub_threshold'
+        : a.interjection_id === null
+          ? 'abandoned'
+          : a.episode_outcome === 'yielded'
+            ? a.stop_requested
+              ? 'stopped'
+              : 'held'
+            : a.episode_outcome === 'backchannel'
+              ? 'backchannel'
+              : a.episode_outcome === 'false_onset' || a.episode_outcome === 'onset_no_speech'
+                ? 'non_speech'
+                : a.episode_outcome === 'logged_only'
+                  ? 'logged_only'
+                  : 'abandoned';
+    const p = (v: number | null, reason: string) => (v !== null ? present(v) : absent(reason));
+    const onsetAt = st.onset?.at ?? null;
+    this.emit(
+      {
+        event: 'two_ai.interjection_attempt',
+        attempt_id: a.attempt_id,
+        outcome,
+        started_at: st.started_at,
+        ended_at: st.ended_at,
+        voiced_ms: st.voiced_ms,
+        overlap_ms: st.overlap_ms,
+        overlapped: a.overlapped,
+        ai_end_after_ms: a.overlapped === null ? absent('no_ai_speaking') : aiEnd === null ? absent('not_ended_in_attempt') : present(Math.round(aiEnd.at - a.started_at)),
+        ai_end_reason: aiEnd?.reason ?? null,
+        p_now_user_max: p(st.p_now_user_max, 'vap_not_fresh'),
+        p_future_user_max: p(st.p_future_user_max, 'vap_not_fresh'),
+        vad_user_max: p(st.vad_user_max, 'vap_not_fresh'),
+        mic_dbfs_max: p(st.mic_dbfs_max, 'no_mic_level'),
+        onset_rule: st.onset?.rule ?? null,
+        onset_at: p(onsetAt, 'no_onset'),
+        detect_latency_ms: onsetAt !== null ? present(Math.max(0, Math.round(onsetAt - st.started_at))) : absent('no_onset'),
+        interjection_id: a.interjection_id,
+        episode_outcome: a.episode_outcome,
+        self_finish_window_ms: window,
+      },
+      { ai_id: a.overlapped?.ai_id ?? null, point_id: a.overlapped?.point_id ?? null },
+    );
   }
 
   private startInterjection(o: { source: 'vap' | 'fallback' | 'woz'; first_voiced_at: number | null; detected_at: number; p_now_user: number | null; p_future_user: number | null; vad_user: number | null; mic_dbfs: number | null }): void {
@@ -958,6 +1071,12 @@ class Step {
       { ai_id: track.interrupted?.ai_id ?? null, point_id: track.interrupted?.point_id ?? null },
     );
     if (resumed) this.interjectionEvent(track, 'resumed', outcome);
+    for (const a of this.s.attempts) {
+      if (a.interjection_id === track.interjection_id) {
+        a.episode_outcome = outcome;
+        a.stop_requested = track.stop_requested_at !== null;
+      }
+    }
     this.s.interjection = null;
   }
 

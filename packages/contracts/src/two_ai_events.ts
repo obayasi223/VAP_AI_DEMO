@@ -170,6 +170,59 @@ export const TwoAiInterjectionEpisodeShape = {
   fed: z.boolean(),
 };
 
+/**
+ * 本人の話し始めの試み（両条件、話し合いの段）。止まったかどうかにかかわらず 1 回に 1 行。episode の意味は変えない。
+ * 試み：検出器の声の連続を merge_gap_ms 未満の切れ目でつないだまとまり（interjection.attempt）。開いている割り込みの中で
+ * 始まった声（受け止めの後の言い直しなど）はその割り込みの一部で、試みにしない。sub_threshold_min_ms 未満の声も出さない。
+ *
+ * outcome：
+ * stopped：onset で AI の話を止めた（① の episode が yielded で、重なっていたターンが stopped で終わった）。
+ * held：AI が話していない（または受け止めの）間の onset で、次のターンを待たせて本人が話した（① の yielded、止める相手なし）。
+ * sub_threshold：onset の条件に届かなかった（言おうとしたが通らなかった）。
+ * ai_finished_self：重なっていた AI のターンが、試みの始まりから self_finish_window_ms 以内に自分で話し終えた。
+ *   止めそこねとは分ける。onset があっても（遅れて届いた、停止の要求が語の境界の前に終わった）こちらを優先する。
+ * backchannel／non_speech：onset はあったが、episode が backchannel／false_onset・onset_no_speech。
+ * logged_only：② で onset を記録した（止めない。設計どおり）。
+ * abandoned：episode が段の終わり、中止、切断で閉じた（onset はあったが進行役が割り込みを開かなかった場合も含む）。
+ */
+export const TwoAiInterjectionAttemptShape = {
+  attempt_id: NonEmptyString,
+  outcome: z.enum(['stopped', 'held', 'sub_threshold', 'ai_finished_self', 'backchannel', 'non_speech', 'logged_only', 'abandoned']),
+  /** 最初の声の tick と最後の声の tick（orchestrator の時刻）。 */
+  started_at: MonotonicMs,
+  ended_at: MonotonicMs,
+  /** 声の tick の長さの和（切れ目を除く）。 */
+  voiced_ms: NonNegativeMs,
+  /** 声のうち AI の再生と重なった長さ。 */
+  overlap_ms: NonNegativeMs,
+  /** 試みの始まりに話していた AI のターン（話していなければ null）。 */
+  overlapped: z
+    .strictObject({
+      ai_id: AiId,
+      turn_id: NonEmptyString,
+      turn_kind: TwoAiTurnKind,
+      audio_playback_id: AudioPlaybackId,
+      point_id: NonEmptyString.nullable(),
+    })
+    .nullable(),
+  /** 重なっていたターンの終わり（試みの始まりから。終わり方は ai_end_reason）。 */
+  ai_end_after_ms: Maybe(z.number()),
+  ai_end_reason: z.enum(['completed', 'stopped', 'other']).nullable(),
+  /** 試みの中の最大値（VAP が fresh だった tick だけ。fallback だけなら null）。 */
+  p_now_user_max: Maybe(Probability),
+  p_future_user_max: Maybe(Probability),
+  vad_user_max: Maybe(Probability),
+  mic_dbfs_max: Maybe(z.number()),
+  /** onset を出した規則（p_threshold：通常、overlap_threshold／overlap_sustain：重なりの中の追加の経路、fallback：mic）。 */
+  onset_rule: z.enum(['p_threshold', 'overlap_threshold', 'overlap_sustain', 'fallback']).nullable(),
+  onset_at: Maybe(MonotonicMs),
+  /** started_at → onset。 */
+  detect_latency_ms: Maybe(NonNegativeMs),
+  interjection_id: NonEmptyString.nullable(),
+  episode_outcome: z.enum(['yielded', 'backchannel', 'false_onset', 'onset_no_speech', 'logged_only', 'abandoned']).nullable(),
+  self_finish_window_ms: NonNegativeMs,
+};
+
 export const TwoAiPointShape = {
   point_id: NonEmptyString,
   point_kind: PointKind,
@@ -497,6 +550,7 @@ export const TWO_AI_DIRECTOR_EVENT_NAMES = [
   'two_ai.turn',
   'two_ai.interjection',
   'two_ai.interjection_episode',
+  'two_ai.interjection_attempt',
   'two_ai.point',
   'two_ai.point_exposure',
   'two_ai.script',
@@ -524,7 +578,7 @@ export const TWO_AI_CONTENT_EVENT_NAMES = [
   'two_ai.interjection_fed',
 ] as const;
 
-/** 新しいイベントの名前すべて（23 種と render.health。06 §4.3）。 */
+/** 新しいイベントの名前すべて（24 種と render.health。06 §4.3 の 23 種に試みの記録 two_ai.interjection_attempt を足した）。 */
 export const TWO_AI_EVENT_NAMES = [
   ...TWO_AI_DIRECTOR_EVENT_NAMES,
   ...TWO_AI_EXECUTOR_EVENT_NAMES,

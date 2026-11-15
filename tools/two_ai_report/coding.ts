@@ -1,10 +1,13 @@
 /**
  * H3 の符号化の書き出し（--coding。04 D、AC21。第 3 回 M3）。材料は events.jsonl だけ。
- * coding_utterances.csv（本人の発話と印）、coding_stages.csv（段の境界）、coding_texts.jsonl（本文）。
+ * coding_utterances.csv（本人の発話と印）、coding_stages.csv（段の境界）、coding_texts.jsonl（本文）、
+ * coding_attempts.csv（話し始めの試み。two_ai.interjection_attempt の 1 行ずつ。止まった／閾値に届かず／AI が自分で話し終えた／
+ * 相づち・非音声 などの結果を、止まらなかったものも含めて並べる）。
  * CSV に本文は入れない（text_ref で結ぶ）。--blind は条件の列を空にし、セッションの ID を符号にする。
+ * 試みの表は結果（stopped、logged_only）から条件が分かるので、--blind では書かない。
  */
 import { csv } from './csv';
-import { frameToMonotonic, ofType, sha256, type Ev, type TwoAiSessionData } from './session';
+import { frameToMonotonic, mval, ofType, sha256, type Ev, type TwoAiSessionData } from './session';
 import { contentClock, stageSpans, syncMarkTime, turnAt } from './timeline';
 
 export const UTTERANCE_COLUMNS = [
@@ -18,6 +21,12 @@ export const STAGE_COLUMNS = [
   'started_monotonic_ms', 'ended_monotonic_ms', 'offset_in_audio_ms', 'first_turn_id', 'sync_flash_monotonic_ms', 'n_utterances', 'n_markers',
 ] as const;
 
+export const ATTEMPT_COLUMNS = [
+  'session_id', 'condition', 'attempt_id', 'phase', 'stage', 't_content_ms', 't_monotonic_ms', 'outcome', 'voiced_ms', 'span_ms', 'overlap_ms',
+  'overlapped_ai_id', 'overlapped_turn_id', 'overlapped_turn_kind', 'overlapped_point_id', 'ai_end_after_ms', 'ai_end_reason', 'self_finish_window_ms',
+  'p_now_user_max', 'p_future_user_max', 'vad_user_max', 'mic_dbfs_max', 'onset_rule', 'detect_latency_ms', 'interjection_id', 'episode_outcome',
+] as const;
+
 export interface CodingOptions {
   blind?: boolean;
   /** 発話の始まりの前、この長さの中でいちばん近い印を結ぶ（既定 10000）。 */
@@ -29,6 +38,8 @@ export interface CodingOptions {
 export interface CodingOutput {
   utterances: Record<string, unknown>[];
   stages: Record<string, unknown>[];
+  /** 話し始めの試み（--blind では空）。 */
+  attempts: Record<string, unknown>[];
   texts: { text_ref: string; text: string }[];
   /** intake の発話の件数（符号化の対象外）。 */
   intake_utterances: number;
@@ -176,13 +187,51 @@ export function buildCoding(data: TwoAiSessionData, options: CodingOptions = {})
       n_markers: rows.filter((r) => r.row_kind === 'marker' && inSpan(r._t)).length,
     };
   });
-  return { utterances, stages, texts, intake_utterances: intake };
+  const spans = stageSpans(data);
+  const attempts = blind
+    ? []
+    : ofType(data.events, 'two_ai.interjection_attempt')
+        .map((a) => {
+          const t = a.started_at;
+          const span = spans.find((x) => t >= x.started_at && (x.ended_at === null || t < x.ended_at));
+          return {
+            session_id: sessionId,
+            condition: cond,
+            attempt_id: a.attempt_id,
+            phase: phases.filter((p) => p.t_monotonic_ms <= t).at(-1)?.to ?? a.two_ai?.phase ?? null,
+            stage: span !== undefined && /^[1-4]$/.test(span.stage) ? Number(span.stage) : null,
+            t_content_ms: clock.at(t),
+            t_monotonic_ms: Math.round(t),
+            outcome: a.outcome,
+            voiced_ms: a.voiced_ms,
+            span_ms: Math.round(a.ended_at - a.started_at),
+            overlap_ms: a.overlap_ms,
+            overlapped_ai_id: a.overlapped?.ai_id ?? null,
+            overlapped_turn_id: a.overlapped?.turn_id ?? null,
+            overlapped_turn_kind: a.overlapped?.turn_kind ?? null,
+            overlapped_point_id: a.overlapped?.point_id ?? null,
+            ai_end_after_ms: mval(a.ai_end_after_ms),
+            ai_end_reason: a.ai_end_reason,
+            self_finish_window_ms: a.self_finish_window_ms,
+            p_now_user_max: mval(a.p_now_user_max),
+            p_future_user_max: mval(a.p_future_user_max),
+            vad_user_max: mval(a.vad_user_max),
+            mic_dbfs_max: mval(a.mic_dbfs_max),
+            onset_rule: a.onset_rule,
+            detect_latency_ms: mval(a.detect_latency_ms),
+            interjection_id: a.interjection_id,
+            episode_outcome: a.episode_outcome,
+          };
+        })
+        .sort((x, y) => x.t_monotonic_ms - y.t_monotonic_ms);
+  return { utterances, stages, attempts, texts, intake_utterances: intake };
 }
 
-export function codingFiles(out: CodingOutput): { 'coding_utterances.csv': string; 'coding_stages.csv': string; 'coding_texts.jsonl': string } {
+export function codingFiles(out: CodingOutput): { 'coding_utterances.csv': string; 'coding_stages.csv': string; 'coding_attempts.csv': string; 'coding_texts.jsonl': string } {
   return {
     'coding_utterances.csv': csv(UTTERANCE_COLUMNS, out.utterances),
     'coding_stages.csv': csv(STAGE_COLUMNS, out.stages),
+    'coding_attempts.csv': csv(ATTEMPT_COLUMNS, out.attempts),
     'coding_texts.jsonl': out.texts.map((t) => JSON.stringify(t)).join('\n') + (out.texts.length > 0 ? '\n' : ''),
   };
 }

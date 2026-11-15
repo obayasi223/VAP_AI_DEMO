@@ -119,6 +119,9 @@ export interface StimResult {
   kind: Stim['kind'];
   phase: string | null;
   rec_onset_s: number | null;
+  /** 刺激の声の始まりと終わりを orchestrator の時刻に写したもの（ms）。試みとの突き合わせに使う。 */
+  t_on_ms: number;
+  t_off_ms: number;
   /** 刺激の始まりに AI が話していた（ch2 に声があり、その再生が続いていた）。 */
   ai_speaking: boolean;
   playback_id: number | null;
@@ -148,6 +151,9 @@ export interface StimResult {
   ack_delay_ms: number | null;
   episode_outcome: string | null;
   classification: string | null;
+  /** 刺激に結びつく試み（two_ai.interjection_attempt。始まりが刺激の声の -300 ms〜終わり +300 ms）。古いログは null。 */
+  attempt_outcome: string | null;
+  attempt_onset_rule: string | null;
 }
 
 function loadEvents(dir: string): Raw[] {
@@ -191,6 +197,7 @@ export function analyzeRun(run: Raw): { stims: StimResult[]; events: Raw[]; lag:
     return xs.length ? Math.max(...xs) : null;
   };
   const ijs = events.filter((e) => e.event === 'two_ai.interjection');
+  const attempts = events.filter((e) => e.event === 'two_ai.interjection_attempt');
   const eps = events.filter((e) => e.event === 'two_ai.interjection_episode');
   const sysVoiced = (sec: number) => {
     const f = Math.round(sec * 100);
@@ -253,6 +260,7 @@ export function analyzeRun(run: Raw): { stims: StimResult[]; events: Raw[]; lag:
       }
     }
     const playEnd = play?.end ?? null;
+    const att = attempts.find((a) => a.started_at >= tOn - 300 && a.started_at <= tOff + 300);
     out.push({
       run: path.basename(path.dirname(path.dirname(dir))),
       condition: run.condition,
@@ -260,6 +268,8 @@ export function analyzeRun(run: Raw): { stims: StimResult[]; events: Raw[]; lag:
       kind: s.kind,
       phase,
       rec_onset_s: rec,
+      t_on_ms: Math.round(tOn),
+      t_off_ms: Math.round(tOff),
       ai_speaking,
       playback_id: play?.audio_playback_id ?? null,
       turn_kind: play?.turn_kind ?? null,
@@ -281,6 +291,8 @@ export function analyzeRun(run: Raw): { stims: StimResult[]; events: Raw[]; lag:
       ack_delay_ms: ackEv ? Math.round(ackEv.t_monotonic_ms - tOff) : null,
       episode_outcome: ep?.outcome ?? null,
       classification: classified?.classification ?? null,
+      attempt_outcome: att?.outcome ?? null,
+      attempt_onset_rule: att?.onset_rule ?? null,
     });
   }
   const lags = vapLag.map((v) => v.lag);
@@ -385,7 +397,35 @@ export function summarize(all: StimResult[]) {
     const v = lat.map((s) => s[k] as number | null).filter((x): x is number => x !== null);
     return { n: v.length, median: quantile(v, 0.5), p90: quantile(v, 0.9) };
   };
+  // 比べる指標（docs/two_ai_tech_eval.md「重なりの中の検出」）。① の話し合いの段で、AI の発話（受け止めを除く）の中に入れた刺激。
+  const rates = (cond: string) => {
+    const during = disc.filter((s) => s.condition === cond && s.ai_speaking && s.turn_kind !== 'ack');
+    const speech = during.filter((s) => s.kind === 'speech');
+    const nearEnd = (s: StimResult) => s.attempt_outcome === 'ai_finished_self' || (s.attempt_outcome === null && !s.stopped && s.remaining_ms !== null && s.remaining_ms < 1500);
+    const selfFinished = speech.filter((s) => !s.stopped && nearEnd(s));
+    const eligible = speech.filter((s) => s.stopped || !nearEnd(s));
+    const missed = eligible.filter((s) => !s.stopped);
+    const nonSpeech = during.filter((s) => s.kind !== 'speech');
+    const falseStops = nonSpeech.filter((s) => s.stopped);
+    const lat = speech.filter((s) => s.stopped && s.stop_latency_audio_ms !== null).map((s) => s.stop_latency_audio_ms!);
+    return {
+      speech_during_ai: speech.length,
+      ai_finished_self: selfFinished.length,
+      eligible: eligible.length,
+      stopped: eligible.filter((s) => s.stopped).length,
+      missed: missed.length,
+      miss_rate: eligible.length ? missed.length / eligible.length : null,
+      missed_attempt_outcomes: missed.map((s) => s.attempt_outcome ?? 'none'),
+      stopped_by_rule: Object.fromEntries([...new Set(speech.filter((s) => s.stopped).map((s) => s.attempt_onset_rule ?? 'unknown'))].map((r) => [r, speech.filter((s) => s.stopped && (s.attempt_onset_rule ?? 'unknown') === r).length])),
+      non_speech_during_ai: nonSpeech.length,
+      false_stops: falseStops.length,
+      false_stop_rate: nonSpeech.length ? falseStops.length / nonSpeech.length : null,
+      false_stops_by_kind: Object.fromEntries(['backchannel', 'cough', 'breath_loud', 'breath_soft'].map((k) => [k, `${falseStops.filter((s) => s.kind === k).length}/${nonSpeech.filter((s) => s.kind === k).length}`])),
+      stop_latency_ms: { n: lat.length, median: quantile(lat, 0.5), p90: quantile(lat, 0.9), max: lat.length ? Math.max(...lat) : null },
+    };
+  };
   return {
+    rates_on_spot: rates('respond_on_spot'),
     stop_latency_speech: { n: L.length, median: quantile(L, 0.5), p90: quantile(L, 0.9), min: L.length ? Math.min(...L) : null, max: L.length ? Math.max(...L) : null, mean: L.length ? L.reduce((a, b) => a + b, 0) / L.length : null },
     components: { detect_ms: comp('detect_ms'), request_ms: comp('request_ms'), boundary_ms: comp('boundary_ms'), log_ms: comp('stop_latency_log_ms') },
     ack_delay_ms: (() => {

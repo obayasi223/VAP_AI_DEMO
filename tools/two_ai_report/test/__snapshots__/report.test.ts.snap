@@ -2,6 +2,10 @@
 
 exports[`--coding（AC21） > スナップショット 1`] = `
 {
+  "coding_attempts.csv": "session_id,condition,attempt_id,phase,stage,t_content_ms,t_monotonic_ms,outcome,voiced_ms,span_ms,overlap_ms,overlapped_ai_id,overlapped_turn_id,overlapped_turn_kind,overlapped_point_id,ai_end_after_ms,ai_end_reason,self_finish_window_ms,p_now_user_max,p_future_user_max,vad_user_max,mic_dbfs_max,onset_rule,detect_latency_ms,interjection_id,episode_outcome
+synthetic_respond_on_spot,respond_on_spot,at_0001,discussion,1,7629,36622,stopped,2550,2550,350,A,t_0006,point,fact1,350,stopped,1500,0.7,0.7,0.9,-28,p_threshold,100,ij_0001,yielded
+synthetic_respond_on_spot,respond_on_spot,at_0002,discussion,3,67728,104821,stopped,3050,3050,350,A,t_0019,point_elaboration,C1,350,stopped,1500,0.7,0.7,0.9,-28,p_threshold,100,ij_0002,yielded
+",
   "coding_stages.csv": "session_id,condition,stage,heading,started_t_content_ms,ended_t_content_ms,started_wall_ms,ended_wall_ms,started_monotonic_ms,ended_monotonic_ms,offset_in_audio_ms,first_turn_id,sync_flash_monotonic_ms,n_utterances,n_markers
 synthetic_respond_on_spot,respond_on_spot,1,いまの状況の整理,0,24500,1795136427443,1795136460543,27443,60543,,t_0005,27443,1,1
 synthetic_respond_on_spot,respond_on_spot,2,二人の見方,24500,57528,1795136460543,1795136493571,60543,93571,,t_0012,60543,0,0
@@ -242,7 +246,7 @@ exports[`two_ai_summary > Markdown に本人の発話の本文が出ない（ス
 
 | ID | 判定 | 詳細 |
 |---|---|---|
-| envelope | 合格 | 289 件すべてに two_ai、段階は phase_changed の列と一致 |
+| envelope | 合格 | 291 件すべてに two_ai、段階は phase_changed の列と一致 |
 | AC1 | 合格 | 受け止め 2 件が定型・長さ ±150ms |
 | AC2 | 合格 | ctl1 新しい部分 14285ms、C1 新しい部分 24000ms |
 | AC3 | 合格 | switched 1、rejected 0、recorded_only 0、(h) 検査済み |
@@ -287,6 +291,7 @@ exports[`two_ai_summary > Markdown に本人の発話の本文が出ない（ス
 ## 4. 割り込み
 
 episode 2（yielded 2、false_onset 0、onset_no_speech 0、logged_only 0）、兆しだけ 0、印の近く 0、毎分 0.95
+話し始めの試み：2（stopped 2）。AI の話の中で始まった 2 のうち、閾値に届かず 0、AI が自分で話し終えた 0
 停止の遅れ：中央値 350ms、p90 350ms、最大 350ms（n=2）
 受け止め：2 回、長さ 2286〜2286ms、途中で切れた 0
 判定の保留：1 回（訂正 1、訂正でない 0、時間切れ 0、研究者の resume 0）、確定文 p95 500ms、判定 p95 1400ms
