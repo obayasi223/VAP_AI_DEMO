@@ -298,12 +298,12 @@ episode 2（yielded 2、false_onset 0、onset_no_speech 0、logged_only 0）、�
 
 ## 5b. 段と印と板
 
-| 段 | 見出し | 開始 ms | 中身の時計 ms | 印 | onset |
-|---|---|---|---|---|---|
-| 1 | いまの状況の整理 | 27443 | 0 | 1 | 1 |
-| 2 | 二人の見方 | 60543 | 24500 | 0 | 0 |
-| 3 | もう一歩の掘り下げ | 93571 | 57528 | 1 | 1 |
-| 4 | 次の一歩の候補 | 133543 | 83500 | 0 | 0 |
+| 段 | 見出し | 開始 ms | 中身の時計 ms | 印 | onset | 中身の完了 | 閉じた理由 | 点 | カード | 参加 ms |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | いまの状況の整理 | 27443 | 0 | 1 | 1 | true | next_stage | 0/0 | 1/1 | 0 |
+| 2 | 二人の見方 | 60543 | 24500 | 0 | 0 | true | next_stage | 0/0 | 1/1 | 0 |
+| 3 | もう一歩の掘り下げ | 93571 | 57528 | 1 | 1 | true | next_stage | 0/0 | 1/1 | 0 |
+| 4 | 次の一歩の候補 | 133543 | 83500 | 0 | 0 | true | content_done | 0/0 | 1/1 | 0 |
 
 印：2/2（時計差なし 0）　同期の印：8（intake → stage_1 → stage_2 → stage_3 → stage_4 → response → next_step → end）
 板：1:card_1(corrected)、2:card_2(corrected)、3:card_3(corrected)、4:card_4(corrected)、作り直し あり、選んだカード card_3（framing_C、4000ms）

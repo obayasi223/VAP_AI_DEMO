@@ -5787,6 +5787,47 @@
         "render_profile",
         "layout"
       ]
+    },
+    {
+      "schema": "events",
+      "name": "two_ai.stage(ended)/completion",
+      "value": {
+        "schema_version": 1,
+        "t_monotonic_ms": 1234.5,
+        "wall_clock": "2026-11-08T03:00:00.000Z",
+        "session_id": "s_0001",
+        "condition": "respond_on_spot",
+        "time_basis": {
+          "source": "orchestrator",
+          "uncertainty_ms": {
+            "value": 0
+          }
+        },
+        "event": "two_ai.stage",
+        "discussion_stage": 4,
+        "edge": "ended",
+        "heading": "次の一歩",
+        "turn_id": null,
+        "content_elapsed_ms": 520000,
+        "discussion_elapsed_ms": 611000,
+        "completion": {
+          "complete": true,
+          "ended_by": "content_done",
+          "content_turns": 9,
+          "points_planned": [],
+          "points_completed": [],
+          "cards_planned": [
+            "card_4"
+          ],
+          "cards_shown": [
+            "card_4"
+          ],
+          "participation_ms": 41000
+        }
+      },
+      "optional_keys": [
+        "completion"
+      ]
     }
   ],
   "invalid": {

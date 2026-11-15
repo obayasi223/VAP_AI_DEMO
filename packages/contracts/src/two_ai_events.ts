@@ -288,6 +288,33 @@ export const TwoAiResponseWindowShape = {
   ack_given: z.boolean(),
 };
 
+/**
+ * 段を閉じた理由（段の完了の記録）。next_stage：次の段の最初のターンが始まった。content_done：02 の中身が尽きた。
+ * wall_max_sec：本人の参加の時間を引いた壁時計が discussion.max_sec に達した。absolute_limit：安全の上限（壁時計の絶対の上限）。
+ * woz：研究者の操作。error：失敗で段を移した。
+ */
+export const TwoAiStageEndedBy = z.enum(['next_stage', 'content_done', 'wall_max_sec', 'absolute_limit', 'woz', 'error']);
+export type TwoAiStageEndedBy = z.infer<typeof TwoAiStageEndedBy>;
+
+/**
+ * 段の中身が出たか（ended だけ。統合 2 の段の完了）。計画した点と板のカードが、その段で出たかを残す。
+ * complete：計画した点がすべて completed（unavailable は数えない）で、計画したカードがすべて出た。
+ * participation_ms：その段で、本人の参加にかかった壁時計（割り込み、受け止め、保留、言い直しの繰り返し、停止の遅れ、それに伴う間）。
+ */
+export const TwoAiStageCompletion = z.strictObject({
+  complete: z.boolean(),
+  ended_by: TwoAiStageEndedBy,
+  /** その段で始めた中身のターン（discussion、point、point_elaboration、resume）の数。 */
+  content_turns: NonNegativeInt,
+  points_planned: z.array(NonEmptyString),
+  points_completed: z.array(NonEmptyString),
+  /** 計画のカード。計画が板を持たない（不明）なら null。 */
+  cards_planned: z.array(NonEmptyString).nullable(),
+  cards_shown: z.array(NonEmptyString),
+  participation_ms: NonNegativeMs,
+});
+export type TwoAiStageCompletion = z.infer<typeof TwoAiStageCompletion>;
+
 /** 話し合いの段の境界（刺激再生の頭出しに使う）。 */
 export const TwoAiStageShape = {
   discussion_stage: DiscussionStage,
@@ -298,6 +325,8 @@ export const TwoAiStageShape = {
   content_elapsed_ms: NonNegativeMs,
   /** 壁時計の経過（discussion_started_at から）。 */
   discussion_elapsed_ms: NonNegativeMs,
+  /** ended だけ：段の中身が出たか（統合 2）。started は null。古いログにはない。 */
+  completion: TwoAiStageCompletion.nullable().optional(),
 };
 
 /** 板の 1 枚（記録の版。参加者画面へ送る BoardCardView に depends_on と trigger_turn_ended を足したもの）。 */

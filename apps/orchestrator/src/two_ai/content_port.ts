@@ -185,6 +185,8 @@ export interface DiscussionContent {
   startDiscussion(): void;
   /** 4 つの見出し（台本の stages、なければ設定の fixed.stage_headings）。条件で変えない。 */
   stageHeadings(): [string, string, string, string];
+  /** 計画の板のカードとその段（段の完了の記録に使う。統合 2）。計画の前は null。 */
+  plannedBoard?(): { card_id: string; discussion_stage: DiscussionStage }[] | null;
   /** 次の 1 ターン（話者は 02 が決める）。LLM の失敗は内部で 1 回作り直し、だめなら凍結の fallback を返す。 */
   nextTurn(
     request: { turn_id: string; content_elapsed_ms: number; discussion_elapsed_ms: number },

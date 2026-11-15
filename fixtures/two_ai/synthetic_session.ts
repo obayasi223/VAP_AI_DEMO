@@ -190,15 +190,19 @@ export class TwoAiLogBuilder {
     h.forEach((x, i) => this.headings.set(i + 1, x));
   }
 
-  endStage(at = this.t): void {
+  endStage(at = this.t, ended_by: 'next_stage' | 'content_done' = 'next_stage'): void {
     if (this.stage === null) return;
+    const stage = this.stage;
+    const cards = this.board.filter((c) => c.discussion_stage === stage).map((c) => c.card_id);
     this.emit('two_ai.stage', {
-      discussion_stage: this.stage,
+      discussion_stage: stage,
       edge: 'ended',
-      heading: this.headings.get(this.stage) ?? `段 ${this.stage}`,
+      heading: this.headings.get(stage) ?? `段 ${stage}`,
       turn_id: null,
       content_elapsed_ms: Math.round(this.contentMs),
       discussion_elapsed_ms: Math.round(at - this.discussionStartedAt),
+      // 合成のログ：点の内訳は持たないので空、カードは出したものを計画とする（報告の列の確認用）。
+      completion: { complete: true, ended_by, content_turns: 0, points_planned: [], points_completed: [], cards_planned: cards, cards_shown: cards, participation_ms: 0 },
     }, { at });
     this.stage = null;
   }
@@ -696,7 +700,7 @@ export function buildSyntheticSession(options: SyntheticOptions): SyntheticSessi
   // 段 4
   discussion('B', '次の一歩の候補を、もう一つ考えてみます。', {}, stageStart(4));
   discussion('A', '説明会の前に、先輩に話を聞いておくのもよさそうです。', { card: card(4, b.variant) });
-  b.endStage();
+  b.endStage(b.t, 'content_done');
   b.turn({ speaker: 'A', kind: 'phase_line', text: config.fixed.lines.closing_two });
 
   // ---- 最後の段（両条件で同一）

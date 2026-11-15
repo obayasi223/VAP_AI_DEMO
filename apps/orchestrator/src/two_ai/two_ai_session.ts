@@ -1036,6 +1036,7 @@ export class TwoAiSession implements ParticipantSession {
         try {
           inputs.stage_headings = content.stageHeadings();
           this.headings = inputs.stage_headings;
+          inputs.planned_cards = content.plannedBoard?.() ?? null;
         } catch {
           inputs.stage_headings = null;
         }

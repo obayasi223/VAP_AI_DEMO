@@ -20,6 +20,8 @@ import type {
   TimeBasis,
   TwoAiCondition,
   TwoAiPhase,
+  TwoAiStageCompletion,
+  TwoAiStageEndedBy,
   TwoAiSessionConfig,
   TwoAiTurnKind,
 } from '@llm-vap/contracts';
@@ -157,6 +159,7 @@ class Step {
       this.rejectPicksOutside();
       return;
     }
+    if (this.inp.planned_cards != null) this.s.planned_cards = this.inp.planned_cards.map((c) => ({ ...c }));
     this.applyCredits();
     this.applyCancelled();
     this.applyArrivals();
@@ -539,6 +542,8 @@ class Step {
     const contentMs = contentMsOf(kind, obs.played_ms, obs.new_ms);
     const gap = CONTENT_TURN_KINDS.has(kind) ? f.view.gap_hint_ms : 0;
     if (this.s.phase === 'discussion') this.s.content_elapsed_ms += contentMs + gap;
+    // 言い直しの戻りの句と繰り返した部分は本人の参加の時間（統合 2）。再生の間は tick で数えないので、ここで 1 回足す。
+    if (this.s.phase === 'discussion' && kind === 'resume') this.addParticipation(Math.min(obs.played_ms, obs.bridge_ms + obs.repeated_ms));
     const interrupted = obs.reason === 'stopped';
     this.turnEvent('ended', { turn_id: f.turn_id, turn_kind: kind, speaker: f.ai_id, view: f.view, audio_playback_id: f.audio_playback_id, played_ms: obs.played_ms, content_ms: this.s.phase === 'discussion' ? contentMs : 0, interrupted, reason: obs.reason });
     if (obs.reason === 'completed') this.s.consecutive_failures = 0;
@@ -618,7 +623,8 @@ class Step {
           return;
         }
         if (line?.kind === 'phase_line' && line.edge === 'close') {
-          this.enterPhase('response', this.s.discussion_closing_source, 'discussion_closed');
+          const why = this.s.discussion_close_reason;
+          this.enterPhase('response', this.s.discussion_closing_source, why === null || why === 'content_done' ? 'discussion_closed' : `discussion_closed_${why}`);
           return;
         }
         if (done.source === 'uptake') {
@@ -1298,7 +1304,7 @@ class Step {
   enterPhase(to: TwoAiPhase, source: 'auto_timer' | 'auto_content' | 'woz' | 'error', reason: string): void {
     const from = this.s.phase;
     if (from === to) return;
-    if (from === 'discussion') this.leaveDiscussion();
+    if (from === 'discussion') this.leaveDiscussion(source);
     const planned = this.plannedDurationMs(to);
     this.emit({
       event: 'two_ai.phase_changed',
@@ -1372,13 +1378,18 @@ class Step {
     }
   }
 
-  private leaveDiscussion(): void {
+  private leaveDiscussion(source: 'auto_timer' | 'auto_content' | 'woz' | 'error'): void {
     const track = this.s.interjection;
     if (track !== null) {
       this.endHold(track, 'abandoned');
       this.closeEpisode(track, track.logged_only ? (track.speech_confirmed ? 'logged_only' : 'onset_no_speech') : 'abandoned', false);
     }
-    if (this.s.discussion_stage !== null) this.stageEvent(this.s.discussion_stage, 'ended', null);
+    if (this.s.discussion_stage !== null) {
+      const why = this.s.discussion_closing ? this.s.discussion_close_reason : null;
+      const ended_by: TwoAiStageEndedBy =
+        why ?? (source === 'woz' ? 'woz' : source === 'error' ? 'error' : source === 'auto_timer' ? 'wall_max_sec' : 'content_done');
+      this.stageEvent(this.s.discussion_stage, 'ended', null, ended_by);
+    }
     for (const p of Object.values(this.s.points)) {
       if (p.state === 'pending' || p.state === 'in_progress') {
         p.state = 'missed';
@@ -1393,7 +1404,7 @@ class Step {
     return headings[stage - 1] ?? `stage_${stage}`;
   }
 
-  private stageEvent(stage: DiscussionStage, edge: 'started' | 'ended', turn_id: string | null): void {
+  private stageEvent(stage: DiscussionStage, edge: 'started' | 'ended', turn_id: string | null, ended_by: TwoAiStageEndedBy = 'next_stage'): void {
     this.emit({
       event: 'two_ai.stage',
       discussion_stage: stage,
@@ -1402,7 +1413,75 @@ class Step {
       turn_id,
       content_elapsed_ms: Math.round(this.s.content_elapsed_ms),
       discussion_elapsed_ms: Math.max(0, Math.round(this.now - (this.s.discussion_started_at ?? this.now))),
+      completion: edge === 'ended' ? this.stageCompletion(stage, ended_by) : null,
     });
+  }
+
+  /** 段の中身が出たか（計画した点と板のカード。統合 2）。 */
+  private stageCompletion(stage: DiscussionStage, ended_by: TwoAiStageEndedBy): TwoAiStageCompletion {
+    const s = this.s;
+    const pts = Object.values(s.points).filter((p) => p.discussion_stage === stage && p.state !== 'unavailable');
+    const points_planned = pts.map((p) => p.point_id).sort();
+    const points_completed = pts.filter((p) => p.state === 'completed' && !p.abandoned).map((p) => p.point_id).sort();
+    const planned = s.planned_cards === null ? null : s.planned_cards.filter((c) => c.discussion_stage === stage).map((c) => c.card_id);
+    const cards_shown = s.board.shown_card_ids.filter((id) => {
+      const c = s.planned_cards?.find((x) => x.card_id === id);
+      return c !== undefined ? c.discussion_stage === stage : s.board_card_stages[id] === stage;
+    });
+    const cardsOk = planned === null ? true : planned.every((id) => cards_shown.includes(id));
+    return {
+      complete: points_completed.length === points_planned.length && cardsOk,
+      ended_by,
+      content_turns: s.content_turns_by_stage[stage - 1] ?? 0,
+      points_planned,
+      points_completed,
+      cards_planned: planned,
+      cards_shown,
+      participation_ms: Math.round(s.participation_by_stage[stage - 1] ?? 0),
+    };
+  }
+
+  /**
+   * 本人の参加にかかった時間を数える（① だけ。統合 2）。割り込みが開いている間（停止の遅れ、本人の発話、受け止め、保留）、
+   * 保留の時間切れのつなぎの再生、割り込みが閉じた後に次の中身のターンの再生が始まるまで（uptake、間）を数える。
+   * 言い直し（resume）の再生の間は数えず、終わりに戻りの句と繰り返した部分だけを足す（onEnded）。② は割り込みで開かないので 0。
+   */
+  private trackParticipation(): void {
+    const s = this.s;
+    const ij = s.interjection;
+    const open = ij !== null && !ij.logged_only && ij.outcome === null;
+    if (open && !s.participation_open) {
+      s.participation_open = true;
+      s.participation_window_ms = 0;
+      s.participation_window_stage = s.discussion_stage;
+    }
+    const f = s.floor;
+    // 新しい中身を話している間（止めるまでの中身のターン、言い直し）は数えない。止めるまでに話した部分は言い直しの繰り返しで数える。
+    const speakingContent = f !== null && (CONTENT_TURN_KINDS.has(f.turn_kind) || f.turn_kind === 'resume');
+    if (!open && s.participation_open && speakingContent && f.phase === 'playing') this.closeParticipationWindow(f.view);
+    if (speakingContent) return;
+    if (s.participation_open || f?.turn_kind === 'bridge') {
+      this.addParticipation(this.dt);
+      if (s.participation_open) s.participation_window_ms += this.dt;
+    }
+  }
+
+  private closeParticipationWindow(v: DiscussionTurnView): void {
+    const s = this.s;
+    s.participation_open = false;
+    // 窓を閉じたのが言い直しでない中身のターンなら、その前の間は ② にもある間なので戻す（窓で数えた分まで）。
+    if (v.turn_kind !== 'resume') this.addParticipation(-Math.min(v.gap_hint_ms, s.participation_window_ms), s.participation_window_stage);
+    s.participation_window_ms = 0;
+  }
+
+  private addParticipation(ms: number, stage: DiscussionStage | null = this.s.discussion_stage): void {
+    if (ms === 0 || !Number.isFinite(ms)) return;
+    const s = this.s;
+    s.interjection_wall_ms = Math.max(0, s.interjection_wall_ms + ms);
+    if (stage !== null) {
+      const i = stage - 1;
+      s.participation_by_stage[i] = Math.max(0, (s.participation_by_stage[i] ?? 0) + ms);
+    }
   }
 
   // ---- intake --------------------------------------------------------------------
@@ -1508,9 +1587,8 @@ class Step {
     }
     if (s.discussion_started_at === null) return;
     const d = this.cfg.phases.discussion;
-    // ① の割り込みの時間（開いている割り込み、保留の時間切れのつなぎの再生）は上限の壁時計から引く（U1。上限 interjection_allowance_max_sec）。
-    const ij = s.interjection;
-    if ((ij !== null && !ij.logged_only) || s.floor?.turn_kind === 'bridge') s.interjection_wall_ms += this.dt;
+    // ① の本人の参加にかかった時間は上限の壁時計から引く（U1 を広げた統合 2。上限 interjection_allowance_max_sec）。
+    this.trackParticipation();
     const allowance = Math.min(s.interjection_wall_ms, d.interjection_allowance_max_sec * 1000);
     const wall = this.now - s.discussion_started_at - allowance;
     const points = Object.values(s.points);
@@ -1531,6 +1609,7 @@ class Step {
       }
       s.discussion_closing = true;
       s.discussion_closing_source = 'auto_timer';
+      s.discussion_close_reason = 'absolute_limit';
       // 受け止めは切らない（AC1。WoZ の中止だけが例外）。受け止めの終わりを待って close へ進む。
       if (s.floor !== null && s.floor.turn_kind !== 'ack') {
         const f = s.floor;
@@ -1545,9 +1624,14 @@ class Step {
     if (!s.discussion_closing && wantsEnd && allClosed && s.interjection === null) {
       s.discussion_closing = true;
       s.discussion_closing_source = this.inp.content_done.discussion ? 'auto_content' : 'auto_timer';
+      s.discussion_close_reason = this.inp.content_done.discussion ? 'content_done' : 'wall_max_sec';
     }
     if (s.discussion_closing) {
-      if (s.closing_requested !== 'discussion' && s.floor === null && s.interjection === null && (sub.kind === 'between_turns' || sub.kind === 'ai_speaking' || sub.kind === 'resuming')) {
+      // 上限で閉じると決めた後の割り込みは、受け止めと保留が済めば言い直さずに閉じる（閉じの台詞の開始で episode を閉じる）。
+      // 済むのを待たないと、言い直しのターンが始まらないので割り込みが閉じず、閉じの台詞も頼めなかった（統合 2 で見つけた行き詰まり）。
+      const ijc = s.interjection;
+      const ijSettled = ijc === null || (ijc.outcome !== null && (ijc.hold === null || ijc.hold.ended_at !== null) && s.ack_offer === null);
+      if (s.closing_requested !== 'discussion' && s.floor === null && ijSettled && (sub.kind === 'between_turns' || sub.kind === 'ai_speaking' || sub.kind === 'resuming')) {
         s.closing_requested = 'discussion';
         if (s.next !== null) {
           this.act({ kind: 'cancel_turn', ai_id: s.next.turn?.speaker ?? null, turn_id: s.next.turn_id, audio_playback_id: s.next.audio_playback_id, reason: 'discussion_closing' });
@@ -1760,6 +1844,11 @@ class Step {
     this.act({ kind: 'start_turn', ai_id: v.speaker, turn_id: p.turn_id, audio_playback_id: id });
     s.floor = { ai_id: v.speaker, turn_id: p.turn_id, turn_kind: v.turn_kind, audio_playback_id: id, point_id: v.point_id, phase: 'starting', started_at: this.now, view: v, source: p.source, played_ms_hint: 0 };
     s.feed_wait = false;
+    // 本人の参加の窓は、割り込みが決着した後の中身のターン（言い直しを含む）の開始で閉じる（段の完了の記録より前。統合 2）。
+    if (s.phase === 'discussion' && s.participation_open && (CONTENT_TURN_KINDS.has(v.turn_kind) || v.turn_kind === 'resume')) {
+      const tr = s.interjection;
+      if (tr === null || tr.logged_only || tr.outcome !== null) this.closeParticipationWindow(v);
+    }
     // 段（01 §3.10.1）。段の境界のイベントはそのターンの started より前に出す（封筒の discussion_stage と two_ai.stage の列を合わせる。AC15(d)）。
     if (s.phase === 'discussion' && v.discussion_stage !== null && v.discussion_stage !== s.discussion_stage) {
       if (s.discussion_stage !== null) this.stageEvent(s.discussion_stage, 'ended', null);
@@ -1785,9 +1874,14 @@ class Step {
       if (!(p.source === 'uptake' && track.after_uptake === 'resume')) this.closeEpisode(track, track.outcome, resumed);
     }
     // 板（01 §3.10.2）。
+    if (s.phase === 'discussion' && s.discussion_stage !== null && (CONTENT_TURN_KINDS.has(v.turn_kind) || v.turn_kind === 'resume')) {
+      const i = s.discussion_stage - 1;
+      s.content_turns_by_stage[i] = (s.content_turns_by_stage[i] ?? 0) + 1;
+    }
     if (v.board_card_id !== null) {
       s.board.version += 1;
       s.board.shown_card_ids.push(v.board_card_id);
+      if (s.discussion_stage !== null) s.board_card_stages[v.board_card_id] = s.discussion_stage;
       this.act({ kind: 'send_board', reason: 'shown', trigger_turn_id: p.turn_id });
     }
     if (p.source === 'rebuild' && s.board.mode !== 'rebuilt') {

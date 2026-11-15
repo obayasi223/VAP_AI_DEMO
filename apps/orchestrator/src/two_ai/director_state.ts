@@ -209,10 +209,26 @@ export interface DirectorState {
   /** 絶対の上限（max_sec + points_overrun_max_sec）を扱った。 */
   wall_overrun_handled: boolean;
   /**
-   * ① の割り込みに使った壁時計（本人の発話、受け止め、保留、つなぎ。割り込みの開始から言い直しの始まりまでと、bridge の再生）。
-   * 話し合いの壁時計の上限をこの分だけ延ばす（上限 interjection_allowance_max_sec。U1：① で ② が受け取る中身を切らない）。
+   * ① の本人の参加にかかった壁時計（統合 2。U1 を広げた）。割り込みの開始（停止の遅れを含む）から、次の中身のターンの再生が
+   * 始まるまで（受け止め、保留、uptake、つなぎ、間を含む）と、言い直し（resume）の戻りの句と繰り返した部分（bridge_ms + repeated_ms）。
+   * 話し合いの壁時計の上限（max_sec と points_overrun_max_sec）をこの分だけ延ばす（上限 interjection_allowance_max_sec）。
    */
   interjection_wall_ms: number;
+  /** 割り込みの後、次の中身のターンの再生が始まるまでの参加の窓が開いている（統合 2）。 */
+  participation_open: boolean;
+  /** いま開いている参加の窓で tick で数えた長さ（窓を閉じたターンの前の間を戻すのに使う）。 */
+  participation_window_ms: number;
+  participation_window_stage: DiscussionStage | null;
+  /** 段ごとの参加の時間（interjection_wall_ms の内訳。段の完了の記録）。 */
+  participation_by_stage: [number, number, number, number];
+  /** 段ごとに始めた中身のターンの数（段の完了の記録）。 */
+  content_turns_by_stage: [number, number, number, number];
+  /** 計画の板のカードと段（executor が計画の後に渡す）。null は不明。 */
+  planned_cards: { card_id: string; discussion_stage: DiscussionStage }[] | null;
+  /** 出したカードの段（出したターンの段）。 */
+  board_card_stages: Record<string, DiscussionStage>;
+  /** 話し合いを閉じた理由（段の完了の ended_by。閉じると決めたときに決まる）。 */
+  discussion_close_reason: 'content_done' | 'wall_max_sec' | 'absolute_limit' | null;
   /** 段ごとの割り込みの数（両条件。研究者の確認用。U3）。 */
   interjections_by_stage: [number, number, number, number];
   /** 頼んだ定型の種類（turn_id → 行。話し終えたときの遷移に使う）。 */
@@ -279,6 +295,8 @@ export interface DirectorInputs {
   stage_headings?: [string, string, string, string] | null;
   /** executor が 02 の結果（invalidate_turn_ids、replace_point_turn_ids）で取り消したターン。 */
   cancelled_turn_ids?: string[];
+  /** content.plannedBoard()（計画の後）。段の完了の記録に使う。null／省略は変えない。 */
+  planned_cards?: { card_id: string; discussion_stage: DiscussionStage }[] | null;
 }
 
 export function emptyInputs(): DirectorInputs {
@@ -353,6 +371,14 @@ export function initialDirectorState(init: { condition: TwoAiCondition; correcti
     recent_marker_ats: [],
     wall_overrun_handled: false,
     interjection_wall_ms: 0,
+    participation_open: false,
+    participation_window_ms: 0,
+    participation_window_stage: null,
+    participation_by_stage: [0, 0, 0, 0],
+    content_turns_by_stage: [0, 0, 0, 0],
+    planned_cards: null,
+    board_card_stages: {},
+    discussion_close_reason: null,
     interjections_by_stage: [0, 0, 0, 0],
     queue_lines: {},
     ack_cache: null,

@@ -81,10 +81,13 @@ export function buildSummary(data: TwoAiSessionData) {
 
   const markers = ofType(ev, 'two_ai.marker');
   const onsets = ofType(ev, 'two_ai.interjection').filter((i) => i.stage === 'onset');
+  const stageEnded = ofType(ev, 'two_ai.stage').filter((x) => x.edge === 'ended');
   const stages = stageSpans(data)
     .filter((s) => /^[1-4]$/.test(s.stage))
     .map((s) => {
       const inSpan = (t: number) => t >= s.started_at && (s.ended_at === null || t < s.ended_at);
+      // 段の完了（統合 2）：計画した点と板のカードが出たか、閉じた理由、本人の参加の時間。古いログは null。
+      const done = stageEnded.find((x) => String(x.discussion_stage) === s.stage && x.t_monotonic_ms >= s.started_at)?.completion ?? null;
       return {
         stage: Number(s.stage),
         heading: s.heading,
@@ -95,6 +98,11 @@ export function buildSummary(data: TwoAiSessionData) {
         content_elapsed_ms_at_start: s.started_content_ms,
         markers: markers.filter((x) => inSpan(x.t_monotonic_ms)).length,
         onsets: onsets.filter((x) => inSpan(x.t_monotonic_ms)).length,
+        complete: done?.complete ?? null,
+        ended_by: done?.ended_by ?? null,
+        points_completed: done ? `${done.points_completed.length}/${done.points_planned.length}` : null,
+        cards_shown: done ? `${done.cards_shown.length}/${done.cards_planned === null ? '?' : done.cards_planned.length}` : null,
+        participation_ms: done?.participation_ms ?? null,
       };
     });
 
@@ -293,8 +301,8 @@ export function renderSummaryMarkdown(s: TwoAiSummary): string {
   out.push('', '## 5. 台本の切替と当日の撤回', '');
   out.push(s.script_switch ? `切替：${s.script_switch.trigger}、発話の終わりから ${fmt(s.script_switch.delay_from_user_speech_ms)}ms、言い直しをやめた ${fmt(s.script_switch_detail?.resume_dropped)}` : '切替：なし');
   out.push(`撤回：${fmt(s.retraction.timing)}、セッションの中で話した ${s.retraction.done_in_session}、推論の文 ${fmt(s.retraction.inference_form)}（文は retraction.md）`);
-  out.push('', '## 5b. 段と印と板', '', '| 段 | 見出し | 開始 ms | 中身の時計 ms | 印 | onset |', '|---|---|---|---|---|---|');
-  for (const st of s.stages) out.push(`| ${st.stage} | ${st.heading} | ${Math.round(st.started_at)} | ${fmt(st.content_elapsed_ms_at_start)} | ${st.markers} | ${st.onsets} |`);
+  out.push('', '## 5b. 段と印と板', '', '| 段 | 見出し | 開始 ms | 中身の時計 ms | 印 | onset | 中身の完了 | 閉じた理由 | 点 | カード | 参加 ms |', '|---|---|---|---|---|---|---|---|---|---|---|');
+  for (const st of s.stages) out.push(`| ${st.stage} | ${st.heading} | ${Math.round(st.started_at)} | ${fmt(st.content_elapsed_ms_at_start)} | ${st.markers} | ${st.onsets} | ${fmt(st.complete)} | ${fmt(st.ended_by)} | ${fmt(st.points_completed)} | ${fmt(st.cards_shown)} | ${fmt(st.participation_ms)} |`);
   out.push('', `印：${s.markers.n_counted}/${s.markers.n_total}（時計差なし ${s.markers.browser_time_missing}）　同期の印：${s.sync_marks.n}（${s.sync_marks.triggers.join(' → ')}）`);
   out.push(`板：${s.board.shown.map((c) => `${c.order}:${c.card_id}(${c.variant})`).join('、') || 'なし'}、作り直し ${s.board.rebuilt_at === null ? 'なし' : 'あり'}、選んだカード ${s.board.picked ? `${s.board.picked.card_id}（${s.board.picked.depends_on}、${s.board.picked.latency_ms}ms）` : fmt(s.board.pick_outcome)}`);
   if (s.response_window) out.push(`応答の段：計画 ${s.response_window.planned_sec} 秒、実際 ${s.response_window.actual_sec} 秒、延長 ${s.response_window.overrun_ms}ms、本人の発話 ${s.response_window.user_speech_ms}ms、促し ${s.response_window.silence_prompts}、受け止め ${s.response_window.ack_given}`);

@@ -25025,6 +25025,87 @@
         "discussion_elapsed_ms": {
           "type": "number",
           "minimum": 0
+        },
+        "completion": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "complete": {
+                  "type": "boolean"
+                },
+                "ended_by": {
+                  "type": "string",
+                  "enum": [
+                    "next_stage",
+                    "content_done",
+                    "wall_max_sec",
+                    "absolute_limit",
+                    "woz",
+                    "error"
+                  ]
+                },
+                "content_turns": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "points_planned": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "points_completed": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "cards_planned": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cards_shown": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "participation_ms": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "complete",
+                "ended_by",
+                "content_turns",
+                "points_planned",
+                "points_completed",
+                "cards_planned",
+                "cards_shown",
+                "participation_ms"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

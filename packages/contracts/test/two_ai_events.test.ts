@@ -191,3 +191,19 @@ describe('two_ai.board の伏せ字（06 §4.6）', () => {
     expect(ResearchEvent.safeParse(withCard('締切に合わせて申し込む', true)).success).toBe(true);
   });
 });
+
+describe('two_ai.stage の段の完了（統合 2）', () => {
+  const ended = OPTIONAL_FIXTURES.find((f) => f.name === 'two_ai.stage(ended)/completion')!.value as { completion: Record<string, unknown> };
+
+  it('閉じた理由は決まった値だけ（上限で閉じた回は wall_max_sec か absolute_limit で明示する）', () => {
+    for (const ended_by of ['next_stage', 'content_done', 'wall_max_sec', 'absolute_limit', 'woz', 'error']) {
+      expect(ResearchEvent.safeParse({ ...ended, completion: { ...ended.completion, complete: false, ended_by } }).success, ended_by).toBe(true);
+    }
+    expect(ResearchEvent.safeParse({ ...ended, completion: { ...ended.completion, ended_by: 'timer' } }).success).toBe(false);
+  });
+
+  it('started は null、計画のカードが不明なら cards_planned は null', () => {
+    expect(ResearchEvent.safeParse({ ...ended, edge: 'started', turn_id: 't_1', completion: null }).success).toBe(true);
+    expect(ResearchEvent.safeParse({ ...ended, completion: { ...ended.completion, cards_planned: null } }).success).toBe(true);
+  });
+});

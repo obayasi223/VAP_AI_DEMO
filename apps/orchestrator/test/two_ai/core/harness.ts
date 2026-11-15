@@ -332,6 +332,7 @@ export class Sim {
     }
     inputs.plan = { state: this.planState, can_start_early: true, plan_id: 'plan_1', source: 'prepared' };
     inputs.points = this.points();
+    inputs.planned_cards = this.script.filter((t) => t.board_card_id !== undefined).map((t) => ({ card_id: t.board_card_id as string, discussion_stage: t.stage }));
     inputs.content_done = { ...this.contentDone };
     inputs.intake_readback_due = this.readbackDue;
     inputs.correction_suggestions = this.suggestions.map((s) => ({ ...s }));

@@ -514,6 +514,10 @@ export class DiscussionGenerator implements DiscussionContent {
     return this.plan?.stage_headings ?? this.deps.script?.stages ?? this.deps.config.fixed.stage_headings;
   }
 
+  plannedBoard(): { card_id: string; discussion_stage: DiscussionStage }[] | null {
+    return this.plan === null ? null : this.plan.board.map((c) => ({ card_id: c.card_id, discussion_stage: c.stage }));
+  }
+
   private requirePlan(): DiscussionPlan {
     if (this.plan === null || !this.started) throw new Error('discussion has not started');
     return this.plan;

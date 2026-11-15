@@ -2086,6 +2086,31 @@ export const OPTIONAL_FIXTURES: {
     },
     optional_keys: ['ai_id', 'render_profile', 'layout'],
   },
+  {
+    schema: 'events',
+    name: 'two_ai.stage(ended)/completion',
+    value: {
+      ...twoAiEnvelope,
+      event: 'two_ai.stage',
+      discussion_stage: 4,
+      edge: 'ended',
+      heading: '次の一歩',
+      turn_id: null,
+      content_elapsed_ms: 520000,
+      discussion_elapsed_ms: 611000,
+      completion: {
+        complete: true,
+        ended_by: 'content_done',
+        content_turns: 9,
+        points_planned: [],
+        points_completed: [],
+        cards_planned: ['card_4'],
+        cards_shown: ['card_4'],
+        participation_ms: 41000,
+      },
+    },
+    optional_keys: ['completion'],
+  },
 ];
 
 function hex(bytes: Uint8Array): string {

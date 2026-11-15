@@ -54,8 +54,10 @@ export const TwoAiSessionConfig = z
         /** 点のために max_sec を延ばせる上限（絶対の上限 = max_sec + これ）。 */
         points_overrun_max_sec: Sec,
         /**
-         * ① の割り込みの時間（本人の発話、受け止め、保留、つなぎ）の分だけ、壁時計の上限（max_sec と絶対の上限）を延ばせる上限。
-         * ① で ② が受け取る中身（段 1〜4、板の 4 枚）を壁時計で切らないため（統合 1 の U1）。既定 240。
+         * ① の本人の参加にかかった時間の分だけ、壁時計の上限（max_sec と絶対の上限）を延ばせる上限。既定 240。
+         * 参加の時間は、割り込み（停止の遅れ、本人の発話、受け止め、保留、つなぎ）、uptake、次の中身のターンまでの間、
+         * 言い直しの戻りの句と繰り返した部分（統合 1 の U1 を統合 2 で広げた）。① で ② が受け取る中身（段 1〜4、板の 4 枚）を
+         * 壁時計で切らないため。壁時計そのものの安全の上限は max_sec + points_overrun_max_sec + これ。
          */
         interjection_allowance_max_sec: Sec.default(240),
         /** after_turn の見込みの時刻（暫定 9）。 */
@@ -788,7 +790,8 @@ export const TwoAiManifest = z.strictObject({
   evidence_ok_for_comparison: z.boolean(),
   evidence_notes: z.array(NonEmptyString),
   /**
-   * 話し合いの壁時計（統合 1）。interjection_wall_ms：① の割り込みに使った壁時計（上限の延長に使った値は max_ms まで）。
+   * 話し合いの壁時計（統合 1、統合 2）。interjection_wall_ms：① の本人の参加にかかった壁時計（割り込み、受け止め、保留、言い直しの
+   * 繰り返し、それに伴う間。上限の延長に使った値は max_ms まで）。
    * interjections_by_stage：段ごとの割り込みの数（両条件。言い直しが切れ続ける回の確認用。U3）。古い manifest にはない。
    */
   discussion_wall: z
