@@ -49,6 +49,19 @@ describe('設定の 3 ファイル（04 B）', () => {
     expect(configs.self.phases.discussion).toEqual(configs.main.phases.discussion);
   });
 
+  it('応答版の設定：mode と responsive だけが本番に近い設定と違う（統制版の 3 つは controlled）', () => {
+    const rawMain = read('config/two_ai/session.ja.json') as Record<string, any>;
+    const rawResp = read('config/two_ai/session.responsive.ja.json') as Record<string, any>;
+    const resp = TwoAiSessionConfig.parse(rawResp);
+    expect(resp.experience.mode).toBe('responsive');
+    expect(resp.experience.interjection_feeds_generation).toBe(false);
+    expect(resp.experience.responsive.rebuild_templates).toHaveLength(2);
+    for (const c of Object.values(configs)) expect(c.experience.mode).toBe('controlled');
+    const strip = (c: Record<string, any>) => ({ ...c, config_id: null, version: null, experience: { ...c.experience, mode: null, responsive: null } });
+    expect(strip(rawResp)).toEqual(strip(rawMain));
+    expect(validatePointSchedule(resp, script.planned_points, templates, null).ok).toBe(true);
+  });
+
   it('受け止めは 1 通りで、許容は 150 ms（AC1）。見出しと問いは 3 つで同じ（条件で変わらない）', () => {
     for (const c of Object.values(configs)) {
       expect(c.acknowledgment.templates).toHaveLength(1);

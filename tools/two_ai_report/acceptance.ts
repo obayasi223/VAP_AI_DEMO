@@ -385,6 +385,11 @@ function ac12(data: TwoAiSessionData): AcceptanceRow {
   const m = data.two_ai;
   const fed = ofType(data.events, 'two_ai.interjection_fed');
   const gens = ofType(data.events, 'two_ai.generation');
+  if (m !== null && m.experience.mode === 'responsive') {
+    // 応答版：本人の発言を生成に入れるのが仕様（旗の区別は統制版だけ）。比較の証拠には数えない
+    if (m.evidence_ok_for_comparison) problems.push('応答版なのに evidence_ok_for_comparison が true');
+    return row('AC12', problems, '応答版（本人の発言を生成に入れる）');
+  }
   if (m !== null) {
     const flag = m.experience.interjection_feeds_generation;
     if (flag.effective !== (flag.requested && m.condition === 'respond_on_spot')) problems.push('(a) effective が requested && ① と違う');
@@ -460,6 +465,12 @@ function ac15(data: TwoAiSessionData): AcceptanceRow {
 }
 
 /** AC16：候補の板。 */
+/** 応答版で、作り直しに使った生成の板（最後の generated）。統制版か、生成の板がなければ null（台本と比べる）。 */
+function responsiveBoard(data: TwoAiSessionData): { card_id: string; corrected_text: string }[] | null {
+  if (data.two_ai?.experience.mode !== 'responsive') return null;
+  return ofType(data.events, 'two_ai.board_generated').filter((b) => b.stage === 'generated').at(-1)?.cards ?? null;
+}
+
 function ac16(data: TwoAiSessionData): AcceptanceRow {
   const boards = ofType(data.events, 'two_ai.board');
   const reached = ofType(data.events, 'two_ai.phase_changed').some((p) => p.to === 'response');
@@ -483,8 +494,11 @@ function ac16(data: TwoAiSessionData): AcceptanceRow {
   for (const b of rebuilt) {
     if (b.cards.length !== 4 || b.cards.some((c) => c.variant !== 'corrected')) problems.push('(d) 作り直しの板が訂正後の 4 枚でない');
     // 予備の筋書きの板は汎用の 4 枚（02 §6 の表）。台本と比べるのは台本の計画のときだけ。
-    const script = data.two_ai?.plan_source === 'fallback_outline' ? null : data.script?.board;
-    if (script) for (const c of b.cards) if (script.find((s) => s.card_id === c.card_id)?.corrected_text !== c.text) problems.push(`(d) 作り直しの ${c.card_id} の文が台本と違う`);
+    // 応答版は、台帳と話し合いから生成した板（two_ai.board_generated）と比べる。
+    const generated = responsiveBoard(data);
+    const script = generated ?? (data.two_ai?.plan_source === 'fallback_outline' ? null : data.script?.board);
+    const label = generated !== null ? '生成の板' : '台本';
+    if (script) for (const c of b.cards) if (script.find((s) => s.card_id === c.card_id)?.corrected_text !== c.text) problems.push(`(d) 作り直しの ${c.card_id} の文が${label}と違う`);
   }
   return row('AC16', problems, `カード ${orders.length} 枚、作り直し ${rebuilt.length > 0 ? 'あり' : 'なし'}`);
 }
@@ -532,7 +546,12 @@ function ac18(data: TwoAiSessionData): AcceptanceRow {
   const rebuild = twoAiSpeech(data.events, 'finished').filter((s) => s.turn_kind === 'rebuild');
   // 予備の筋書きの作り直しは汎用の文（02 §3.2-6）。台本と比べるのは台本の計画のときだけ。
   const scripted = data.two_ai?.plan_source === 'fallback_outline' ? null : data.script?.rebuild_turns;
-  if (scripted) {
+  const generated = responsiveBoard(data);
+  if (generated !== null) {
+    // 応答版：作り直しの読み上げは生成の板の訂正後の文を設定の文型に入れたもの
+    const spoken = rebuild.map((s) => spokenText(s)).join('');
+    for (const c of generated) if (!spoken.includes(c.corrected_text)) problems.push(`(d) 作り直しの文に生成の板の ${c.card_id} がない`);
+  } else if (scripted) {
     const texts = rebuild.map((s) => spokenText(s));
     if (texts.join('\n') !== scripted.map((t) => t.text).join('\n')) problems.push('(d) 作り直しの文が台本と違う');
   } else if (rebuild.length === 0) problems.push('(d) 作り直しの発話がない');
@@ -673,7 +692,10 @@ export function checkPair(a: TwoAiSessionData, b: TwoAiSessionData): AcceptanceR
   rows.push(row('AC6(f)/AC18(a)', p6, '応答の時間と問いの長さが同じ'));
   const rebuildText = (d: TwoAiSessionData) => twoAiSpeech(d.events, 'finished').filter((s) => s.turn_kind === 'rebuild').map(spokenText).join('\n');
   const rebuiltCards = (d: TwoAiSessionData) => JSON.stringify(ofType(d.events, 'two_ai.board').filter((x) => x.mode === 'rebuilt').at(-1)?.cards.map((c) => c.text) ?? []);
-  rows.push(row('AC16(d)/AC18(d)', rebuildText(a) === rebuildText(b) && rebuiltCards(a) === rebuiltCards(b) ? [] : ['作り直しの文か板が違う'], '作り直しの文と板が同じ'));
+  if (a.two_ai?.experience.mode === 'responsive' || b.two_ai?.experience.mode === 'responsive') {
+    // 応答版は本人の発言で板が変わる（両条件で同じにしない）
+    rows.push({ id: 'AC16(d)/AC18(d)', ok: null, detail: '応答版：作り直しの板は本人の発言から生成（比べない）' });
+  } else rows.push(row('AC16(d)/AC18(d)', rebuildText(a) === rebuildText(b) && rebuiltCards(a) === rebuiltCards(b) ? [] : ['作り直しの文か板が違う'], '作り直しの文と板が同じ'));
   return rows;
 }
 

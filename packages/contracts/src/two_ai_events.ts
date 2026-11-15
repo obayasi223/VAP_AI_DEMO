@@ -478,6 +478,74 @@ export const TwoAiInterjectionFedShape = {
   target: z.enum(['next_live_turn', 'after_point_block']),
 };
 
+// ---- 応答版（experience.mode: 'responsive'）だけが出す。本文は持たない（文字数と ID だけ）--------------
+
+/**
+ * 本人の発言の取得：話し合いと応答の段の確定文ごと。received（受けた）→ captured（台帳の項目の根拠になった）
+ * か not_captured（台帳の更新に入ったが、どの項目の根拠にもならなかった）か excluded（sensitive、空）。
+ */
+export const TwoAiCaptureShape = {
+  /** 本人の発話の segment_id（stt.final の segment_id）。 */
+  segment_id: NonNegativeInt,
+  interjection_id: NonEmptyString.nullable(),
+  /** 発話した段階（discussion か response）。 */
+  phase: TwoAiPhase,
+  stage: z.enum(['received', 'captured', 'not_captured', 'excluded']),
+  chars: NonNegativeInt,
+  /** received では null。 */
+  ledger_version: NonNegativeInt.nullable(),
+  /** この発話を根拠にする台帳の項目。 */
+  item_ids: z.array(NonEmptyString),
+  reason: NonEmptyString,
+};
+
+/** 本人の発言の反映：AI の 1 ターン（生のターン、割り込みへの応答）が、どの項目と発話を材料に持ち、どれを参照したか。 */
+export const TwoAiReflectionShape = {
+  turn_id: NonEmptyString,
+  /** live_turn：生のターン。reply：① の割り込みへの短い応答（resume の頭）。 */
+  turn_kind: z.enum(['live_turn', 'reply']),
+  links: z.array(
+    z.strictObject({
+      /** 台帳の項目（まだ台帳に入っていない割り込みの発話は null）。 */
+      item_id: NonEmptyString.nullable(),
+      /** 根拠の本人の発話（segment_id）。 */
+      segment_ids: z.array(NonNegativeInt),
+      /** プロンプトの資料に入れた。 */
+      offered: z.boolean(),
+      /** 生成した文に、項目か発話との共通の部分文字列（method の長さ以上）がある。 */
+      referenced: z.boolean(),
+    }),
+  ),
+  method: NonEmptyString,
+};
+
+/** 応答版の板の生成（台帳と話し合いから 4 枚）。input は反実仮想の道具（tools/two_ai_counterfactual）が作り直しに使う。 */
+export const TwoAiBoardGeneratedShape = {
+  board_id: NonEmptyString,
+  stage: z.enum(['requested', 'generated', 'failed']),
+  trigger: z.enum(['ledger_update', 'closing']),
+  ledger_version: NonNegativeInt,
+  /** 生成の入力（JSON。研究画面への配信では伏せる）。requested と failed は null。 */
+  input: JsonValue.nullable(),
+  cards: z.array(
+    z.strictObject({
+      card_id: NonEmptyString,
+      order: z.number().int().min(1).max(4),
+      discussion_stage: DiscussionStage,
+      depends_on: BoardDependency,
+      text: z.string(),
+      corrected_text: z.string(),
+      ledger_item_ids: z.array(NonEmptyString),
+      /** ledger_item_ids の根拠の本人の発話（intake を含む）。 */
+      segment_ids: z.array(NonNegativeInt),
+    }),
+  ),
+  prompt_version: NonEmptyString,
+  model: NonEmptyString,
+  latency_ms: Maybe(NonNegativeMs),
+  reason: NonEmptyString,
+};
+
 // ---- render.health（06 §4.4）------------------------------------------------
 
 /** 時刻は client_t_ms を時計差で写し、time_basis.source: 'browser_rtt'（audio.report と同じ扱い）。 */
@@ -522,9 +590,13 @@ export const TWO_AI_CONTENT_EVENT_NAMES = [
   'two_ai.safety_blocked',
   'two_ai.correction_suggested',
   'two_ai.interjection_fed',
+  // 応答版（experience.mode: 'responsive'）だけ
+  'two_ai.capture',
+  'two_ai.reflection',
+  'two_ai.board_generated',
 ] as const;
 
-/** 新しいイベントの名前すべて（23 種と render.health。06 §4.3）。 */
+/** 新しいイベントの名前すべて（23 種と render.health。06 §4.3。応答版の 3 種を足した）。 */
 export const TWO_AI_EVENT_NAMES = [
   ...TWO_AI_DIRECTOR_EVENT_NAMES,
   ...TWO_AI_EXECUTOR_EVENT_NAMES,

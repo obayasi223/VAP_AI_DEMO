@@ -6,6 +6,7 @@
  *  - speech.* の two_ai_turn で point_id を持つもの、turn_kind が rebuild・retraction のものの spoken_text は再生の後（ended／interrupted）だけ。
  *  - two_ai.board の各カードは trigger_turn_ended: false の間 text を ''。
  *  - two_ai.retraction の lines は []（script_sha256 は残す）。
+ *  - two_ai.board_generated（応答版）の input は null、各カードの text と corrected_text は ''（板は two_ai.board で再生の後に出る）。
  *  - two_ai.stage は伏せない。偽のときは何も変えない。参加者画面へ送る two_ai.board には使わない。
  */
 import type { ResearchEvent } from '@llm-vap/contracts';
@@ -30,6 +31,10 @@ export function redactForResearch(event: ResearchEvent, policy: RedactionPolicy)
   if (name === 'two_ai.plan') return { ...e, plan: null } as unknown as ResearchEvent;
   if (name === 'two_ai.safety_blocked') return { ...e, text: '' } as unknown as ResearchEvent;
   if (name === 'two_ai.retraction') return { ...e, lines: [] } as unknown as ResearchEvent;
+  if (name === 'two_ai.board_generated') {
+    const cards = (e.cards as Loose[] | undefined) ?? [];
+    return { ...e, input: null, cards: cards.map((c) => ({ ...c, text: '', corrected_text: '' })) } as unknown as ResearchEvent;
+  }
   if (name === 'two_ai.board') {
     const cards = (e.cards as Loose[] | undefined) ?? [];
     return { ...e, cards: cards.map((c) => (c.trigger_turn_ended === true ? c : { ...c, text: '' })) } as unknown as ResearchEvent;

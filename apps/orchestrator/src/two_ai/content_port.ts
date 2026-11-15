@@ -251,5 +251,14 @@ export interface DiscussionContent {
   isDone(phase: 'intake' | 'discussion', view: { elapsed_ms: number; content_elapsed_ms: number }): boolean;
   scriptVariant(): ScriptVariant;
   dispose(): void;
+
+  // ---- 応答版（設定 experience.mode: 'responsive'）。任意の口で、統制版では null を返す（呼び手は今の同期の経路のまま）----
+  /**
+   * request_resume の後（planInterjection の resume を受けて）：resume の頭に本人の割り込みへの短い応答を入れた turn を返す。
+   * 応答が作れなければ（時間切れ、失敗、文がない）元の resume を返す。応答版でない、false_onset なら null。
+   */
+  completeResume?(input: { resume: DiscussionTurn; interjection_id: string; mode: 'after_ack' | 'false_onset' }, signal: AbortSignal): Promise<DiscussionTurn> | null;
+  /** 最後の段の作り直し（closingRebuild）の前：板の生成を待つ（上限は設定）。応答版でなければ null。 */
+  prepareClosing?(signal: AbortSignal): Promise<void> | null;
 }
 

@@ -653,6 +653,51 @@ const twoAiEventFixtures: { name: string; value: unknown }[] = [
     },
   },
   {
+    name: 'two_ai.capture',
+    value: {
+      ...twoAiEnvelope,
+      event: 'two_ai.capture',
+      segment_id: 21,
+      interjection_id: 'ij_0003',
+      phase: 'discussion',
+      stage: 'captured',
+      chars: 18,
+      ledger_version: 4,
+      item_ids: ['val_3'],
+      reason: 'evidence',
+    },
+  },
+  {
+    name: 'two_ai.reflection',
+    value: {
+      ...twoAiEnvelope,
+      event: 'two_ai.reflection',
+      turn_id: 't_0031',
+      turn_kind: 'live_turn',
+      links: [{ item_id: 'val_3', segment_ids: [21], offered: true, referenced: true }],
+      method: 'common_substring>=5',
+    },
+  },
+  {
+    name: 'two_ai.board_generated',
+    value: {
+      ...twoAiEnvelope,
+      event: 'two_ai.board_generated',
+      board_id: 'board_2',
+      stage: 'generated',
+      trigger: 'closing',
+      ledger_version: 5,
+      input: { version: 'board_gen_v1' },
+      cards: [
+        { card_id: 'card_1', order: 1, discussion_stage: 1, depends_on: 'fact_slip', text: '冬の説明会に出る', corrected_text: '冬の説明会に出る', ledger_item_ids: ['fact_1'], segment_ids: [3] },
+      ],
+      prompt_version: 'board_gen_v1',
+      model: 'test_double',
+      latency_ms: twoAiMs(2400),
+      reason: 'ok',
+    },
+  },
+  {
     name: 'render.health',
     value: {
       ...twoAiEnvelope,

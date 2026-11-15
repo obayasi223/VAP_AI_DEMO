@@ -57,8 +57,10 @@ import {
   RenderHealthShape,
   TwoAiAiStateShape,
   TwoAiAnomalyShape,
+  TwoAiBoardGeneratedShape,
   TwoAiBoardPickedShape,
   TwoAiBoardShape,
+  TwoAiCaptureShape,
   TwoAiCorrectionSuggestedShape,
   TwoAiGenerationShape,
   TwoAiInterjectionEpisodeShape,
@@ -71,6 +73,7 @@ import {
   TwoAiPlanWaitShape,
   TwoAiPointExposureShape,
   TwoAiPointShape,
+  TwoAiReflectionShape,
   TwoAiResponseWindowShape,
   TwoAiRetractionShape,
   TwoAiSafetyBlockedShape,
@@ -1177,6 +1180,10 @@ export const TwoAiGenerationEvent = eventSchema('two_ai.generation', TwoAiGenera
 export const TwoAiSafetyBlockedEvent = eventSchema('two_ai.safety_blocked', TwoAiSafetyBlockedShape);
 export const TwoAiCorrectionSuggestedEvent = eventSchema('two_ai.correction_suggested', TwoAiCorrectionSuggestedShape);
 export const TwoAiInterjectionFedEvent = eventSchema('two_ai.interjection_fed', TwoAiInterjectionFedShape);
+/** 応答版（experience.mode: 'responsive'）だけ。 */
+export const TwoAiCaptureEvent = eventSchema('two_ai.capture', TwoAiCaptureShape);
+export const TwoAiReflectionEvent = eventSchema('two_ai.reflection', TwoAiReflectionShape);
+export const TwoAiBoardGeneratedEvent = eventSchema('two_ai.board_generated', TwoAiBoardGeneratedShape);
 /** Browser の render.health メッセージの記録（06 §4.4）。 */
 export const RenderHealthEvent = eventSchema('render.health', RenderHealthShape);
 
@@ -1246,6 +1253,9 @@ export const ResearchEvent = z.discriminatedUnion('event', [
   TwoAiSafetyBlockedEvent,
   TwoAiCorrectionSuggestedEvent,
   TwoAiInterjectionFedEvent,
+  TwoAiCaptureEvent,
+  TwoAiReflectionEvent,
+  TwoAiBoardGeneratedEvent,
   RenderHealthEvent,
 ]);
 export type ResearchEvent = z.infer<typeof ResearchEvent>;
@@ -1316,6 +1326,9 @@ export const EVENT_NAMES = [
   'two_ai.safety_blocked',
   'two_ai.correction_suggested',
   'two_ai.interjection_fed',
+  'two_ai.capture',
+  'two_ai.reflection',
+  'two_ai.board_generated',
   'render.health',
 ] as const satisfies readonly ResearchEventName[];
 

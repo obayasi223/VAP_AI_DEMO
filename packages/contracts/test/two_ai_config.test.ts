@@ -75,6 +75,19 @@ describe('TwoAiSessionConfig', () => {
     const d = TwoAiSessionConfig.parse(c);
     expect(d.experience.interjection_feeds_generation).toBe(false);
     expect(d.experience.response_mode).toBe('fixed');
+    // 版の既定は統制版。応答版の値は既定が入る
+    expect(d.experience.mode).toBe('controlled');
+    expect(d.experience.responsive).toMatchObject({ reply_max_chars: 50, board_regen_max: 3, reference_min_chars: 5 });
+    expect(d.experience.responsive.rebuild_templates.join('')).toContain('{card_4}');
+    const r = clone(raw);
+    r.experience.mode = 'responsive';
+    r.experience.responsive = { ...d.experience.responsive, reply_max_chars: 30 };
+    expect(TwoAiSessionConfig.safeParse({ ...r, experience: { ...r.experience, responsive: { reply_max_chars: 30 } } }).success).toBe(false);
+    const e = TwoAiSessionConfig.parse(r);
+    expect(e.experience.mode).toBe('responsive');
+    expect(e.experience.responsive.reply_max_chars).toBe(30);
+    r.experience.mode = 'other';
+    expect(TwoAiSessionConfig.safeParse(r).success).toBe(false);
   });
 
   it('response.duration_sec は条件ごとに持てない', () => {
@@ -316,5 +329,9 @@ describe('人格と manifest', () => {
     };
     expect(TwoAiManifest.parse(m)).toEqual(m);
     expect(TwoAiManifest.safeParse({ ...m, condition: 'reactive' }).success).toBe(false);
+    // 版は省ける（統制版の記録は変わらない）。応答版は mode を持つ
+    const withMode = { ...m, experience: { ...m.experience, mode: 'responsive' } };
+    expect(TwoAiManifest.parse(withMode)).toEqual(withMode);
+    expect(TwoAiManifest.safeParse({ ...m, experience: { ...m.experience, mode: 'x' } }).success).toBe(false);
   });
 });

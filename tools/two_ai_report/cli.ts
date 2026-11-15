@@ -3,7 +3,7 @@
 //   npm run report:two_ai -- sessions/<①> sessions/<②> --pair   ① と ② を並べた two_ai_pair.md（1 本目のディレクトリ）
 //   npm run report:two_ai -- sessions/<id> --recall              recall_points.csv（刺激再生の頭出し、同期の印）
 //   npm run report:two_ai -- sessions/<id> --post                post_items.md と retraction.md
-//   npm run report:two_ai -- sessions/<id> --coding              coding/ に coding_utterances.csv、coding_stages.csv、coding_texts.jsonl
+//   npm run report:two_ai -- sessions/<id> --coding              coding/ に coding_utterances.csv、coding_stages.csv、coding_texts.jsonl（応答版は＋coding_uptake.csv：取得と反映）
 //   npm run report:two_ai -- sessions/<①> sessions/<②> --coding --blind [--out <dir>]   盲検の符号化用（条件を空、ID を符号に）
 // 任意：--marker-link-ms <ms>（既定 10000）、--json（要約を標準出力にも）、--config／--script（manifest のパスの代わり）。
 // 終了コード：0 受け入れ基準の自動の列がすべて合格（null は数えない）、1 不合格がある、2 使い方の誤りか読めない。
@@ -19,6 +19,7 @@ import { buildPostItems, buildRetraction } from './retraction';
 import { loadTwoAiSession, sha256, type LoadOptions, type TwoAiSessionData } from './session';
 import { csv } from './csv';
 import { STAGE_COLUMNS, UTTERANCE_COLUMNS } from './coding';
+import { buildUptake, UPTAKE_COLUMNS } from './uptake';
 
 export interface ReportCliOptions {
   pair?: boolean;
@@ -58,6 +59,9 @@ export async function runReport(inputs: string[], options: ReportCliOptions = {}
     if (options.coding && !options.blind) {
       const files = codingFiles(buildCoding(data, { markerLinkMs: options.markerLinkMs }));
       for (const [name, text] of Object.entries(files)) await put(join(dir, 'coding', name), text);
+      // 応答版だけ：取得と反映（two_ai.capture があるとき）
+      const uptake = buildUptake(data);
+      if (uptake.length > 0) await put(join(dir, 'coding', 'coding_uptake.csv'), csv(UPTAKE_COLUMNS, uptake));
     }
   }
   if (options.pair) {
@@ -76,6 +80,8 @@ export async function runReport(inputs: string[], options: ReportCliOptions = {}
     await put(join(outDir, 'coding_stages.csv'), csv(STAGE_COLUMNS, outs.flatMap((o) => o.stages)));
     const texts = outs.flatMap((o) => o.texts);
     await put(join(outDir, 'coding_texts.jsonl'), texts.map((t) => JSON.stringify(t)).join('\n') + (texts.length ? '\n' : ''));
+    const uptake = [...sessions].sort((a, b) => blindCode(a.session_id).localeCompare(blindCode(b.session_id))).flatMap((d) => buildUptake(d, { blind: true }));
+    if (uptake.length > 0) await put(join(outDir, 'coding_uptake.csv'), csv(UPTAKE_COLUMNS, uptake));
   }
   return { ok, written, sessions };
 }

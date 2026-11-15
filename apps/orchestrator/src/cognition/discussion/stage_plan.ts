@@ -126,6 +126,8 @@ export function skeletonBeats(
 export interface StageCorrection {
   /** 話し合いでの取り違えの状態（訂正の前か後か）。 */
   fact_state: 'normal' | 'slipped' | 'corrected';
+  /** 応答版：本人が話し合いと応答の段で足した台帳の項目（id と文）。統制版では省略（プロンプトは変わらない）。 */
+  user_items?: readonly { id: string; text: string }[];
 }
 
 const STAGE_THEME: Record<2 | 3 | 4, string> = {
@@ -172,6 +174,9 @@ export function buildStagePrompt(
     '# ここまでに決まった拍（変えない）',
     ...(earlier.length > 0 ? earlier : ['（なし）']),
     '',
+    ...((correction.user_items ?? []).length > 0
+      ? [`# ${name}さんが話し合いの中で足したこと（台帳の項目。この段の拍に反映してよい。ledger_refs に id を書ける）`, ...(correction.user_items ?? []).map((x) => `- [${x.id}] ${x.text}`), '']
+      : []),
     '# 点（別に決まった発話が入る位置）',
     ...(pointLines.length > 0 ? pointLines : ['（なし）']),
     '',

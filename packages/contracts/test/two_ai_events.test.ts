@@ -24,8 +24,8 @@ import { OPTIONAL_FIXTURES, VALID_FIXTURES } from '../src/fixtures';
 const twoAiFixtures = VALID_FIXTURES.events.filter((f) => (TWO_AI_EVENT_NAMES as readonly string[]).includes((f.value as { event: string }).event));
 
 describe('新しいイベント', () => {
-  it('23 種と render.health が EVENT_NAMES、fixture、経路を持つ', () => {
-    expect(TWO_AI_EVENT_NAMES).toHaveLength(24);
+  it('23 種と応答版の 3 種と render.health が EVENT_NAMES、fixture、経路を持つ', () => {
+    expect(TWO_AI_EVENT_NAMES).toHaveLength(27);
     for (const name of TWO_AI_EVENT_NAMES) {
       expect(EVENT_NAMES as readonly string[], name).toContain(name);
       expect(twoAiFixtures.some((f) => (f.value as { event: string }).event === name), name).toBe(true);
@@ -47,8 +47,8 @@ describe('新しいイベント', () => {
   it('出し手の表（06 §4.5）：進行役 16、executor 1（sync_mark）、02 が 6', () => {
     expect(TWO_AI_DIRECTOR_EVENT_NAMES).toHaveLength(16);
     expect(TWO_AI_EXECUTOR_EVENT_NAMES).toEqual(['two_ai.sync_mark']);
-    expect(TWO_AI_CONTENT_EVENT_NAMES).toHaveLength(6);
-    expect(new Set(TWO_AI_EVENT_NAMES).size).toBe(24);
+    expect(TWO_AI_CONTENT_EVENT_NAMES).toHaveLength(9);
+    expect(new Set(TWO_AI_EVENT_NAMES).size).toBe(27);
   });
 
   it('sync_mark は seq（1 以上）、trigger（06 §4.7 の 8 行）、t_wall_ms だけを持ち、経路は node', () => {

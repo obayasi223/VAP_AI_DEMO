@@ -28162,6 +28162,811 @@
         },
         "event": {
           "type": "string",
+          "const": "two_ai.capture"
+        },
+        "segment_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "interjection_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "intake",
+            "discussion",
+            "response",
+            "next_step",
+            "end"
+          ]
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "received",
+            "captured",
+            "not_captured",
+            "excluded"
+          ]
+        },
+        "chars": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "ledger_version": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "schema_version",
+        "t_monotonic_ms",
+        "wall_clock",
+        "session_id",
+        "condition",
+        "time_basis",
+        "event",
+        "segment_id",
+        "interjection_id",
+        "phase",
+        "stage",
+        "chars",
+        "ledger_version",
+        "item_ids",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "number",
+          "const": 1
+        },
+        "t_monotonic_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "wall_clock": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "reactive",
+                "initiative_no_cue",
+                "initiative_inhale"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "respond_on_spot",
+                "respond_at_end"
+              ]
+            }
+          ]
+        },
+        "time_basis": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "orchestrator",
+                "browser_rtt",
+                "worker_audio_frame"
+              ]
+            },
+            "uncertainty_ms": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "uncertainty_ms"
+          ],
+          "additionalProperties": false
+        },
+        "two_ai": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "type": "string",
+              "enum": [
+                "intake",
+                "discussion",
+                "response",
+                "next_step",
+                "end"
+              ]
+            },
+            "discussion_stage": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ai_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "A",
+                    "B"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "point_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "script_variant": {
+              "type": "string",
+              "enum": [
+                "original",
+                "corrected"
+              ]
+            }
+          },
+          "required": [
+            "phase",
+            "discussion_stage",
+            "ai_id",
+            "point_id",
+            "script_variant"
+          ],
+          "additionalProperties": false
+        },
+        "event": {
+          "type": "string",
+          "const": "two_ai.reflection"
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "turn_kind": {
+          "type": "string",
+          "enum": [
+            "live_turn",
+            "reply"
+          ]
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "item_id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "segment_ids": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "offered": {
+                "type": "boolean"
+              },
+              "referenced": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "item_id",
+              "segment_ids",
+              "offered",
+              "referenced"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "schema_version",
+        "t_monotonic_ms",
+        "wall_clock",
+        "session_id",
+        "condition",
+        "time_basis",
+        "event",
+        "turn_id",
+        "turn_kind",
+        "links",
+        "method"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "number",
+          "const": 1
+        },
+        "t_monotonic_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "wall_clock": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "reactive",
+                "initiative_no_cue",
+                "initiative_inhale"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "respond_on_spot",
+                "respond_at_end"
+              ]
+            }
+          ]
+        },
+        "time_basis": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "orchestrator",
+                "browser_rtt",
+                "worker_audio_frame"
+              ]
+            },
+            "uncertainty_ms": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "uncertainty_ms"
+          ],
+          "additionalProperties": false
+        },
+        "two_ai": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "type": "string",
+              "enum": [
+                "intake",
+                "discussion",
+                "response",
+                "next_step",
+                "end"
+              ]
+            },
+            "discussion_stage": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ai_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "A",
+                    "B"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "point_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "script_variant": {
+              "type": "string",
+              "enum": [
+                "original",
+                "corrected"
+              ]
+            }
+          },
+          "required": [
+            "phase",
+            "discussion_stage",
+            "ai_id",
+            "point_id",
+            "script_variant"
+          ],
+          "additionalProperties": false
+        },
+        "event": {
+          "type": "string",
+          "const": "two_ai.board_generated"
+        },
+        "board_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "requested",
+            "generated",
+            "failed"
+          ]
+        },
+        "trigger": {
+          "type": "string",
+          "enum": [
+            "ledger_update",
+            "closing"
+          ]
+        },
+        "ledger_version": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/__schema0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cards": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "card_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "order": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4
+              },
+              "discussion_stage": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4
+              },
+              "depends_on": {
+                "type": "string",
+                "enum": [
+                  "fact_slip",
+                  "framing_C",
+                  "control_inference",
+                  "none"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "corrected_text": {
+                "type": "string"
+              },
+              "ledger_item_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "segment_ids": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              }
+            },
+            "required": [
+              "card_id",
+              "order",
+              "discussion_stage",
+              "depends_on",
+              "text",
+              "corrected_text",
+              "ledger_item_ids",
+              "segment_ids"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "null_reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "value",
+                "null_reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "schema_version",
+        "t_monotonic_ms",
+        "wall_clock",
+        "session_id",
+        "condition",
+        "time_basis",
+        "event",
+        "board_id",
+        "stage",
+        "trigger",
+        "ledger_version",
+        "input",
+        "cards",
+        "prompt_version",
+        "model",
+        "latency_ms",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "number",
+          "const": 1
+        },
+        "t_monotonic_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "wall_clock": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "reactive",
+                "initiative_no_cue",
+                "initiative_inhale"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "respond_on_spot",
+                "respond_at_end"
+              ]
+            }
+          ]
+        },
+        "time_basis": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "orchestrator",
+                "browser_rtt",
+                "worker_audio_frame"
+              ]
+            },
+            "uncertainty_ms": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "null"
+                    },
+                    "null_reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "null_reason"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "uncertainty_ms"
+          ],
+          "additionalProperties": false
+        },
+        "two_ai": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "type": "string",
+              "enum": [
+                "intake",
+                "discussion",
+                "response",
+                "next_step",
+                "end"
+              ]
+            },
+            "discussion_stage": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ai_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "A",
+                    "B"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "point_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "script_variant": {
+              "type": "string",
+              "enum": [
+                "original",
+                "corrected"
+              ]
+            }
+          },
+          "required": [
+            "phase",
+            "discussion_stage",
+            "ai_id",
+            "point_id",
+            "script_variant"
+          ],
+          "additionalProperties": false
+        },
+        "event": {
+          "type": "string",
           "const": "render.health"
         },
         "fps_p5": {

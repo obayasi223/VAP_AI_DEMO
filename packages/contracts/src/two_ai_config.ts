@@ -22,6 +22,41 @@ import {
 const Sec = z.number().min(0);
 const GapDist = z.strictObject({ median: NonNegativeMs, min: NonNegativeMs, max: NonNegativeMs });
 
+/** 応答版（experience.mode: 'responsive'）の値。 */
+export const TwoAiResponsiveSettings = z.strictObject({
+  /** ① の割り込みへの短い応答の文字数の上限。 */
+  reply_max_chars: z.number().int().min(10).max(120),
+  /** 応答の生成を待つ上限（ms）。過ぎたら応答なしで戻りの句から言い直す。進行役の feed_turn_max_wait_ms より短くする。 */
+  reply_timeout_ms: NonNegativeMs,
+  /** 板の生成（LLM）の時間切れ（ms）。 */
+  board_timeout_ms: NonNegativeMs,
+  /** 最後の段の作り直しの前に、板の生成を待つ上限（ms）。過ぎたらそれまでの板（なければ凍結の板）で作り直す。 */
+  closing_board_wait_ms: NonNegativeMs,
+  /** 板のカードの文字数の上限。 */
+  board_card_max_chars: z.number().int().min(10).max(80),
+  /** 話し合いの間の板の作り直しの上限の回数（最後の段の前の 1 回は数えない）。 */
+  board_regen_max: NonNegativeInt,
+  /** 本人の発言で台帳が変わったとき、まだ話していない段の拍を作り直す上限（段ごと）。 */
+  stage_refill_max: NonNegativeInt,
+  /** AI の文が台帳の項目（または本人の発話）を「参照した」とみなす共通の部分文字列の長さ（字）。 */
+  reference_min_chars: z.number().int().min(2).max(20),
+  /** 応答版の作り直しの読み上げ（穴 {card_1}〜{card_4}）。話者は A、B の順。 */
+  rebuild_templates: z.tuple([NonEmptyString, NonEmptyString]),
+});
+export type TwoAiResponsiveSettings = z.infer<typeof TwoAiResponsiveSettings>;
+
+export const TWO_AI_RESPONSIVE_DEFAULTS: TwoAiResponsiveSettings = {
+  reply_max_chars: 50,
+  reply_timeout_ms: 3000,
+  board_timeout_ms: 20000,
+  closing_board_wait_ms: 8000,
+  board_card_max_chars: 40,
+  board_regen_max: 3,
+  stage_refill_max: 1,
+  reference_min_chars: 5,
+  rebuild_templates: ['最後に、候補を整理し直しますね。1 枚目は、{card_1}。2 枚目は、{card_2}。', '3 枚目は、{card_3}。4 枚目は、{card_4}、です。'],
+};
+
 export const TwoAiSessionConfig = z
   .strictObject({
     config_id: NonEmptyString,
@@ -183,9 +218,18 @@ export const TwoAiSessionConfig = z
       hold_max_ms: NonNegativeMs,
     }),
     experience: z.strictObject({
+      /**
+       * 版（研究計画の統制版と応答版）。controlled（既定）：話し合いの段で本人の発言は生成に入らない（02 §0）。
+       * responsive：① でも ② でも本人の確定文を台帳に入れ、以後の段の計画、生のターン、板の生成に反映する。
+       * ① の割り込みには内容に応じた短い応答（戻りの句の前）を返す。点（取り違え、対照、C）の文と時機は変えない。
+       * responsive では interjection_feeds_generation の値に関係なく、① の割り込みを生のターンに入れる（旗は統制版の上の探索の印）。
+       */
+      mode: z.enum(['controlled', 'responsive']).default('controlled'),
       interjection_feeds_generation: z.boolean().default(false),
       response_mode: z.enum(['fixed', 'reflective']).default('fixed'),
       feed: z.strictObject({ max_items: z.number().int().min(1).max(5), max_chars: z.number().int().min(20).max(400) }),
+      /** 応答版の値（mode: 'controlled' では使わない）。 */
+      responsive: TwoAiResponsiveSettings.default(TWO_AI_RESPONSIVE_DEFAULTS),
     }),
     generation: z.strictObject({
       models: z.strictObject({
@@ -760,6 +804,8 @@ export const TwoAiManifest = z.strictObject({
       source: z.enum(['config', 'research_screen']),
     }),
     response_mode: z.enum(['fixed', 'reflective']),
+    /** 版（統制版／応答版）。省略は controlled（この欄を足す前の manifest）。 */
+    mode: z.enum(['controlled', 'responsive']).optional(),
   }),
   exploratory: z.boolean(),
   /** 凍結の後に書き直す。 */

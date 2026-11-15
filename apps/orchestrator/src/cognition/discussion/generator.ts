@@ -6,6 +6,11 @@
  * 本人の話し合い中の発言は生成の入力に入れない（体験の旗が有効なセッションの fed_interjections だけが例外。02 §3.7）。
  * 訂正（applyCorrection）の後は、点、カード、拍の fallback、生のターンの材料を訂正後の版にする（02 §3.5、06 §6.2）。
  * 保留の時間切れ（abandonResume）では、中断した F のターンの残りも F のブロックの残りも言い直さない（decisions_round5 m1）。
+ *
+ * 応答版（設定 experience.mode: 'responsive'）：① でも ② でも、話し合いと応答の段の本人の確定文を台帳に入れ（two_ai.capture）、
+ * まだ話していない段の拍の作り直し、生のターンの資料、板の生成（board_gen.ts、two_ai.board_generated）に反映する。
+ * ① の割り込みには、受け止めの後の resume の頭に内容に応じた短い応答を入れる（completeResume）。AI の文が本人の発言を参照したかは
+ * two_ai.reflection に残す。点のブロックの文、段の拍の数、板の役割と出す時機は統制版と同じ。統制版では何も変えない。
  */
 import {
   absent,
@@ -14,6 +19,7 @@ import {
   type ConversationHistoryReader,
   type DiscussionStage,
   type EventEmitter,
+  type JsonValue,
   type LlmProvider,
   type LlmPurpose,
   type ScriptVariant,
@@ -39,20 +45,23 @@ import type {
   RetractionScriptView,
 } from '../../two_ai/content_port';
 import { cardView } from './board';
+import { BOARD_GEN_PROMPT_VERSION, boardItemsFromLedger, draftFromBoard, runBoardGeneration, type BoardGenInput, type GeneratedCard } from './board_gen';
+import { buildReplyPrompt, referenceMethod, sharesSubstring } from './responsive';
 import { retractionLines } from './closing';
 import { CORRECTION_JSON_SCHEMA, CORRECTION_PROMPT_VERSION, buildCorrectionPrompt, parseCorrectionOutput } from './correction_assist';
 import * as fixed from './fixed_utterances';
 import { INTAKE_PROMPT_VERSION, IntakeTracker, createIntakePromptBuilder, isReadbackDenial, missingSlots } from './intake';
 import { LEDGER_JSON_SCHEMA, LEDGER_PROMPT_VERSION, buildLedgerPrompt, emptyLedger, mergeLedgerOutput, type Utterance } from './ledger';
+import type { LedgerItem } from './types';
 import { callLlm } from './llm_call';
 import { STAGE_JSON_SCHEMA, STAGE_PROMPT_VERSION, assembleStageBeats, buildStagePrompt } from './stage_plan';
 import { PLAN_PROMPT_VERSION, PLAN_STAGED_PROMPT_VERSION, isStaged, assemblePlan, buildPlanPrompt, chooseFacts, outlinePlan, planJson, planJsonSchema, planNeeds, pointSpecs, type PlanDeps } from './plan';
 import { blockMs, otherAi } from './points';
 import { checkText, safeLedger } from './safety';
 import { StanceTracker } from './stance';
-import { charCount, cutAtSentence, parseJsonLoose, seededGap, splitSentences } from './text';
+import { charCount, cutAtSentence, fillTemplate, parseJsonLoose, seededGap, splitSentences } from './text';
 import { TURN_PROMPT_VERSION, buildTurnPrompt } from './turn_prompt';
-import type { Beat, BoardCard, DiscussionPlan, PointBlock, ProblemLedger } from './types';
+import type { Beat, BoardCard, DiscussionPlan, FrozenTurn, PointBlock, ProblemLedger } from './types';
 
 export interface DiscussionContentDeps extends PlanDeps {
   /** ai_id を渡すと、その AI の範囲つき emitter の LLM（discussion_turn。06 §4.1）。 */
@@ -87,6 +96,21 @@ interface PendingGen {
   fallback_used: boolean;
 }
 
+/** 応答版：プロンプトに入れた本人の発言の 1 つ（台帳の項目か、まだ台帳にない割り込みの発話）。 */
+interface OfferedLink {
+  item_id: string | null;
+  segment_ids: number[];
+  /** 参照の判定に使う文（項目の文、根拠の逐語、発話）。 */
+  texts: string[];
+}
+
+interface StageFill {
+  state: 'pending' | 'requested' | 'filled' | 'fallback';
+  controller: AbortController | null;
+  /** 応答版：本人の発言で台帳が変わったので作り直す（前に埋めた拍は残っている）。 */
+  refill?: boolean;
+}
+
 /** 生のターンの帯に対する作り直しの下限（帯の下限の半分に満たなければ 1 回作り直す。02 §3.3-3）。 */
 const SHORT_RATIO = 0.5;
 /** 位置合わせの react の凍結文（点の話者と前の話者がそろうときだけ入る。02 §3.3）。 */
@@ -117,7 +141,7 @@ export class DiscussionGenerator implements DiscussionContent {
   private plan: DiscussionPlan | null = null;
   private stance: StanceTracker;
   /** 段ごとの計画（02 §2.5.1）：後から埋める段の状態。 */
-  private readonly stageFill = new Map<DiscussionStage, { state: 'pending' | 'requested' | 'filled' | 'fallback'; controller: AbortController | null }>();
+  private readonly stageFill = new Map<DiscussionStage, StageFill>();
   private stageChain: Promise<void> = Promise.resolve();
   private planTrigger: 'early' | 'final' | 'regenerate' | 'fallback' = 'final';
 
@@ -154,6 +178,23 @@ export class DiscussionGenerator implements DiscussionContent {
   private feedTarget: { kind: 'next_live_turn' | 'after_point_block'; ids: string[] } | null = null;
   private requestSeq = 0;
 
+  // 応答版（experience.mode: 'responsive'）
+  /** 話し合いと応答の段の本人の確定文（segment_id → 段階、割り込み、取得の状態）。 */
+  private readonly userSegs = new Map<number, { phase: 'discussion' | 'response'; interjection_id: string | null; chars: number; text: string; reported: boolean; captured: boolean }>();
+  /** 割り込みごとの文（onInterjectionClosed の文と、その後の確定文）。 */
+  private readonly interjections = new Map<string, { text: string; accepted: boolean; segment_ids: number[]; finals: Map<number, string> }>();
+  private liveBoard: GeneratedCard[] | null = null;
+  private boardSeq = 0;
+  private boardRunning: Promise<void> | null = null;
+  private boardDirty = false;
+  private boardRegens = 0;
+  private boardLedgerVersion = -1;
+  private readonly stageRefills = new Map<DiscussionStage, number>();
+  /** 作り直し（closingRebuild）の後は、板の生成の結果を使わない。 */
+  private boardFrozen = false;
+  /** 板の生成に渡す話し合い（話した文と本人の確定文。古い順）。 */
+  private readonly transcriptLog: { who: AiId | 'user'; text: string; segment_id: number | null }[] = [];
+
   constructor(deps: DiscussionContentDeps) {
     this.deps = deps;
     const profile = deps.script
@@ -180,9 +221,14 @@ export class DiscussionGenerator implements DiscussionContent {
     this.intakeStartMs = this.deps.time.monotonicMs();
   }
 
-  /** 旗が効くのは ① だけ（02 §3.7）。 */
+  /** 旗が効くのは ① だけ（02 §3.7）。応答版は旗に関係なく ① の割り込みを入れる。 */
   private get feedsEffective(): boolean {
-    return this.feedsRequested && this.condition === 'respond_on_spot';
+    return (this.feedsRequested || this.responsive) && this.condition === 'respond_on_spot';
+  }
+
+  /** 応答版か（設定 experience.mode）。 */
+  private get responsive(): boolean {
+    return this.deps.config.experience.mode === 'responsive';
   }
 
   private get slots(): Record<string, string> {
@@ -273,6 +319,7 @@ export class DiscussionGenerator implements DiscussionContent {
       this.emitContent({ event: 'two_ai.ledger', stage: 'item_rejected', ledger_version: next.ledger_version, item_ids: merged.rejected, reason: 'evidence span is not verbatim' });
     }
     this.emitContent({ event: 'two_ai.ledger', stage: 'updated', ledger_version: next.ledger_version, item_ids: merged.updated, reason: 'ok' });
+    if (this.responsive && utterances.some((u) => u.phase !== undefined)) this.afterResponsiveLedger(utterances, next);
   }
 
   // ---- 計画 -------------------------------------------------------------------
@@ -453,15 +500,18 @@ export class DiscussionGenerator implements DiscussionContent {
     }
   }
 
-  private async fillStage(stage: 2 | 3 | 4, fill: { state: string; controller: AbortController | null }): Promise<void> {
+  private async fillStage(stage: 2 | 3 | 4, fill: StageFill): Promise<void> {
     const plan = this.plan!;
     const safe = safeLedger(this.ledger, this.deps.safety).ledger;
-    const correction = { fact_state: this.factState };
+    const userItems = this.responsive ? this.userItems() : [];
+    const correction = userItems.length > 0 ? { fact_state: this.factState, user_items: userItems } : { fact_state: this.factState };
+    const ledgerVersion = this.ledger.ledger_version;
     const prompt = buildStagePrompt(this.deps, safe, plan, stage, correction);
     const controller = this.controller();
     fill.state = 'requested';
     fill.controller = controller;
-    this.emitStage('requested', plan, null, `stage_beats_requested: stage ${stage} (fact_state ${correction.fact_state})`);
+    const label = fill.refill ? 'stage_beats_refill_requested' : 'stage_beats_requested';
+    this.emitStage('requested', plan, null, `${label}: stage ${stage} (fact_state ${correction.fact_state}${userItems.length > 0 ? `, user_items ${userItems.map((x) => x.id).join(',')}` : ''})`.slice(0, 500));
     const r = await callLlm(this.deps.llmFor('discussion_plan'), {
       request_id: this.requestId(`plan_stage${stage}`),
       purpose: 'discussion_plan',
@@ -488,7 +538,9 @@ export class DiscussionGenerator implements DiscussionContent {
       if (i >= this.beatIdx) plan.beats[i] = b;
     }
     fill.state = 'filled';
-    this.emitStage('frozen', plan, r.latency_ms, `stage_beats_frozen: stage ${stage}`);
+    this.emitStage('frozen', plan, r.latency_ms, `${fill.refill ? 'stage_beats_refilled' : 'stage_beats_frozen'}: stage ${stage}`);
+    // 応答版：呼んでいる間に本人の発言で台帳が変わったら、もう一度（上限まで）
+    if (this.responsive && this.ledger.ledger_version !== ledgerVersion) this.refillStages();
   }
 
   private stageFallback(stage: DiscussionStage, reason: string, latency: number | null): void {
@@ -497,7 +549,8 @@ export class DiscussionGenerator implements DiscussionContent {
     fill.state = 'fallback';
     fill.controller?.abort(new Error('stage needed'));
     fill.controller = null;
-    this.emitStage('failed', this.plan!, latency, `stage_beats_fallback: stage ${stage}: code-template beats kept: ${reason}`.slice(0, 500));
+    const kept = fill.refill ? `stage_beats_refill_skipped: stage ${stage}: previous beats kept` : `stage_beats_fallback: stage ${stage}: code-template beats kept`;
+    this.emitStage('failed', this.plan!, latency, `${kept}: ${reason}`.slice(0, 500));
   }
 
   /** 段の拍が要るときに、まだ埋まっていなければ定型の拍に決める。 */
@@ -722,8 +775,7 @@ export class DiscussionGenerator implements DiscussionContent {
 
   private cardFor(stage: DiscussionStage | null, stage_last: boolean, turn_id: string): DiscussionTurn['board_card'] {
     if (!stage_last || stage === null) return null;
-    const plan = this.requirePlan();
-    const card = plan.board.find((c: BoardCard) => c.stage === stage);
+    const card = this.boardCards().find((c: BoardCard) => c.stage === stage);
     if (card === undefined) return null;
     const shownBy = this.cardsShown.get(card.card_id);
     if (shownBy !== undefined && shownBy !== turn_id) {
@@ -818,7 +870,7 @@ export class DiscussionGenerator implements DiscussionContent {
     return out;
   }
 
-  private turnPromptFor(item: Extract<Item, { kind: 'beat' | 'align' }>, historyUpTo: Issued[]): { prompt: ReturnType<typeof buildTurnPrompt>; fed_ids: string[]; feed_turn: boolean } {
+  private turnPromptFor(item: Extract<Item, { kind: 'beat' | 'align' }>, historyUpTo: Issued[]): { prompt: ReturnType<typeof buildTurnPrompt>; fed_ids: string[]; feed_turn: boolean; offered: OfferedLink[] } {
     const plan = this.requirePlan();
     const beat = item.beat;
     const self = plan.personas.find((p) => p.ai_id === beat.speaker)!;
@@ -837,6 +889,8 @@ export class DiscussionGenerator implements DiscussionContent {
     const feedsOn = this.feedsEffective;
     const fed = feedsOn ? this.fed.slice(-this.deps.config.experience.feed.max_items) : [];
     const feed_turn = feedsOn && this.feedTarget !== null && (this.feedTarget.kind === 'next_live_turn' || this.activeBlock === null);
+    const userItems = this.responsive ? this.userItems() : [];
+    const offered = this.responsive ? this.offeredLinks(beat, userItems, fed) : [];
     return {
       prompt: buildTurnPrompt({
         self,
@@ -851,14 +905,16 @@ export class DiscussionGenerator implements DiscussionContent {
         after_point: this.lastWasBlockEnd,
         fed_interjections: fed.map((f, i) => ({ label: `#${i + 1}`, text: f.text })),
         feed_turn,
+        ...(userItems.length > 0 ? { user_items: userItems } : {}),
       }),
       fed_ids: fed.map((f) => f.interjection_id),
       feed_turn,
+      offered,
     };
   }
 
   private prefetchKey(beat_id: string, lastTurnId: string | null): string {
-    return [beat_id, this.factState, this.variant, lastTurnId ?? '-', this.fed.length, this.feedTarget?.kind ?? '-'].join('|');
+    return [beat_id, this.factState, this.variant, lastTurnId ?? '-', this.fed.length, this.feedTarget?.kind ?? '-', this.responsive ? this.ledger.ledger_version : '-'].join('|');
   }
 
   /** 次の拍の文を先に作る（02 §3.3-2。履歴が変わったら使わない）。 */
@@ -903,6 +959,7 @@ export class DiscussionGenerator implements DiscussionContent {
       this.emitContent({ event: 'two_ai.safety_blocked', rule: b.rule, stage: 'turn', text: b.text, action: b.action }, item.beat.speaker);
     }
     if (gen.feed_turn) this.feedTarget = null;
+    if (gen.text !== null && gen.offered.length > 0) this.emitReflection(turn_id, 'live_turn', gen.text, gen.offered, item.beat.speaker);
     return gen.text === null ? null : gen;
   }
 
@@ -910,7 +967,7 @@ export class DiscussionGenerator implements DiscussionContent {
   private async runGeneration(item: Extract<Item, { kind: 'beat' | 'align' }>, turn_id: string, signal: AbortSignal, historyUpTo: Issued[]): Promise<GenResult> {
     const beat = item.beat;
     const plan = this.requirePlan();
-    const { prompt, fed_ids, feed_turn } = this.turnPromptFor(item, historyUpTo);
+    const { prompt, fed_ids, feed_turn, offered } = this.turnPromptFor(item, historyUpTo);
     const slip = plan.points.find((p) => p.kind === 'fact_slip')?.slip ?? null;
     const slipTerms = slip === null ? [] : this.factState === 'corrected' ? [slip.slip_statement, slip.slip_value] : this.factState === 'normal' ? [slip.slip_value] : [];
     const ctx = { c_terms: plan.points.flatMap((p) => p.c_terms), c_ban: !this.feedsEffective, slip_terms: slipTerms };
@@ -929,7 +986,7 @@ export class DiscussionGenerator implements DiscussionContent {
         timeout_ms: this.deps.config.generation.timeout_ms.discussion_turn,
         signal,
       });
-      if (signal.aborted) return { text: null, stage: 'fallback', prompt_version: prompt.version, model, latency_ms: null, reason: 'aborted', fed_ids, feed_turn, blocked };
+      if (signal.aborted) return { text: null, stage: 'fallback', prompt_version: prompt.version, model, latency_ms: null, reason: 'aborted', fed_ids, feed_turn, blocked, offered };
       model = r.model;
       if (!r.ok) {
         reason = r.reason;
@@ -956,9 +1013,9 @@ export class DiscussionGenerator implements DiscussionContent {
         reason = `too short (${charCount(text)})`;
         continue;
       }
-      return { text, stage: attempt === 0 ? 'generated' : 'regenerated', prompt_version: prompt.version, model, latency_ms: latency, reason: attempt === 0 ? 'ok' : `regenerated: ${reason}`, fed_ids, feed_turn, blocked };
+      return { text, stage: attempt === 0 ? 'generated' : 'regenerated', prompt_version: prompt.version, model, latency_ms: latency, reason: attempt === 0 ? 'ok' : `regenerated: ${reason}`, fed_ids, feed_turn, blocked, offered };
     }
-    return { text: null, stage: 'fallback', prompt_version: prompt.version, model, latency_ms: latency, reason: reason || 'failed', fed_ids, feed_turn, blocked };
+    return { text: null, stage: 'fallback', prompt_version: prompt.version, model, latency_ms: latency, reason: reason || 'failed', fed_ids, feed_turn, blocked, offered };
   }
 
   pendingPoints(view: { content_elapsed_ms: number }): PendingPointView[] {
@@ -1044,6 +1101,7 @@ export class DiscussionGenerator implements DiscussionContent {
     if (rec === undefined) return;
     rec.played = true;
     rec.played_ms = input.played_ms;
+    if (this.responsive && input.played_ms > 0 && input.spoken_text.trim() !== '') this.transcriptLog.push({ who: rec.turn.speaker, text: input.spoken_text, segment_id: null });
     const item = rec.item;
     if (item.kind === 'point' && input.played_ms > 0) {
       this.stance.onPointTurnPlayed(item.point.kind, item.turn_idx, item.point.turns.length - 1);
@@ -1066,6 +1124,10 @@ export class DiscussionGenerator implements DiscussionContent {
       }
     }
     const invalidated: string[] = [];
+    if (this.responsive) {
+      const prev = this.interjections.get(input.interjection_id);
+      this.interjections.set(input.interjection_id, { text, accepted: excluded === null, segment_ids: prev?.segment_ids ?? [], finals: prev?.finals ?? new Map() });
+    }
     if (excluded === null) {
       this.fed.push({ interjection_id: input.interjection_id, text, asr_segment_ids: input.asr_segment_ids });
       this.stance.onFed();
@@ -1248,7 +1310,10 @@ export class DiscussionGenerator implements DiscussionContent {
     const plan = this.plan;
     if (plan === null) throw new Error('closingRebuild without a plan');
     const base = this.nextIndex;
-    const turns: DiscussionTurn[] = plan.rebuild_turns.map((t, i) => ({
+    const board = this.boardCards();
+    const rebuildTurns = this.responsive && this.liveBoard !== null ? this.responsiveRebuildTurns(board) : plan.rebuild_turns;
+    this.boardFrozen = true;
+    const turns: DiscussionTurn[] = rebuildTurns.map((t, i) => ({
       turn_id: `rebuild_${i}`,
       index: base + i,
       speaker: t.speaker,
@@ -1268,7 +1333,7 @@ export class DiscussionGenerator implements DiscussionContent {
       fed_interjection_ids: [],
       feed_turn: false,
     }));
-    return { turns, board: [...plan.board].sort((a, b) => a.order - b.order).map((c) => cardView(c, 'corrected')) };
+    return { turns, board: [...board].sort((a, b) => a.order - b.order).map((c) => cardView(c, 'corrected')) };
   }
 
   pickLine(line: 'prompt' | 'confirm' | 'timeout'): { ai_id: AiId; line_id: string; text: string } {
@@ -1302,6 +1367,7 @@ export class DiscussionGenerator implements DiscussionContent {
       this.scheduleLedger();
       return;
     }
+    if (this.responsive && (context.phase === 'discussion' || context.phase === 'response')) this.captureUserUtterance(entry, context.phase, context.interjection_id);
     if (context.phase === 'discussion' && context.interjection_id !== null) this.maybeAssistCorrection(entry, context.interjection_id);
   }
 
@@ -1394,6 +1460,335 @@ export class DiscussionGenerator implements DiscussionContent {
     this.controllers.clear();
   }
 
+  // ---- 応答版（experience.mode: 'responsive'） --------------------------------------------
+
+  /** 話し合いと応答の段の本人の確定文を台帳の入力に足す（two_ai.capture: received）。 */
+  private captureUserUtterance(entry: UserHistoryEntry, phase: 'discussion' | 'response', interjection_id: string | null): void {
+    const text = entry.text.trim();
+    const seg = entry.segment_id;
+    const prev = this.userSegs.get(seg);
+    this.userSegs.set(seg, { phase, interjection_id, chars: charCount(text), text, reported: prev?.reported ?? false, captured: prev?.captured ?? false });
+    if (interjection_id !== null) {
+      const ij = this.interjections.get(interjection_id) ?? { text: '', accepted: true, segment_ids: [], finals: new Map<number, string>() };
+      ij.finals.set(seg, text);
+      if (!ij.segment_ids.includes(seg)) ij.segment_ids.push(seg);
+      this.interjections.set(interjection_id, ij);
+    }
+    const u: Utterance = { segment_id: seg, text: entry.text, phase };
+    const i = this.utterances.findIndex((x) => x.segment_id === seg);
+    if (i >= 0) this.utterances[i] = u;
+    else this.utterances.push(u);
+    const j = this.transcriptLog.findIndex((x) => x.segment_id === seg);
+    if (j >= 0) this.transcriptLog[j] = { who: 'user', text, segment_id: seg };
+    else this.transcriptLog.push({ who: 'user', text, segment_id: seg });
+    this.emitContent({ event: 'two_ai.capture', segment_id: seg, interjection_id, phase, stage: 'received', chars: charCount(text), ledger_version: null, item_ids: [], reason: 'stt_final' });
+    this.scheduleLedger();
+  }
+
+  private allItems(ledger: ProblemLedger): LedgerItem[] {
+    return [ledger.core, ...ledger.options, ...ledger.dropped_options, ...ledger.facts, ...ledger.values].filter((x): x is LedgerItem => x !== null);
+  }
+
+  /** 台帳の更新の後：本人の発話ごとの取得を記録し、まだ話していない段の拍と板を作り直す。 */
+  private afterResponsiveLedger(utterances: readonly Utterance[], ledger: ProblemLedger): void {
+    const items = this.allItems(ledger);
+    for (const u of utterances) {
+      if (u.phase === undefined) continue;
+      const rec = this.userSegs.get(u.segment_id);
+      if (rec === undefined || rec.captured) continue;
+      const sensitive = ledger.sensitive.some((x) => x.evidence.segment_ids.includes(u.segment_id));
+      const ids = sensitive ? [] : items.filter((x) => x.evidence.some((e) => e.segment_ids.includes(u.segment_id))).map((x) => x.id);
+      const stage = sensitive ? 'excluded' : ids.length > 0 ? 'captured' : 'not_captured';
+      if (stage === 'not_captured' && rec.reported) continue;
+      rec.reported = true;
+      if (stage !== 'not_captured') rec.captured = true;
+      this.emitContent({
+        event: 'two_ai.capture',
+        segment_id: u.segment_id,
+        interjection_id: rec.interjection_id,
+        phase: rec.phase,
+        stage,
+        chars: rec.chars,
+        ledger_version: ledger.ledger_version,
+        item_ids: ids,
+        reason: sensitive ? 'sensitive' : ids.length > 0 ? 'evidence' : 'no item cites this utterance',
+      });
+    }
+    if (this.plan === null || !this.started) return;
+    this.prefetch = null;
+    this.refillStages();
+    void this.kickBoard('ledger_update');
+  }
+
+  /** 本人が話し合いと応答の段で足した台帳の項目（新しい順に feed.max_items 件を、古い順に）。取り違えが正される前は事実の項目を外す。 */
+  private userItems(): { id: string; text: string }[] {
+    if (this.userSegs.size === 0) return [];
+    const safe = safeLedger(this.ledger, this.deps.safety).ledger;
+    const factIds = new Set(safe.facts.map((f) => f.id));
+    const slipPending = this.factState === 'slipped';
+    const latest = (x: LedgerItem) => Math.max(-1, ...x.evidence.flatMap((e) => e.segment_ids.filter((id) => this.userSegs.has(id))));
+    return this.allItems(safe)
+      .filter((x) => !(slipPending && factIds.has(x.id)))
+      .map((x) => ({ x, at: latest(x) }))
+      .filter((r) => r.at >= 0)
+      .sort((a, b) => b.at - a.at)
+      .slice(0, this.deps.config.experience.feed.max_items)
+      .reverse()
+      .map((r) => ({ id: r.x.id, text: r.x.text }));
+  }
+
+  /** プロンプトに入れた本人の発言（台帳の項目と、まだ台帳にない割り込み）。 */
+  private offeredLinks(beat: Beat | null, userItems: readonly { id: string }[], fed: readonly { interjection_id: string; text: string }[]): OfferedLink[] {
+    const safe = safeLedger(this.ledger, this.deps.safety).ledger;
+    const all = this.allItems(safe);
+    const links = new Map<string, OfferedLink>();
+    const addItem = (id: string) => {
+      const x = all.find((y) => y.id === id);
+      if (x === undefined || links.has(id)) return;
+      const segs = [...new Set(x.evidence.flatMap((e) => e.segment_ids))].filter((sid) => this.userSegs.has(sid)).sort((a, b) => a - b);
+      if (segs.length === 0) return;
+      links.set(id, { item_id: id, segment_ids: segs, texts: [x.text, ...x.evidence.map((e) => e.span)] });
+    };
+    for (const u of userItems) addItem(u.id);
+    for (const id of beat?.ledger_refs ?? []) addItem(id);
+    const out = [...links.values()];
+    for (const f of fed) {
+      const ij = this.interjections.get(f.interjection_id);
+      out.push({ item_id: null, segment_ids: [...(ij?.segment_ids ?? [])].sort((a, b) => a - b), texts: [f.text, ...(ij ? [...ij.finals.values()] : [])] });
+    }
+    return out;
+  }
+
+  private emitReflection(turn_id: string, kind: 'live_turn' | 'reply', text: string, offered: readonly OfferedLink[], speaker: AiId): void {
+    const n = this.deps.config.experience.responsive.reference_min_chars;
+    this.emitContent(
+      {
+        event: 'two_ai.reflection',
+        turn_id,
+        turn_kind: kind,
+        links: offered.map((l) => ({ item_id: l.item_id, segment_ids: l.segment_ids, offered: true, referenced: l.texts.some((t) => sharesSubstring(text, t, n)) })),
+        method: referenceMethod(n),
+      },
+      speaker,
+    );
+  }
+
+  /** まだ話していない段（埋め終えた段だけ）を、本人の発言を入れて作り直す（段ごとに stage_refill_max 回まで）。 */
+  private refillStages(): void {
+    const plan = this.plan;
+    if (!this.responsive || plan === null || !this.started) return;
+    const max = this.deps.config.experience.responsive.stage_refill_max;
+    let any = false;
+    for (const [stage, fill] of this.stageFill) {
+      if (fill.state !== 'filled') continue;
+      const first = plan.beats.findIndex((b) => b.stage === stage);
+      if (first < 0 || first < this.beatIdx) continue;
+      const n = this.stageRefills.get(stage) ?? 0;
+      if (n >= max) continue;
+      this.stageRefills.set(stage, n + 1);
+      fill.state = 'pending';
+      fill.refill = true;
+      any = true;
+    }
+    if (any) this.stageChain = this.stageChain.then(() => this.runStageChain()).catch(() => undefined);
+  }
+
+  /** 板（応答版で生成した板があればそれ、なければ凍結の板）。 */
+  private boardCards(): BoardCard[] {
+    return this.responsive && this.liveBoard !== null ? this.liveBoard : (this.plan?.board ?? []);
+  }
+
+  private boardInput(): BoardGenInput {
+    const plan = this.requirePlan();
+    const safe = safeLedger(this.ledger, this.deps.safety).ledger;
+    const slip = plan.points.find((p) => p.slip !== null)?.slip ?? null;
+    return {
+      version: BOARD_GEN_PROMPT_VERSION,
+      user_name: this.profile.user_name,
+      aspect: this.profile.aspect,
+      personas: plan.personas.map((p) => ({ ai_id: p.ai_id, display_name: p.display_name, lens_summary: p.lens_summary })),
+      items: boardItemsFromLedger(safe, (sid) => this.userSegs.get(sid)?.phase ?? 'intake'),
+      transcript: this.transcriptLog.slice(-40).map((t) => ({ ...t })),
+      draft: draftFromBoard(plan.board),
+      fact: slip === null ? null : { slip_statement: slip.slip_statement, slip_value: slip.slip_value, correct_statement: slip.correct_statement, state: this.factState },
+      c_terms: plan.points.flatMap((p) => p.c_terms),
+      max_chars: this.deps.config.experience.responsive.board_card_max_chars,
+    };
+  }
+
+  /** 板の生成を 1 回（走っていれば終わってからもう 1 回）。話し合いの間は board_regen_max 回まで、まだ出していないカードがあるときだけ。 */
+  private kickBoard(trigger: 'ledger_update' | 'closing'): Promise<void> {
+    if (this.plan === null || this.disposed || this.boardFrozen) return Promise.resolve();
+    if (this.boardRunning !== null) {
+      this.boardDirty = true;
+      return this.boardRunning;
+    }
+    if (trigger === 'ledger_update') {
+      if (this.boardRegens >= this.deps.config.experience.responsive.board_regen_max) return Promise.resolve();
+      if (this.boardCards().every((c) => this.cardsShown.has(c.card_id))) return Promise.resolve();
+      this.boardRegens += 1;
+    }
+    this.boardRunning = this.runBoard(trigger).finally(() => {
+      this.boardRunning = null;
+      if (this.boardDirty && !this.disposed) {
+        this.boardDirty = false;
+        void this.kickBoard('ledger_update');
+      }
+    });
+    return this.boardRunning;
+  }
+
+  private async runBoard(trigger: 'ledger_update' | 'closing'): Promise<void> {
+    const input = this.boardInput();
+    const board_id = `board_${++this.boardSeq}`;
+    const ledger_version = this.ledger.ledger_version;
+    const base = { event: 'two_ai.board_generated' as const, board_id, trigger, ledger_version, prompt_version: BOARD_GEN_PROMPT_VERSION };
+    this.emitContent({ ...base, stage: 'requested', input: null, cards: [], model: this.deps.config.generation.models.discussion_plan, latency_ms: absent('not finished'), reason: 'start' });
+    const controller = this.controller();
+    const run = await runBoardGeneration(this.deps.llmFor('discussion_plan'), input, this.deps.safety, {
+      timeout_ms: this.deps.config.experience.responsive.board_timeout_ms,
+      request_id: () => this.requestId('board'),
+      signal: controller.signal,
+    });
+    this.controllers.delete(controller);
+    if (this.disposed) return;
+    const late = this.boardFrozen;
+    const used = run.ok && !late;
+    if (used) {
+      this.liveBoard = run.cards;
+      this.boardLedgerVersion = ledger_version;
+    }
+    for (const r of run.ok ? [] : run.reason.split('; ').filter((x) => x.includes('safety'))) {
+      this.emitContent({ event: 'two_ai.safety_blocked', rule: r.replace(/^.*safety (\S+).*$/u, '$1') || 'board', stage: 'plan', text: r.slice(0, 300), action: 'fallback' });
+    }
+    this.emitContent({
+      ...base,
+      stage: used ? 'generated' : 'failed',
+      input: used ? (input as unknown as JsonValue) : null,
+      cards: run.cards.map((c) => ({ card_id: c.card_id, order: c.order, discussion_stage: c.stage, depends_on: c.depends_on, text: c.text, corrected_text: c.corrected_text, ledger_item_ids: c.ledger_item_ids, segment_ids: c.segment_ids })),
+      model: run.model,
+      latency_ms: run.latency_ms === null ? absent(run.reason.slice(0, 100) || 'failed') : present(run.latency_ms),
+      reason: late && run.ok ? 'arrived after the rebuild: not used' : run.reason,
+    });
+  }
+
+  /** 応答版の作り直しの読み上げ（生成した板の訂正後の文を、設定の文型に入れる）。 */
+  private responsiveRebuildTurns(board: readonly BoardCard[]): FrozenTurn[] {
+    const slots = Object.fromEntries([...board].map((c) => [`card_${c.order}`, c.corrected_text]));
+    const [a, b] = this.deps.config.experience.responsive.rebuild_templates;
+    return ([[a, 'A', 'R.0'], [b, 'B', 'R.1']] as const).map(([tpl, speaker, turn_key]) => {
+      const text = fillTemplate(tpl, slots).text;
+      return { turn_key, speaker, text, sentences: splitSentences(text), chars: charCount(text) };
+    });
+  }
+
+  completeResume(input: { resume: DiscussionTurn; interjection_id: string; mode: 'after_ack' | 'false_onset' }, signal: AbortSignal): Promise<DiscussionTurn> | null {
+    if (!this.responsive || input.mode === 'false_onset' || this.condition !== 'respond_on_spot' || this.plan === null) return null;
+    return this.replyResume(input.resume, input.interjection_id, signal);
+  }
+
+  /** resume の頭に、本人の割り込みへの短い応答を入れる。作れなければ元の resume。 */
+  private async replyResume(resume: DiscussionTurn, interjection_id: string, signal: AbortSignal): Promise<DiscussionTurn> {
+    const ij = this.interjections.get(interjection_id);
+    const finals = ij === undefined ? '' : [...ij.finals.entries()].sort((a, b) => a[0] - b[0]).map(([, t]) => t).join('');
+    const said = (finals || ij?.text || '').trim().slice(0, this.deps.config.experience.feed.max_chars);
+    if (ij === undefined || !ij.accepted || said === '' || !checkText(said, this.deps.safety, { c_terms: [], c_ban: false, slip_terms: [] }).ok) return resume;
+    const plan = this.requirePlan();
+    const cfg = this.deps.config.experience.responsive;
+    const self = plan.personas.find((p) => p.ai_id === resume.speaker)!;
+    const peer = plan.personas.find((p) => p.ai_id !== resume.speaker)!;
+    const nameOf = (ai: AiId) => plan.personas.find((p) => p.ai_id === ai)!.display_name;
+    const history = this.order
+      .filter((r) => !r.cancelled && r.resume_of === null && r.turn.turn_id !== resume.turn_id)
+      .slice(-4)
+      .map((r) => ({ speaker_name: nameOf(r.turn.speaker), text: r.turn.text }));
+    const userItems = this.userItems();
+    const slip = plan.points.find((p) => p.kind === 'fact_slip')?.slip ?? null;
+    const prompt = buildReplyPrompt({ self, peer, user_name: this.profile.user_name, said, history, material: userItems.map((x) => x.text), max_chars: cfg.reply_max_chars, fact_pending: slip !== null && this.factState === 'slipped' });
+    const r = await callLlm(this.deps.llmFor('discussion_turn', resume.speaker), {
+      request_id: this.requestId(`reply_${resume.turn_id}`),
+      purpose: 'discussion_turn',
+      system: prompt.system,
+      messages: prompt.messages,
+      response_json_schema: null,
+      timeout_ms: Math.min(cfg.reply_timeout_ms, this.deps.config.generation.timeout_ms.discussion_turn),
+      signal,
+    });
+    if (this.disposed || signal.aborted) return resume;
+    let reply: string | null = null;
+    let reason = r.ok ? '' : r.reason;
+    if (r.ok) {
+      const slipTerms = slip === null ? [] : this.factState === 'corrected' ? [slip.slip_statement, slip.slip_value] : this.factState === 'normal' ? [slip.slip_value] : [];
+      const check = checkText(r.text, this.deps.safety, { c_terms: plan.points.flatMap((p) => p.c_terms), c_ban: false, slip_terms: slipTerms }, plan.personas.map((p) => p.display_name));
+      if (!check.ok) {
+        reason = `safety ${check.rule}`;
+        this.emitContent({ event: 'two_ai.safety_blocked', rule: check.rule!, stage: 'turn', text: check.cleaned, action: 'fallback' }, resume.speaker);
+      } else {
+        const t = charCount(check.cleaned) > cfg.reply_max_chars ? cutAtSentence(check.cleaned, cfg.reply_max_chars) : check.cleaned.trim();
+        if (t === null || t === '') reason = `too long without a sentence end (${charCount(check.cleaned)})`;
+        else reply = t;
+      }
+    }
+    this.emitContent(
+      {
+        event: 'two_ai.generation',
+        turn_id: resume.turn_id,
+        beat_id: null,
+        stage: reply === null ? 'fallback' : 'generated',
+        prompt_version: prompt.version,
+        model: r.model,
+        latency_ms: r.latency_ms === null ? absent(reason || 'failed') : present(r.latency_ms),
+        chars: reply === null ? 0 : charCount(reply),
+        fed_interjection_ids: [interjection_id],
+        feed_turn: reply !== null,
+        c_ban_lifted: true,
+        reason: reply === null ? `interjection_reply: kept the plain resume: ${reason || 'failed'}`.slice(0, 300) : 'interjection_reply: ok',
+      },
+      resume.speaker,
+    );
+    if (reply === null) return resume;
+    const text = reply + resume.text;
+    const replyChars = charCount(reply);
+    const turn: DiscussionTurn = {
+      ...resume,
+      text,
+      sentences: [...splitSentences(reply), ...resume.sentences],
+      est_duration_ms: this.estMs(text),
+      repeat: { bridge_chars: (resume.repeat?.bridge_chars ?? 0) + replyChars, restated_chars: resume.repeat?.restated_chars ?? 0 },
+      fed_interjection_ids: [interjection_id],
+      feed_turn: true,
+    };
+    const rec = this.issued.get(resume.turn_id);
+    if (rec !== undefined) {
+      rec.turn = turn;
+      if (rec.resume_of !== null) rec.resume_of = { ...rec.resume_of, bridge_chars: rec.resume_of.bridge_chars + replyChars };
+    }
+    const links = this.offeredLinks(null, userItems, [{ interjection_id, text: said }]);
+    this.emitReflection(resume.turn_id, 'reply', reply, links, resume.speaker);
+    return turn;
+  }
+
+  prepareClosing(signal: AbortSignal): Promise<void> | null {
+    if (!this.responsive || this.plan === null) return null;
+    const work = (async () => {
+      await this.ledgerIdle();
+      if (this.boardRunning !== null) await this.boardRunning;
+      if (this.disposed || signal.aborted) return;
+      if (this.liveBoard === null || this.boardLedgerVersion !== this.ledger.ledger_version) await this.kickBoard('closing');
+    })();
+    return raceTimeout(work, this.deps.config.experience.responsive.closing_board_wait_ms, signal);
+  }
+
+  /** 試験と probe 用：応答版の板の生成が終わるまで待つ。 */
+  async boardIdle(): Promise<void> {
+    while (this.boardRunning !== null) await this.boardRunning;
+  }
+
+  /** 試験と probe 用：応答版で生成した板（なければ null）。 */
+  generatedBoard(): GeneratedCard[] | null {
+    return this.liveBoard;
+  }
+
   // ---- 記録 --------------------------------------------------------------------
 
   private controller(): AbortController {
@@ -1454,11 +1849,24 @@ interface GenResult {
   fed_ids: string[];
   feed_turn: boolean;
   blocked: { rule: string; text: string; action: 'regenerate' | 'fallback' }[];
+  /** 応答版：プロンプトに入れた本人の発言（統制版は空）。 */
+  offered: OfferedLink[];
 }
 
 type ContentDraft = Extract<
   Parameters<EventEmitter['emit']>[0],
-  { event: 'two_ai.ledger' | 'two_ai.plan' | 'two_ai.generation' | 'two_ai.safety_blocked' | 'two_ai.correction_suggested' | 'two_ai.interjection_fed' }
+  {
+    event:
+      | 'two_ai.ledger'
+      | 'two_ai.plan'
+      | 'two_ai.generation'
+      | 'two_ai.safety_blocked'
+      | 'two_ai.correction_suggested'
+      | 'two_ai.interjection_fed'
+      | 'two_ai.capture'
+      | 'two_ai.reflection'
+      | 'two_ai.board_generated';
+  }
 >;
 
 async function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -1485,6 +1893,28 @@ async function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
       },
     );
   });
+}
+
+/** work か ms か中止の早い方で解ける（work の失敗は飲む）。 */
+async function raceTimeout(work: Promise<void>, ms: number, signal: AbortSignal): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let onAbort: (() => void) | null = null;
+  try {
+    await Promise.race([
+      work.catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+      new Promise<void>((resolve) => {
+        if (signal.aborted) return resolve();
+        onAbort = () => resolve();
+        signal.addEventListener('abort', onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+    if (onAbort !== null) signal.removeEventListener('abort', onAbort);
+  }
 }
 
 export function createDiscussionContent(deps: DiscussionContentDeps): DiscussionGenerator {

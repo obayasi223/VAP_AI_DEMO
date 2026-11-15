@@ -86,6 +86,9 @@ export const EVENT_ROUTES = {
   'two_ai.safety_blocked': { origin: 'node' },
   'two_ai.correction_suggested': { origin: 'node' },
   'two_ai.interjection_fed': { origin: 'node' },
+  'two_ai.capture': { origin: 'node' },
+  'two_ai.reflection': { origin: 'node' },
+  'two_ai.board_generated': { origin: 'node' },
   'render.health': { origin: 'browser', via: ['render.health'] },
 } as const satisfies Record<ResearchEventName, EventRoute>;
 
