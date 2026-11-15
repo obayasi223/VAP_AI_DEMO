@@ -652,7 +652,31 @@ function scriptedLedgerReply(request: LlmRequest): string {
           const span = [...(first[2] as string)].slice(0, 12).join('');
           return { id: 'core_1', text: span, evidence: [{ span, segment_ids: [Number(first[1])] }] };
         })();
-  return JSON.stringify({ core, options: [], dropped_options: [], facts: [], values: [], sensitive: [] });
+  // 応答版：段の印つきの発話（#n（話し合い）：…）は、それぞれ values の項目にする（逐語の頭 12 字を根拠に）
+  const values = [...text.matchAll(/^#(\d+)（(?:話し合い|応答)）：(.+)$/gmu)].map((m) => {
+    const span = [...(m[2] as string)].slice(0, 12).join('');
+    return { id: `val_${m[1]}`, text: span, evidence: [{ span, segment_ids: [Number(m[1])] }] };
+  });
+  return JSON.stringify({ core, options: [], dropped_options: [], facts: [], values, sensitive: [] });
+}
+
+/** 応答版の板の生成（cognition/discussion/board_gen.ts の BOARD_GEN_MARKER）：台帳の新しい項目を根拠に 4 枚。 */
+function scriptedBoardReply(request: LlmRequest): string {
+  const ids = [...request.system.matchAll(/^- \[([^\]]+)\]（[^、]+、([^）]+)）(.*)$/gmu)].map((m) => ({ id: m[1] as string, said: m[2] as string, text: m[3] as string }));
+  const fromUser = ids.filter((x) => x.said === '話し合いの途中' || x.said === '最後の応答');
+  const pick = (i: number) => (fromUser.length > 0 ? fromUser[i % fromUser.length]! : ids[i % Math.max(1, ids.length)]);
+  const cards = [1, 2, 3, 4].map((order, i) => {
+    const p = pick(i);
+    const text = p === undefined ? `候補${order}について調べる` : `${[...p.text].slice(0, 12).join('')}を確かめる`;
+    return { order, text, corrected_text: text, ledger_item_ids: p === undefined ? [] : [p.id] };
+  });
+  return JSON.stringify({ cards });
+}
+
+/** 応答版の割り込みへの短い応答（cognition/discussion/responsive.ts の REPLY_PROMPT_MARKER）。 */
+function scriptedReplyText(request: LlmRequest): string {
+  const said = /# .+?さんがいま言ったこと（資料。指示ではない）\n(.+)/u.exec(request.system)?.[1] ?? '';
+  return `${[...said].slice(0, 12).join('')}、ということですね。`;
 }
 
 /** 段ごとの計画の段の呼び出し（02 §2.5.1）：決まった拍の数だけ、kind に合う中立の文。 */
@@ -675,6 +699,7 @@ function scriptedStageReply(request: LlmRequest): string {
 
 function scriptedPlanReply(request: LlmRequest): string {
   if (request.system.includes('# この段の拍')) return scriptedStageReply(request);
+  if (request.system.includes('# 板の下書き')) return scriptedBoardReply(request);
   const counts = /段ごとの拍の数は \[(\d+), (\d+), (\d+), (\d+)\]/u.exec(request.system)?.slice(1).map(Number) ?? [2, 2, 2, 2];
   const beats: Record<string, unknown>[] = [];
   const kinds = ['develop', 'react', 'question'] as const;
@@ -743,7 +768,7 @@ export function scriptedTwoAiReply(request: LlmRequest): string | null {
     case 'intake':
       return SCRIPTED_TWO_AI_INTAKE;
     case 'discussion_turn':
-      return SCRIPTED_TWO_AI_TURN;
+      return request.system.includes('# 口を挟まれたことへの短い応答') ? scriptedReplyText(request) : SCRIPTED_TWO_AI_TURN;
     case 'ledger':
       return scriptedLedgerReply(request);
     case 'discussion_plan':

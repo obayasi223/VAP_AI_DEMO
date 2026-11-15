@@ -30,7 +30,8 @@
     "test:e2e:two_ai": "tsx apps/orchestrator/test/e2e/two_ai_run.ts",
     "perf:two_ai": "tsx tools/two_ai_perf/run.ts",
     "perf:two_ai:quick": "tsx tools/two_ai_perf/quick_rtf.ts",
-    "probe:two_ai": "tsx tools/two_ai_probe/cli.ts"
+    "probe:two_ai": "tsx tools/two_ai_probe/cli.ts",
+    "counterfactual:two_ai": "tsx tools/two_ai_counterfactual/cli.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

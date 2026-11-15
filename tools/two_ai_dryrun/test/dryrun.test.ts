@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildSyntheticSession } from '../../../fixtures/two_ai/synthetic_session';
+import { runReport } from '../../two_ai_report/cli';
 import { sessionFromValues } from '../../two_ai_report/session';
 import { runDryrun, type DryrunOptions } from '../cli';
 import { compareFeeds } from '../compare_feeds';
@@ -92,6 +93,31 @@ describe('runDryrun', () => {
     expect(r.sessions).toHaveLength(1);
     await expect(runDryrun(base({ config: 'config/two_ai/scripts/demo_career.ja.json' }))).rejects.toThrow();
   }, 120_000);
+
+  it('応答版（--mode responsive --both）：log_check と要約に合格し、本人の発話が台帳と板の根拠に入る', async () => {
+    const r = await runDryrun(base({ both: true, mode: 'responsive' }));
+    expect(r.messages.filter((m) => m.includes('不合格'))).toEqual([]);
+    expect(r.exit_code).toBe(0);
+    expect(r.sessions).toHaveLength(2);
+    for (const s of r.sessions) {
+      expect(s).toContain('_responsive');
+      const events = (await readFile(join(s, 'events.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+      const captured = events.filter((e) => e.event === 'two_ai.capture' && e.stage === 'captured').flatMap((e) => e.item_ids as string[]);
+      expect(captured.length).toBeGreaterThan(0);
+      const boards = events.filter((e) => e.event === 'two_ai.board_generated' && e.stage === 'generated');
+      const closing = boards.filter((b) => b.trigger === 'closing').at(-1)!;
+      expect(closing).toBeDefined();
+      const grounds = (closing.cards as { ledger_item_ids: string[] }[]).flatMap((c) => c.ledger_item_ids);
+      expect(grounds.some((id) => captured.includes(id))).toBe(true);
+    }
+    // --coding の取得と反映：発話ごとに台帳の項目と板のカードが結ばれる（本文は入らない）
+    await runReport(r.sessions, { coding: true });
+    for (const s of r.sessions) {
+      const rows = (await readFile(join(s, 'coding', 'coding_uptake.csv'), 'utf8')).trim().split('\n');
+      expect(rows[0]).toContain('capture_stage');
+      expect(rows.slice(1).some((l) => l.includes('captured') && /,c[^,]*;?[^,]*,\d+,stt:/u.test(l))).toBe(true);
+    }
+  }, 180_000);
 
   it('--synthetic --both --compare-feeds：書き出し、log_check、並べ、旗の比較が通る', async () => {
     const r = await runDryrun(base({ synthetic: true, both: true, compareFeeds: true }));

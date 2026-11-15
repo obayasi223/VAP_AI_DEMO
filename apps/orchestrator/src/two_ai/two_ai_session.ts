@@ -288,7 +288,8 @@ export class TwoAiSession implements ParticipantSession {
     this.director = createDirector(config, {
       condition: options.condition,
       correction_mode: config.correction.mode,
-      feeds_generation: this.feeds.effective,
+      // 応答版は旗に関係なく ① の割り込みを生のターンに入れる（受けるターンの待ちを feed_turn_max_wait_ms にする）
+      feeds_generation: this.feeds.effective || (config.experience.mode === 'responsive' && options.condition === 'respond_on_spot'),
       stop_max_wait_ms: this.stopMaxWaitMs,
       point_meta: (id) => {
         const p = points.get(id);
@@ -517,6 +518,8 @@ export class TwoAiSession implements ParticipantSession {
     const exploratory = this.feeds.effective;
     const notes: string[] = [];
     if (exploratory) notes.push('exploratory:interjection_feeds_generation');
+    // 応答版は内容をそろえた比較（統制版）に使わない（RQ1、RQ4 の観察用）
+    if (s.config.experience.mode === 'responsive') notes.push('mode:responsive');
     if (plan?.source === 'fallback_outline') notes.push('plan_source:fallback_outline');
     if (plan !== null && plan.fact_slip !== 'available') notes.push('fact_slip:unavailable');
     if (plan !== null && plan.control_inference !== 'available') notes.push('control_inference:unavailable');
@@ -552,7 +555,11 @@ export class TwoAiSession implements ParticipantSession {
       point_schedule: { ok: script.schedule.ok, latest_point_end_sec: script.schedule.latest_point_end_sec, limit_sec: script.schedule.limit_sec },
       ack_templates: this.ackBank?.manifestEntries() ?? [],
       response_duration_sec: s.config.phases.response.duration_sec,
-      experience: { interjection_feeds_generation: this.feeds, response_mode: s.config.experience.response_mode },
+      experience: {
+        interjection_feeds_generation: this.feeds,
+        response_mode: s.config.experience.response_mode,
+        ...(s.config.experience.mode === 'responsive' ? { mode: 'responsive' as const } : {}),
+      },
       exploratory,
       plan_hash: plan?.plan_hash ?? null,
       plan_source: plan?.source ?? null,
@@ -1085,7 +1092,24 @@ export class TwoAiSession implements ParticipantSession {
             mode: a.mode,
           });
           if (plan.resume === null) this.pendingFailures.push({ turn_id: a.turn_id, reason: 'no_resume' });
-          else this.prepareTurn(plan.resume, 'resume', a.turn_id);
+          else {
+            // 応答版：resume の頭に割り込みへの短い応答を入れてから準備する（統制版は null で今の同期の経路）
+            const resume = plan.resume;
+            const abort = new AbortController();
+            const pending = a.mode === 'after_ack' ? (content.completeResume?.({ resume, interjection_id: ctx.interjection_id, mode: a.mode }, abort.signal) ?? null) : null;
+            if (pending === null) this.prepareTurn(resume, 'resume', a.turn_id);
+            else {
+              this.planAborts.push(abort);
+              pending.then(
+                (turn) => {
+                  if (!this.closed) this.prepareTurn(turn, 'resume', a.turn_id);
+                },
+                () => {
+                  if (!this.closed) this.prepareTurn(resume, 'resume', a.turn_id);
+                },
+              );
+            }
+          }
         } catch (error) {
           this.pendingFailures.push({ turn_id: a.turn_id, reason: `resume_failed:${errorText(error)}` });
         }
@@ -1149,12 +1173,29 @@ export class TwoAiSession implements ParticipantSession {
         );
         return;
       case 'request_rebuild': {
-        try {
-          const rb = content.closingRebuild();
-          this.rebuildBoard = rb.board;
-          for (const t of rb.turns) this.prepareTurn(t, 'rebuild', t.turn_id);
-        } catch (error) {
-          this.pendingFailures.push({ turn_id: 'rebuild', reason: `rebuild_failed:${errorText(error)}` });
+        const rebuild = () => {
+          try {
+            const rb = content.closingRebuild();
+            this.rebuildBoard = rb.board;
+            for (const t of rb.turns) this.prepareTurn(t, 'rebuild', t.turn_id);
+          } catch (error) {
+            this.pendingFailures.push({ turn_id: 'rebuild', reason: `rebuild_failed:${errorText(error)}` });
+          }
+        };
+        // 応答版：板の生成（本人の応答を入れた台帳から）を上限まで待ってから作り直す（統制版は null で今の同期の経路）
+        const abort = new AbortController();
+        const waiting = content.prepareClosing?.(abort.signal) ?? null;
+        if (waiting === null) rebuild();
+        else {
+          this.planAborts.push(abort);
+          waiting.then(
+            () => {
+              if (!this.closed) rebuild();
+            },
+            () => {
+              if (!this.closed) rebuild();
+            },
+          );
         }
         return;
       }

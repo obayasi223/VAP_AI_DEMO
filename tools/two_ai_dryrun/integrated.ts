@@ -112,6 +112,8 @@ export interface IntegratedOptions {
   session_id: string;
   /** 体験の旗（研究画面の arm の値として渡す。null は設定のまま）。 */
   feeds?: boolean | null;
+  /** 版の上書き（experience.mode。省略は設定のまま。manifest の config_sha256 は元のファイルのもの）。 */
+  mode?: 'controlled' | 'responsive';
   llm?: LlmInjection;
   /** true の文の TTS は失敗する（話者と通し番号）。 */
   tts_fail?: (text: string, ai: AiId, n: number) => boolean;
@@ -578,7 +580,7 @@ export async function runIntegratedSession(options: IntegratedOptions): Promise<
   const timers = new ManualTimers(time);
   const loaded = loadTwoAiSettings({ root: repoRoot, config_path: resolve(repoRoot, options.config), script_path: resolve(repoRoot, options.script) });
   if (!loaded.ok) throw new Error(`two_ai settings: ${loaded.reason}`);
-  const settings = loaded.settings;
+  const settings = options.mode === undefined ? loaded.settings : { ...loaded.settings, config: { ...loaded.settings.config, experience: { ...loaded.settings.config.experience, mode: options.mode } } };
   const script = settings.scripts.get(settings.default_script_id!)!;
   // セッションを作る前（ログの開始の provider.status）も 2 体の封筒を付ける（06 §4.1：2 体のセッションのすべてのイベント）。
   let context: () => TwoAiEmitContext | null = () => ({ phase: 'intake', discussion_stage: null, script_variant: 'original' });

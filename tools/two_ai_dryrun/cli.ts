@@ -3,6 +3,7 @@
 //     --config config/two_ai/session.demo_short.ja.json --script config/two_ai/scripts/demo_career.ja.json \
 //     --user fixtures/two_ai/dryrun_user.respond_on_spot.json [--providers fake|real-llm] [--out .dryrun/<name>] [--both]
 //   npm run dryrun:two_ai -- --compare-feeds [--user fixtures/two_ai/dryrun_user.feeds_compare.json]
+//   npm run dryrun:two_ai -- --both --mode responsive   応答版（experience.mode を上書き。本人の発言が台帳と板の根拠に入るか）
 //   npm run dryrun:two_ai -- --synthetic [--both] [--compare-feeds]   WP1 の統合の前に、道具の流れ（書き出し、log_check、要約、並べ）だけを確かめる
 //
 // 統合 1（05 §5.2）の後：本物の TwoAiSession と DiscussionContent を、偽のプロバイダ（integrated.ts：偽の時計の台本の LLM、
@@ -32,6 +33,8 @@ export interface DryrunOptions {
   compareFeeds: boolean;
   synthetic: boolean;
   feeds: boolean;
+  /** 版の上書き（省略は設定のまま）。 */
+  mode?: 'controlled' | 'responsive';
   providers: 'fake' | 'real-llm';
   config: string;
   script: string;
@@ -64,6 +67,7 @@ async function runIntegrated(options: DryrunOptions): Promise<DryrunResult> {
       out: options.out,
       session_id,
       feeds,
+      ...(options.mode !== undefined ? { mode: options.mode } : {}),
       ...(options.providers === 'real-llm' ? { realLlm: true, realtime: true } : {}),
     });
     const lc = await checkLog(r.dir);
@@ -87,7 +91,7 @@ async function runIntegrated(options: DryrunOptions): Promise<DryrunResult> {
   const run: string[] = [];
   for (const condition of conditions) {
     const user = options.both || options.user === null ? defaultUser(condition) : options.user;
-    run.push(await runOne(condition, user, `dryrun_${condition}${options.feeds ? '_feeds' : ''}`, options.feeds ? true : null));
+    run.push(await runOne(condition, user, `dryrun_${condition}${options.feeds ? '_feeds' : ''}${options.mode === 'responsive' ? '_responsive' : ''}`, options.feeds ? true : null));
   }
   const report = await runReport(run, { pair: options.both, recall: true, post: true, coding: true, load: { repoRoot } });
   ok = ok && report.ok;
@@ -158,11 +162,16 @@ async function main(): Promise<void> {
       both: { type: 'boolean', default: false },
       'compare-feeds': { type: 'boolean', default: false },
       'feeds-generation': { type: 'boolean', default: false },
+      mode: { type: 'string' },
       synthetic: { type: 'boolean', default: false },
     },
   });
   if (values.condition !== 'respond_on_spot' && values.condition !== 'respond_at_end') {
     console.error('--condition は respond_on_spot か respond_at_end');
+    process.exit(2);
+  }
+  if (values.mode !== undefined && values.mode !== 'controlled' && values.mode !== 'responsive') {
+    console.error('--mode は controlled か responsive');
     process.exit(2);
   }
   if (values.providers !== 'fake' && values.providers !== 'real-llm') {
@@ -175,6 +184,7 @@ async function main(): Promise<void> {
     compareFeeds: values['compare-feeds'],
     synthetic: values.synthetic,
     feeds: values['feeds-generation'],
+    ...(values.mode !== undefined ? { mode: values.mode as 'controlled' | 'responsive' } : {}),
     providers: values.providers,
     config: values.config,
     script: values.script,
